@@ -755,6 +755,15 @@ template UnclaimedActivityRecord
         pure UnclaimedActivityRecord_DsoExpireResult with unclaimedRewardCid
 
 
+template SvRewardMintReceipt with
+    dso : Party
+    amount : Decimal
+    beneficiary : Party
+  where
+    signatory dso
+
+
+
 -- Support code
 ---------------
 
