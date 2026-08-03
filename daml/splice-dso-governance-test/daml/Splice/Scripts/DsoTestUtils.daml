@@ -165,6 +165,7 @@ initDecentralizedSynchronizerWithAmuletPrice isDevNet initialRound amuletPrice o
           rightOwnerParty = svParty
           voteWeight = 1
           rewardWeight = rewardWeight
+          rewardFactorState = None
           rewardNodeOperatorName = svName
           beneficiaries = []
           svLifetimeRewardsAdjustment = 0.0

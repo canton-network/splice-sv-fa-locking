@@ -134,6 +134,8 @@ data DsoRules_ActionRequiringConfirmation
   | SRARC_DsoRules_AddSvRightOwner DsoRules_AddSvRightOwner
   | SRARC_DsoRules_RemoveSvRightOwner DsoRules_RemoveSvRightOwner
   | SRARC_DsoRules_MigrateToOnLedgerSvRightOwners DsoRules_MigrateToOnLedgerSvRightOwners
+  | SRARC_DsoRules_UpdateTemporaryUnderlockState DsoRules_UpdateTemporaryUnderlockState
+  | SRARC_DsoRules_UpdatePermanentUnderlockState DsoRules_UpdatePermanentUnderlockState
   deriving (Eq, Show, Serializable)
 
 data AnsEntryContext_ActionRequiringConfirmation
@@ -1645,12 +1647,13 @@ template DsoRules with
           let svInfo = svRightOwner.info
           let state = rewardState.state
               beneficiaries = svInfo.beneficiaries
+              effectiveRewardWeight = floor $ (fromOptional 1.0 $ rewardWeightFactor <$> svInfo.rewardFactorState) * intToDecimal svInfo.rewardWeight
           let (configuredBeneficiaryCouponWeights, remainingWeight) =
                 foldl
                   (\(acc, remainingWeight) (beneficiary, weight) ->
-                     let beneficiaryWeight = floor (weight * intToDecimal svInfo.rewardWeight)
+                     let beneficiaryWeight = floor (weight * intToDecimal effectiveRewardWeight)
                      in ((beneficiary, beneficiaryWeight) :: acc, remainingWeight - beneficiaryWeight))
-                  ([], svInfo.rewardWeight)
+                  ([], effectiveRewardWeight)
                   beneficiaries
               beneficiaryCouponWeights =
                 if remainingWeight > 0 then (svInfo.rightOwnerParty, remainingWeight) :: configuredBeneficiaryCouponWeights
@@ -1668,7 +1671,7 @@ template DsoRules with
               numCouponsIssued = state.numCouponsIssued + length beneficiaryCouponWeights
 
           -- check weights and issue rewards
-          require "Sum of beneficiary weights matches" (svInfo.rewardWeight == sum (map snd beneficiaryCouponWeights))
+          require "Sum of beneficiary weights matches" (effectiveRewardWeight == sum (map snd beneficiaryCouponWeights))
 
           couponCids <- forA beneficiaryCouponWeights $ \(beneficiary, weight) ->
             create SvRewardCoupon with
@@ -2101,7 +2104,7 @@ template DsoRules with
         create this with
           svs = Map.fromList ([(sv, info with svRewardWeight = 0) | (sv, info) <- Map.toList this.svs])
           svRightOwners = Some (map fst $ TextMap.toList rightOwners)
-
+    
     nonconsuming choice DsoRules_UpdateRightOwnerParty : ContractId SvRightOwner
       with
         name : Text
@@ -2263,6 +2266,75 @@ template DsoRules with
           state = svRewardState.state
           lifetimeRewardTotal = Some $ receiptTotal + getLifetimeRewardTotal svRewardState
 
+    nonconsuming choice DsoRules_UpdateTemporaryUnderlockState : ContractId SvRightOwner
+      with
+        name : Text
+        svRightOwnerCid : ContractId SvRightOwner
+        newRewardWeightFactor : Optional Decimal
+        effectiveTime : Time
+      controller dso
+      do
+        -- Assumes that we can calculate lock state one week in the past for enforcement.
+        requireOnLedgerSvRightOwners this
+        svRightOwner <- fetchAndArchive (ForSv with dso; svName = name) svRightOwnerCid
+
+        let currentRewardFactorState = flip fromOptional svRightOwner.info.rewardFactorState $
+              SvRightOwnerRewardFactorState with
+                rewardWeightFactor = 0.0
+                permanentWeightFactor = 1.0
+                recoverableUnderlocks = []
+
+        let sevenDaysAgo = effectiveTime `addRelTime` days (-7)
+        let active = dropWhile ((< sevenDaysAgo) . startTime) currentRewardFactorState.recoverableUnderlocks
+
+        case (newRewardWeightFactor, active, compare newRewardWeightFactor $ Some currentRewardFactorState.rewardWeightFactor) of
+          (None, nextActive::_, _) -> do
+            create svRightOwner with
+              info = svRightOwner.info with
+                rewardFactorState = Some currentRewardFactorState with
+                  rewardWeightFactor = nextActive.newFactor
+          (Some newFactor, _, LT) -> do
+            require "newRewardWeightFactor must be nonnegative" $ newFactor >= 0.0
+            create svRightOwner with
+              info = svRightOwner.info with
+                rewardFactorState = Some currentRewardFactorState with
+                  recoverableUnderlocks = (SvRightOwnerRewardFactorEvent with startTime = effectiveTime; newFactor)
+                    :: currentRewardFactorState.recoverableUnderlocks
+          (Some newRewardWeightFactor, _, GT) -> do
+            require "newRewardWeightFactor must be no greater than permanentWeightFactor" $
+              currentRewardFactorState.permanentWeightFactor <= newRewardWeightFactor
+            create svRightOwner with
+              info = svRightOwner.info with
+                rewardFactorState = Some currentRewardFactorState with
+                  rewardWeightFactor = newRewardWeightFactor
+                  recoverableUnderlocks = dropWhile ((< newRewardWeightFactor) . newFactor) currentRewardFactorState.recoverableUnderlocks
+          _ -> do
+            require "updates must change weight state" $ False
+            assertFail "unreachable"
+
+    nonconsuming choice DsoRules_UpdatePermanentUnderlockState : ContractId SvRightOwner
+      with
+        name : Text
+        svRightOwnerCid : ContractId SvRightOwner
+        permanentBefore : Time
+      controller dso
+      do
+        requireOnLedgerSvRightOwners this
+        svRightOwner <- fetchAndArchive (ForSv with dso; svName = name) svRightOwnerCid
+        case svRightOwner.info.rewardFactorState of
+          None -> require "must have a pending underlock to make permanent" False >> assertFail "unreachable"
+          Some rewardFactorState -> do
+            let (recoverable, permanent) = span ((< permanentBefore) . startTime) rewardFactorState.recoverableUnderlocks
+            case permanent of
+              [] -> do
+                require "must make an underlock permanent" $ False
+                assertFail "unreachable"
+              nextPermanentEvent :: _ -> 
+                create svRightOwner with
+                  info = svRightOwner.info with
+                    rewardFactorState = Some rewardFactorState with
+                      permanentWeightFactor = nextPermanentEvent.newFactor
+                      recoverableUnderlocks = recoverable
 
 template AddSvRightOwnerInstruction
   with
@@ -2355,6 +2427,8 @@ executeActionRequiringConfirmation dso dsoRulesCid amuletRulesCid act = case act
       SRARC_DsoRules_AddSvRightOwner choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_DsoRules_RemoveSvRightOwner choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_DsoRules_MigrateToOnLedgerSvRightOwners choiceArg -> void $ exercise dsoRulesCid choiceArg
+      SRARC_DsoRules_UpdateTemporaryUnderlockState choiceArg -> void $ exercise dsoRulesCid choiceArg
+      SRARC_DsoRules_UpdatePermanentUnderlockState choiceArg -> void $ exercise dsoRulesCid choiceArg
   ARC_AnsEntryContext with .. -> do
     void $ fetchChecked (ForDso with dso) ansEntryContextCid
     case ansEntryContextAction of
