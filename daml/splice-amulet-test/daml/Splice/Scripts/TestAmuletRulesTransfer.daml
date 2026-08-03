@@ -570,6 +570,7 @@ testUnclaimedActivityRecordTransferInput = do
       amount = amountToMint
       reason = "Alice is doing great"
       expiresAt
+      svRightOwnerName = Some "alice"
 
   runNextIssuance app
   context <- getPaymentTransferContext app alice

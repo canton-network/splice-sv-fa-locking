@@ -1622,6 +1622,7 @@ template DsoRules with
                 beneficiary
                 weight
                 round = openRound.round
+                svRightOwnerName = None
 
             return DsoRules_ReceiveSvRewardCouponResult with
                 svRewardState = newRewardStateCid
@@ -1680,6 +1681,7 @@ template DsoRules with
               beneficiary
               weight
               round = openRound.round
+              svRightOwnerName = Some svName
 
           return (svName, (newRewardStateCid, couponCids))
 
@@ -2019,6 +2021,7 @@ template DsoRules with
         amount : Decimal
         reason : Text
         expiresAt : Time
+        svRightOwnerName : Text
       controller dso
       do
         now <- getTime
@@ -2031,6 +2034,7 @@ template DsoRules with
             amount
             reason
             expiresAt
+            svRightOwnerName = Some svRightOwnerName
         pure $ DsoRules_CreateUnallocatedUnclaimedActivityRecordResult with ..
 
     nonconsuming choice DsoRules_AllocateUnallocatedUnclaimedActivityRecord : DsoRules_AllocateUnallocatedUnclaimedActivityRecordResult
@@ -2063,6 +2067,7 @@ template DsoRules with
           amount
           reason
           expiresAt
+          svRightOwnerName
 
         pure $ DsoRules_AllocateUnallocatedUnclaimedActivityRecordResult with ..
 
@@ -2583,6 +2588,7 @@ template UnallocatedUnclaimedActivityRecord
     amount : Decimal -- ^ The amount of `Amulet` to be minted
     reason : Text -- ^ A reason to mint the `Amulet`
     expiresAt : Time -- ^ Selected timestamp defining the lifetime of the UnclaimedActivityRecord contract.
+    svRightOwnerName: Optional Text -- ^ SV right owner whose lifetime rewards increased.
   where
     signatory dso
     ensure amount > 0.0
