@@ -13,6 +13,8 @@ data SvRightOwnerInfo = SvRightOwnerInfo
       -- ^ the weight of an SV for voting, can be zero
     rewardWeight : Int
       -- ^ the weight of an SV for reward minting, can be zero
+    rewardFactorState: Optional SvRightOwnerRewardFactorState
+      -- ^ Additional state 
     rewardNodeOperatorName : Text
       -- ^ Name of the SV node operator through which rewards are minted.
       -- For rewards to be minted both the node operator.
@@ -31,9 +33,29 @@ instance Patchable SvRightOwnerInfo where
       rightOwnerParty = patch new.rightOwnerParty base.rightOwnerParty current.rightOwnerParty
       voteWeight = patch new.voteWeight base.voteWeight current.voteWeight
       rewardWeight = patch new.rewardWeight base.rewardWeight current.rewardWeight
+      rewardFactorState = patchScalar new.rewardFactorState base.rewardFactorState current.rewardFactorState
       rewardNodeOperatorName = patch new.rewardNodeOperatorName base.rewardNodeOperatorName current.rewardNodeOperatorName
       beneficiaries = patchScalar new.beneficiaries base.beneficiaries current.beneficiaries
       svLifetimeRewardsAdjustment = patch new.svLifetimeRewardsAdjustment base.svLifetimeRewardsAdjustment current.svLifetimeRewardsAdjustment
+
+data SvRightOwnerRewardFactorState = SvRightOwnerRewardFactorState
+  with
+    rewardWeightFactor : Decimal
+      -- ^ the weight factor applied to the reward weight according to tier
+    permanentWeightFactor : Decimal
+      -- ^ the permanent maximum weight factor due to permanent underlocking
+    recoverableUnderlocks : [ SvRightOwnerRewardFactorEvent ]
+      -- ^ Still-recoverable underlocks, sorted by the time they become permanent, latest first.
+      -- Additional invariant: weight factors are strictly decreasing.
+  deriving (Eq, Show)
+
+data SvRightOwnerRewardFactorEvent = SvRightOwnerRewardFactorEvent
+  with
+    startTime : Time
+      -- ^ Start time of the underlock event; becomes effective after 7 days, and permanent after 30.
+    newFactor : Decimal
+      -- ^ the new weight factor
+  deriving (Eq, Show)
 
 template SvRightOwner
   with
