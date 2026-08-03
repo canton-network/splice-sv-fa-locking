@@ -1216,11 +1216,11 @@ executeTransfer' config csum dso t = do
 
   case isum.mintedRewardMap of
     None -> pure ()
-    Some m -> forA_ (Map.toList m) $ \(beneficiary, amount) ->
+    Some m -> forA_ (Map.toList m) $ \(svRightOwnerName, amount) ->
       create SvRewardMintReceipt with
         dso
         amount
-        beneficiary
+        svRightOwnerName
 
   -- check that overall transfer constraints are satisfied
   case checkTransferConstraints t summary csum.config of
@@ -1330,8 +1330,8 @@ data TransferInputsSummary = TransferInputsSummary with
     totalDevelopmentFundAmount : Optional Decimal
       -- ^ Note: Same rationale as above — made optional to ensure compatibility with
       -- the upgrade checker on package upload because `TransferInputsSummary` is serializable.
-    mintedRewardMap : Optional (Map Party Decimal)
-      -- ^ Note: This is a map from the beneficiaries of unclaimed activity records, and reward coupons to
+    mintedRewardMap : Optional (Map Text Decimal)
+      -- ^ Note: This is a map from the SV rights owner name of the unclaimed activity records, and reward coupons to
       -- the amounts minted for them, used to produce receipts.
   deriving (Eq, Show, Serializable)
 
@@ -1452,9 +1452,13 @@ summarizeAndConsumeInputs csum dso sender inps = do
       totalDevelopmentFundAmount = Some 0.0
       mintedRewardMap = Some Map.empty
 
-    addMintedReward : Party -> Decimal -> Optional (Map Party Decimal) -> Optional (Map Party Decimal)
-    addMintedReward beneficiary amount None = Some $ Map.singleton beneficiary amount
-    addMintedReward beneficiary amount (Some m) = Some $ Map.insertWith (+) beneficiary amount m
+    addMintedReward : Text -> Decimal -> Optional (Map Text Decimal) -> Optional (Map Text Decimal)
+    addMintedReward svRightOwnerName amount None = Some $ Map.singleton svRightOwnerName amount
+    addMintedReward svRightOwnerName amount (Some m) = Some $ Map.insertWith (+) svRightOwnerName amount m
+
+    grabSvRightOwnerName : Optional Text -> Update Text
+    grabSvRightOwnerName (Some svRightOwnerName) = pure svRightOwnerName
+    grabSvRightOwnerName None = assertFail "svRightOwnerName to not be None for an UnclaimedActivityRecord"
 
     summarizeAndConsumeInput _round s (InputAmulet amuletCid) = do
       amulet <- fetchAndArchive forOwner amuletCid
@@ -1525,6 +1529,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
       -- compute balance change
       miningRound <- getIssuingMiningRound csum coupon.round
       let currentSvRewardCouponAmount = intToDecimal coupon.weight * miningRound.issuancePerSvRewardCoupon
+      svRightOwnerName <- grabSvRightOwnerName coupon.svRightOwnerName
 
       return TransferInputsSummary with
         totalAmuletAmount = s.totalAmuletAmount
@@ -1537,7 +1542,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
         amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
         changeToHoldingFeesRate = s.changeToHoldingFeesRate
         totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
-        mintedRewardMap = addMintedReward coupon.beneficiary currentSvRewardCouponAmount s.mintedRewardMap
+        mintedRewardMap = addMintedReward svRightOwnerName currentSvRewardCouponAmount s.mintedRewardMap
 
     summarizeAndConsumeInput _round s (InputValidatorLivenessActivityRecord recordCid) = do
       record <- fetchAndArchive forOwner recordCid
@@ -1563,6 +1568,8 @@ summarizeAndConsumeInputs csum dso sender inps = do
     summarizeAndConsumeInput _round s (InputUnclaimedActivityRecord unclaimedActivityRecordCid) = do
       unclaimedActivityRecord <- fetchAndArchive forOwner unclaimedActivityRecordCid
       assertWithinDeadline "UnclaimedActivityRecord.expiresAt" unclaimedActivityRecord.expiresAt
+      svRightOwnerName <- grabSvRightOwnerName unclaimedActivityRecord.svRightOwnerName
+
       return TransferInputsSummary with
         totalAmuletAmount = s.totalAmuletAmount
         totalAppRewardAmount = s.totalAppRewardAmount
@@ -1575,7 +1582,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
         amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
         changeToHoldingFeesRate = s.changeToHoldingFeesRate
         totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
-        mintedRewardMap = addMintedReward unclaimedActivityRecord.beneficiary unclaimedActivityRecord.amount s.mintedRewardMap
+        mintedRewardMap = addMintedReward svRightOwnerName unclaimedActivityRecord.amount s.mintedRewardMap
 
     summarizeAndConsumeInput _round s (InputDevelopmentFundCoupon couponCid) = do
       coupon <- fetchAndArchive forOwner couponCid
