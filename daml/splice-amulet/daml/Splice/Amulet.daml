@@ -630,11 +630,11 @@ template ValidatorRewardCoupon
 -- | A coupon for a beneficiary to receive part of the SV issuance for a specific SV node and round.
 template SvRewardCoupon with
     dso : Party
-    sv : Party -- ^ The party identifying the SV node for which the reward is issued.
+    sv : Party -- ^ The node operator party identifying the SV node that initiated the coupon creation.
     beneficiary : Party -- ^ The beneficiary allowed to receive the reward.
     round : Round
     weight : Int -- ^ Coupons receive a share of the SV issuance proportional to their weight.
-    svRightOwnerName: Optional Text -- ^ SV right owner whose lifetime rewards increased.
+    svRightOwnerName: Optional Text -- ^ SV right owner whose rewards this coupons represents.
   where
     ensure weight > 0
 
@@ -743,7 +743,7 @@ template UnclaimedActivityRecord
     amount : Decimal -- ^ The amount of `Amulet` to be minted.
     reason : Text -- ^ A reason to mint the `Amulet`.
     expiresAt : Time -- ^ Selected timestamp defining the lifetime of the contract.
-    svRightOwnerName: Optional Text -- ^ SV right owner whose lifetime rewards increased.
+    svRightOwnerName: Optional Text -- ^ SV right owner that is rewarded by this coupon; and whose lifetime rewards thus increase when minting it.
   where
     signatory dso
     observer beneficiary

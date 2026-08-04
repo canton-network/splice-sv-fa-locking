@@ -2021,7 +2021,7 @@ template DsoRules with
         amount : Decimal
         reason : Text
         expiresAt : Time
-        svRightOwnerName : Text
+        svRightOwnerName : Optional Text
       controller dso
       do
         now <- getTime
@@ -2034,7 +2034,7 @@ template DsoRules with
             amount
             reason
             expiresAt
-            svRightOwnerName = Some svRightOwnerName
+            svRightOwnerName
         pure $ DsoRules_CreateUnallocatedUnclaimedActivityRecordResult with ..
 
     nonconsuming choice DsoRules_AllocateUnallocatedUnclaimedActivityRecord : DsoRules_AllocateUnallocatedUnclaimedActivityRecordResult

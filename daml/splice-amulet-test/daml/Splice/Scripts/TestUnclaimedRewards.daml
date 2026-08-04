@@ -85,7 +85,7 @@ testUnclaimedRewards_withCoupons = do
     beneficiary = provider2.primaryParty
     round = Round 0
     weight = 10
-    svRightOwnerName = Some "provider2"
+    svRightOwnerName = None
 
   -- -- start issuing
   runNextIssuance app
@@ -165,7 +165,7 @@ testNoUnclaimedRewards = do
     beneficiary = provider2.primaryParty
     round = Round 0
     weight = 15
-    svRightOwnerName = Some "provider2"
+    svRightOwnerName = None
 
   -- -- start issuing
   runNextIssuance app

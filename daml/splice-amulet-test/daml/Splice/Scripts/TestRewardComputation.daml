@@ -88,7 +88,7 @@ testRewardComputation = do
         beneficiary = beneficiary.primaryParty
         weight
         round = Round 0
-        svRightOwnerName = Some "provider1"
+        svRightOwnerName = None
   -- note: we use aliceValidator as the representation of alice due to the joint testing of ValidatorRewards and others
   svRewardAlice1 <- createSvRewardCoupon provider1 aliceValidator alice1Weight
   _svRewardProvider1 <- createSvRewardCoupon provider1 provider1 provider1Weight
