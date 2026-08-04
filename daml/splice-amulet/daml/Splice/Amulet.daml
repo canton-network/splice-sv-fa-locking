@@ -756,14 +756,14 @@ template UnclaimedActivityRecord
         unclaimedRewardCid <- create UnclaimedReward with dso; amount
         pure UnclaimedActivityRecord_DsoExpireResult with unclaimedRewardCid
 
-
+-- | A record that tracks the lifetime rewards accumulated by a SV right owner.
+-- This record should be created when minting from `SvRewardCoupon` or `UnclaimedActvityRecord` inputs.
 template SvRewardMintReceipt with
     dso : Party
-    amount : Decimal
+    amount : Decimal -- ^ The amount of lifetime rewards an SV right owner has accumulated.
     svRightOwnerName: Text -- ^ SV right owner whose lifetime rewards increased.
   where
     signatory dso
-
 
 
 -- Support code
