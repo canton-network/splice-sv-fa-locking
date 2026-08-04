@@ -77,7 +77,7 @@ test_SvRewards_With_InitialRound_In_FirstIssuanceCurve = do
                 beneficiary
                 weight
                 round = round._2.round
-                svRightOwnerName = Some
+                svRightOwnerName = None
               | (beneficiary, weight) <- [(sv, weight - 1), (extraBeneficiary, 1)]]
 
     [(rulesCid, _)] <- query @DsoRules dso
@@ -223,6 +223,7 @@ test_SvRewards_With_InitialRound_In_SecondIssuanceCurve = do
                 beneficiary
                 weight
                 round = round._2.round
+                svRightOwnerName = None
               | (beneficiary, weight) <- [(sv, weight - 1), (extraBeneficiary, 1)]]
 
     [(rulesCid, _)] <- query @DsoRules dso

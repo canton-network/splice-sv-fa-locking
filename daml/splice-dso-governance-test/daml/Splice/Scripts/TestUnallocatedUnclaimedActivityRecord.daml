@@ -48,6 +48,7 @@ test_UnclaimedActivityRecord_FullFlow = do
           amount = amountToMint
           reason
           expiresAt
+          svRightOwnerName = None
 
   -- Allocate UnallocatedUnclaimedActivityRecord
   [(unallocatedUnclaimedActivityRecordCid, _)] <- query @UnallocatedUnclaimedActivityRecord dso
@@ -95,6 +96,7 @@ test_DsoRules_CreateUnallocatedUnclaimedActivityRecord  = do
         amount = amountToMint
         reason = "Alice has achieved milestone 1"
         expiresAt
+        svRightOwnerName = None
 
   -- Unhappy paths
   ----------------
@@ -121,6 +123,7 @@ test_DsoRules_CreateUnallocatedUnclaimedActivityRecord  = do
     amount = amountToMint
     reason
     expiresAt
+    svRightOwnerName = None
   pure ()
 
 test_DsoRules_AllocateUnallocatedUnclaimedActivityRecord : Script ()
@@ -225,6 +228,7 @@ test_DsoRules_ExpireUnclaimedActivityRecord = script do
       amount
       reason
       expiresAt
+      svRightOwnerName = None
 
   -- Unhappy path - UnclaimedActivityRecordCid has not expired
   submitMustFail (actAs sv2 <> readAs dso) $
@@ -311,6 +315,7 @@ mkUnallocatedUnclaimedActivityRecord TestContext{..} = do
       amount = amountToMint
       reason = "milestone achieved by " <> show beneficiary
       expiresAt
+      svRightOwnerName = None
   pure result.unallocatedUnclaimedActivityRecordCid
 
 mkUnclaimedReward : Party -> Decimal -> Script (ContractId UnclaimedReward)
