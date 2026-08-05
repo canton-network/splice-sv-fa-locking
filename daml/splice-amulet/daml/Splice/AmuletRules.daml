@@ -1452,9 +1452,9 @@ summarizeAndConsumeInputs csum dso sender inps = do
       totalDevelopmentFundAmount = Some 0.0
       mintedSvRewardMap = Some Map.empty
 
-    addMintedReward : Text -> Decimal -> Optional (Map Text Decimal) -> Optional (Map Text Decimal)
-    addMintedReward svRightOwnerName amount None = Some $ Map.singleton svRightOwnerName amount
-    addMintedReward svRightOwnerName amount (Some m) = Some $ Map.insertWith (+) svRightOwnerName amount m
+    addMintedSvReward : Text -> Decimal -> Optional (Map Text Decimal) -> Optional (Map Text Decimal)
+    addMintedSvReward svRightOwnerName amount None = Some $ Map.singleton svRightOwnerName amount
+    addMintedSvReward svRightOwnerName amount (Some m) = Some $ Map.insertWith (+) svRightOwnerName amount m
 
     summarizeAndConsumeInput _round s (InputAmulet amuletCid) = do
       amulet <- fetchAndArchive forOwner amuletCid
@@ -1539,7 +1539,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
         totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
         mintedSvRewardMap = case coupon.svRightOwnerName of
                 None -> s.mintedSvRewardMap
-                Some svRightOwnerName -> addMintedReward svRightOwnerName currentSvRewardCouponAmount s.mintedSvRewardMap
+                Some svRightOwnerName -> addMintedSvReward svRightOwnerName currentSvRewardCouponAmount s.mintedSvRewardMap
 
     summarizeAndConsumeInput _round s (InputValidatorLivenessActivityRecord recordCid) = do
       record <- fetchAndArchive forOwner recordCid
@@ -1591,7 +1591,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
           amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
           changeToHoldingFeesRate = s.changeToHoldingFeesRate
           totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
-          mintedSvRewardMap = addMintedReward svRightOwnerName unclaimedActivityRecord.amount s.mintedSvRewardMap
+          mintedSvRewardMap = addMintedSvReward svRightOwnerName unclaimedActivityRecord.amount s.mintedSvRewardMap
 
     summarizeAndConsumeInput _round s (InputDevelopmentFundCoupon couponCid) = do
       coupon <- fetchAndArchive forOwner couponCid
