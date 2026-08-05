@@ -765,6 +765,7 @@ template SvRewardMintReceipt with
   where
     signatory dso
 
+    ensure amount > 0.0
 
 -- Support code
 ---------------
@@ -910,3 +911,6 @@ instance Patchable FeaturedAppConfig where
   patch new base current = FeaturedAppConfig with
     activityWeight = patch new.activityWeight base.activityWeight current.activityWeight
     lockThresholdOverride = patch new.lockThresholdOverride base.lockThresholdOverride current.lockThresholdOverride
+
+instance HasCheckedFetch SvRewardMintReceipt ForDso where
+  contractGroupId SvRewardMintReceipt{..} = ForDso with dso

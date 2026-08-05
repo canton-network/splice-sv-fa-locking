@@ -2459,6 +2459,7 @@ createSvRightOwnerContracts rules@DsoRules{..} newSvName rightOwnerInfo joinedAs
       numRoundsMissed = 0
       numRoundsCollected = 0
       numCouponsIssued = 0
+    totalLifetimeRewardAmount = Some 0.0
   case rightOwnerInfo of
     None -> requireNoOnLedgerSvRightOwners rules
     Some info -> do
