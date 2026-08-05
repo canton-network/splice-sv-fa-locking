@@ -86,6 +86,7 @@ template DsoBootstrap with
                 rewardWeight = sv1RewardWeight
                 rewardNodeOperatorName = rightOwnerName
                 beneficiaries = []
+                svLifetimeRewardsAdjustment = 0.0
         create dsoRules
         let joinedAsOfRound = fromOptional (Round 0) result.initialRound
         createSvRightOwnerContracts dsoRules sv1Name info joinedAsOfRound

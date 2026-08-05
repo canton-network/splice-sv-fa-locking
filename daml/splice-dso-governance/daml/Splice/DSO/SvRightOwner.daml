@@ -18,6 +18,8 @@ data SvRightOwnerInfo = SvRightOwnerInfo
       -- For rewards to be minted both the node operator.
     beneficiaries : [(Party, Decimal)]
       -- ^ List of beneficiaries and their percentages for reward distribution. Must not include rightOwnerParty. Remainder goes to rightOwnerParty.
+    svLifetimeRewardsAdjustment : Decimal
+      -- ^ Value of Phase 1 lifetime rewards before we switch over to minting SvRewardMintReceipt contracts.
   deriving (Eq, Show)
 
 instance Patchable SvRightOwnerInfo where
@@ -28,6 +30,7 @@ instance Patchable SvRightOwnerInfo where
       rewardWeight = patch new.rewardWeight base.rewardWeight current.rewardWeight
       rewardNodeOperatorName = patch new.rewardNodeOperatorName base.rewardNodeOperatorName current.rewardNodeOperatorName
       beneficiaries = patchScalar new.beneficiaries base.beneficiaries current.beneficiaries
+      svLifetimeRewardsAdjustment = patch new.svLifetimeRewardsAdjustment base.svLifetimeRewardsAdjustment current.svLifetimeRewardsAdjustment
 
 template SvRightOwner
   with
@@ -59,4 +62,5 @@ validSvRightOwnerInfo SvRightOwnerInfo{..} =
   all (\(_, beneficiaryWeight) -> beneficiaryWeight > 0.0) beneficiaries &&
   all (\(beneficiary,_) -> beneficiary /= rightOwnerParty) beneficiaries &&
   unique (map fst beneficiaries) &&
-  length beneficiaries <= 20
+  length beneficiaries <= 20 &&
+  svLifetimeRewardsAdjustment >= 0.0

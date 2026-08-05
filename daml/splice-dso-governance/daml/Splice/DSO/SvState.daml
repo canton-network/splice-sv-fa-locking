@@ -46,9 +46,11 @@ template SvRewardState with
     dso : Party
     svName : Text -- ^ sv right owner name
     state : RewardState
-    totalLifetimeRewardAmount : Optional Decimal
+    totalLifetimeRewardAmount : Optional Decimal -- ^ Tracks the total lifetime rewards of an SV rights owner from Phase 2 onward.
   where
     signatory dso
+
+    -- This choice is intended to be called off-chain
     choice SvRewardState_MergeSvRewardMintReceipts : ContractId SvRewardState
       with
         receiptCids : [ContractId SvRewardMintReceipt]
