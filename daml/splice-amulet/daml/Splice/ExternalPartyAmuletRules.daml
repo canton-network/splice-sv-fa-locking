@@ -21,6 +21,7 @@ import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.Api.Token.TransferEventsV2 qualified as TransferEventsV2
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 
+import Splice.AggregateLock
 import Splice.Amulet
 import Splice.AmuletConfig (getTokenStandardMaxTTL)
 import Splice.Amulet.TokenApiUtils
@@ -457,7 +458,7 @@ amulet_allocationFactoryV2_allocateImpl externalAmuletRules _self arg = do
   let netTransferAmount = netAmuletCreditAmount arg.allocation.authorizer arg.allocation.transferLegSides
   outputFundingAmount <- validateAmuletNextIterationFunding arg.allocation.nextIterationFunding
   let requiredFundingAmount = outputFundingAmount - netTransferAmount
-  (lockedAmulet, senderChangeCids, expiresAt, meta) <-
+  (lockedAmulet, senderChangeCids, expiresAt, meta, governanceLock) <-
     amulet_allocationFactoryV2_allocateImplCore externalAmuletRules arg requiredFundingAmount
   allocationCid <- toInterfaceContractId <$> create AmuletAllocationV2 with
     settlement = arg.settlement
@@ -466,6 +467,7 @@ amulet_allocationFactoryV2_allocateImpl externalAmuletRules _self arg = do
     expiresAt
     createdAt = arg.requestedAt
     numIterations = 0
+    governanceLock
   pure V2.AllocationInstructionResult with
     authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, map upcast senderChangeCids)]
     output = V2.AllocationInstructionResult_Completed with allocationCid
@@ -476,7 +478,7 @@ amulet_allocationFactoryV2_allocateImplCore
   : ExternalPartyAmuletRules
   -> V2.AllocationFactory_Allocate
   -> Decimal
-  -> Update (Optional (ContractId LockedAmulet), [ContractId V1.Holding], Time, Metadata)
+  -> Update (Optional (ContractId LockedAmulet), [ContractId V1.Holding], Time, Metadata, Optional GovernanceLock)
 amulet_allocationFactoryV2_allocateImplCore externalAmuletRules arg fundingAmount = do
   let dso = externalAmuletRules.dso
   let (V2.AllocationFactory_Allocate with settlement, allocation, requestedAt, inputHoldingCids, extraArgs, actors) = arg
@@ -520,16 +522,18 @@ amulet_allocationFactoryV2_allocateImplCore externalAmuletRules arg fundingAmoun
   -- arg.extraArgs: no check other than what's done when retrieving reference data
   -- arg.actors: checked above
 
+  governanceLock <- parseAndValidateGovernanceLock dso arg
+  
   -- compute the allocation expiry time
   (_, configState) <- getExternalPartyConfigStateFromChoiceContext dso arg.extraArgs.context
   let configAmulet = transferConfigAmuletFromExternalPartyConfigState configState
-  expiresAt <- computeAllocationExpiry configAmulet requestedAt allocation.settlementDeadline
+  expiresAt <- computeAllocationExpiry configAmulet (isSome governanceLock) requestedAt allocation.settlementDeadline
 
   -- create locked amulet if required
   if fundingAmount <= 0.0
   then do
     -- return input cids as change, so they can be reused on chaining
-    return (None, map downcast inputHoldingCids, expiresAt, emptyMetadata)
+    return (None, map downcast inputHoldingCids, expiresAt, emptyMetadata, None)
   else do
     require "At least one input holding must be provided for allocations that require funding" (not (null inputHoldingCids))
     -- lock the funds
@@ -546,7 +550,7 @@ amulet_allocationFactoryV2_allocateImplCore externalAmuletRules arg fundingAmoun
           provider = authorizer
           allowFeaturing = False
     (la, cids, meta) <- prepareTwoStepTransfer twoStepTransfer arg.requestedAt (map downcast inputHoldingCids) paymentContext
-    return (Some la, cids, expiresAt, meta)
+    return (Some la, cids, expiresAt, meta, governanceLock)
 
 -- | Create a V1 allocation
 amulet_allocationFactoryV1_allocateImpl
@@ -578,7 +582,7 @@ amulet_allocationFactoryV1_allocateImpl externalAmuletRules _self arg = do
         inputHoldingCids = map upcast arg.inputHoldingCids
         actors = [arg.allocation.transferLeg.sender]
         extraArgs = arg.extraArgs
-  (optLockedAmulet, senderChangeCids, expiresAt, meta) <-
+  (optLockedAmulet, senderChangeCids, expiresAt, meta, None) <- -- FIXME: check that this can't accidentally make governance locks.
     amulet_allocationFactoryV2_allocateImplCore externalAmuletRules argV2 fundingAmount
 
   -- create the amulet allocation
