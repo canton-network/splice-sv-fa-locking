@@ -634,6 +634,9 @@ data TrafficState = TrafficState with
 getSvRightOwners : DsoRules -> [Text]
 getSvRightOwners DsoRules{..} = fromOptional [] svRightOwners
 
+getLifetimeRewardTotal : SvRewardState -> Decimal
+getLifetimeRewardTotal state = fromOptional 0.0 state.lifetimeRewardTotal
+
 onLedgerSvRightOwners : DsoRules -> Bool
 onLedgerSvRightOwners DsoRules{..} = isSome svRightOwners
 
@@ -2233,6 +2236,31 @@ template DsoRules with
         assertDeadlineExceeded "AddSvRightOwnerInstruction.expiresAt" instruction.expiresAt
         pure ()
 
+    choice DsoRules_MergeSvRewardMintReceipts : ContractId SvRewardState
+      with
+        receiptCids : [ContractId SvRewardMintReceipt]
+        svOperator : Party
+        svRewardState : SvRewardState
+      controller svOperator
+      do
+        _ <- getAndValidateSvNodeOperatorParty this (Some svOperator)
+
+        require "There must be at least receiptCid in order merge sv reward mint receipts" $
+          length receiptCids >= 1
+
+        receiptAmounts <- forA receiptCids $ \cid -> do
+          r <- fetchAndArchive (ForDso with dso) cid
+          TSU.requireMatchExpected ("svRewardState.svName", svRewardState.svName) r.svRightOwnerName
+          return r.amount
+
+        let receiptTotal = sum receiptAmounts
+
+        create SvRewardState with
+          dso
+          svName = svRewardState.svName
+          state = svRewardState.state
+          lifetimeRewardTotal = Some $ receiptTotal + getLifetimeRewardTotal svRewardState
+
 
 template AddSvRightOwnerInstruction
   with
@@ -2459,7 +2487,7 @@ createSvRightOwnerContracts rules@DsoRules{..} newSvName rightOwnerInfo joinedAs
       numRoundsMissed = 0
       numRoundsCollected = 0
       numCouponsIssued = 0
-    totalLifetimeRewardAmount = Some 0.0
+    lifetimeRewardTotal = Some 0.0
   case rightOwnerInfo of
     None -> requireNoOnLedgerSvRightOwners rules
     Some info -> do
