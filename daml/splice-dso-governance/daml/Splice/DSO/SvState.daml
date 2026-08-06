@@ -4,7 +4,6 @@
 -- | Templates to track per-sv state.
 module Splice.DSO.SvState where
 
-import Splice.Amulet (SvRewardMintReceipt(..))
 import Splice.Types
 
 import Splice.DSO.DecentralizedSynchronizer
@@ -46,41 +45,10 @@ template SvRewardState with
     dso : Party
     svName : Text -- ^ sv right owner name
     state : RewardState
-    totalLifetimeRewardAmount : Optional Decimal -- ^ Tracks the total lifetime rewards of an SV rights owner from Phase 2 onward.
+    lifetimeRewardTotal : Optional Decimal
+      -- ^ Total amount of SV rewards minted for this SV rights owner.
   where
     signatory dso
-
-    -- This choice is intended to be called off-chain
-    choice SvRewardState_MergeSvRewardMintReceipts : ContractId SvRewardState
-      with
-        receiptCids : [ContractId SvRewardMintReceipt]
-        sv : Party
-      controller sv
-      do
-        -- FIXME: We would like to do the following but would result in a cyclic import
-        -- _ <- getAndValidateSvNodeOperatorParty this (Some sv)
-
-        receipts <- forA receiptCids $ \cid -> do
-          r <- fetchAndArchive (ForDso with dso) cid
-          require ("SvRewardMintReceipt svRightOwnerName: '"
-                   <> r.svRightOwnerName
-                   <> "' should match SvRewardState's svName: '"
-                   <> svName
-                   <> "'."
-                  )
-            (svName == r.svRightOwnerName)
-          return r
-
-        let receiptTotal = sum [r.amount | r <- receipts]
-
-        create SvRewardState with
-          dso
-          svName
-          state
-          totalLifetimeRewardAmount =
-            case this.totalLifetimeRewardAmount of
-              None -> Some receiptTotal
-              Some t -> Some (t + receiptTotal)
 
 
 -- Node State Management
