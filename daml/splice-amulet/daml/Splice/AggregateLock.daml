@@ -11,10 +11,13 @@ import Splice.Util
 
 import DA.Either
 import DA.Optional
+import qualified DA.Set as S
 import DA.Text as T
 import DA.List
 import qualified DA.TextMap as TM
 import DA.Time
+import DA.Traversable
+import Prelude hiding (mapA)
 
 
 data GovernanceLock
@@ -25,8 +28,7 @@ data GovernanceLock
 data AggregatedLock =
   AggregatedLock with
     lockBeneficiary : Text
-    unlockControllers : Optional ControllerSets
-    substituteControllers : Optional ControllerSets
+    controllers : GovernanceLockControllers
   deriving (Eq, Show)
 
 data VestingLock =
@@ -35,49 +37,89 @@ data VestingLock =
     endDate : Time
     initialAmount : Decimal
     -- ^ The initial amount represents the total that was locked initially when thrown into vesting state
-    substituteControllers : Optional ControllerSets
+    controllers : GovernanceLockControllers
   deriving (Eq, Show)
 
-parseGovernanceLock : CanAssert m => Metadata -> m (Optional GovernanceLock)
-parseGovernanceLock meta
-  | TM.null governanceMetadataKeys = pure None
-  | otherwise = do
-    case "cip-105/type" `TM.lookup` meta.values of
-      Some "svLock" -> do
-        lockBeneficiary <- requireSome "has a lockBeneficiary field in metadata" $ "cip-105/lockBeneficiary" `TM.lookup` meta.values
-        unlockControllers <- requireControllerSets "unlock controllers must be valid" $ "cip-105/unlockControllerSets" `TM.lookup` meta.values
-        substituteControllers <- requireControllerSets "substitute controllers must be valid" $ "cip-105/substituteControllerSets" `TM.lookup` meta.values
-        pure $ Some $ GovernanceLock_SVLocked $ AggregatedLock with ..
-      Some "vestingLock" -> do
-        startDate <- requireSome "has a valid startDate field in metadata" $ timeFromMeta "cip-105/startDate" meta
-        endDate <- requireSome "has a valid endDate field in metadata" $ timeFromMeta "cip-105/endDate" meta
-        initialAmount <- requireSome "has a valid initialAmount field in metadata" $ "cip-105/initialAmount" `TM.lookup` meta.values >>= parseDecimal
-        substituteControllers <- requireControllerSets "substitute controllers must be valid" $ "cip-105/substituteControllerSets" `TM.lookup` meta.values
-        pure $ Some $ GovernanceLock_VestingLocked $ VestingLock with ..
-      _ -> assertFail "Unknown governance lock type"
-  where
-    requireSome : CanAssert m => Text -> Optional a -> m a
-    requireSome msg a =
-      case a of
-        None -> assertFail $ "The requirement '" <> msg <> "' was not met."
-        Some a -> pure a
-    requireControllerSets : CanAssert m => Text -> Optional Text -> m (Optional ControllerSets)
-    requireControllerSets msg encoded = 
-      case encoded of
-        Some txt -> Some <$> (requireSome msg $ controllerSetFromMeta txt)
-        None -> pure None
-    governanceMetadataKeys = const () <$> TM.filterWithKey ( \_ a -> "cip-105/" `T.isPrefixOf` a ) meta.values
+
+typeKey : Text
+typeKey = "cip-105/type"
+beneficiaryKey : Text
+beneficiaryKey = "cip-105/lockBeneficiary"
+startDateKey : Text
+startDateKey = "cip-105/startDate"
+endDateKey : Text
+endDateKey = "cip-105/endDate"
+initialAmountKey : Text
+initialAmountKey = "cip-105/initialAmount"
+unlockControllerKey : Text
+unlockControllerKey = "unlockControllers"
+withdrawControllerKey : Text
+withdrawControllerKey = "withdrawControllers"
+substituteControllerKey : Text
+substituteControllerKey = "substituteControllers"
+
+governanceMetadataKeys : Metadata -> S.Set Text
+governanceMetadataKeys meta = S.fromList $ fst <$> TM.toList ( TM.filterWithKey ( \_ a -> "cip-105/" `T.isPrefixOf` a ) meta.values )
+
+checkGovernanceMetadataKeys : (CanAssert m) => S.Set Text -> Metadata -> m ()
+checkGovernanceMetadataKeys knownKeys =
+  require "Only known metadata keys are supplied under cip-105/" . (`S.isSubsetOf` knownKeys) . governanceMetadataKeys
+
+controllerKeys = [unlockControllerKey, withdrawControllerKey, substituteControllerKey]
+aggregatedLockKeys = S.fromList $ typeKey::beneficiaryKey::controllerKeys
+vestingLockKeys = S.fromList $ typeKey::startDateKey::endDateKey::initialAmountKey::controllerKeys
+
+
+class CanAssert m => ParseLockDataFromMeta m a where
+  parseFromMetadata : Metadata -> m a
+
+class CanAssert m => ParseLockDataFromText m a where
+  parseFromText : Text -> m a
+
+instance CanAssert m => ParseLockDataFromMeta m (Optional GovernanceLock) where
+  parseFromMetadata meta
+    | S.null $ governanceMetadataKeys meta = pure None
+    | otherwise = do
+      case "cip-105/type" `TM.lookup` meta.values of
+        Some "svLock" -> Some . GovernanceLock_SVLocked <$> parseFromMetadata meta
+        Some "vestingLock" -> Some . GovernanceLock_VestingLocked <$> parseFromMetadata meta
+        _ -> assertFail "Unknown governance lock type"
+
+requireSome : CanAssert m => Text -> Optional a -> m a
+requireSome msg a =
+  case a of
+    None -> assertFail $ "The requirement '" <> msg <> "' was not met."
+    Some a -> pure a
+
+instance CanAssert m => ParseLockDataFromMeta m AggregatedLock where
+  parseFromMetadata meta = do
+    lockBeneficiary <- requireSome "has a lockBeneficiary field in metadata" $ "cip-105/lockBeneficiary" `TM.lookup` meta.values
+    controllers <- parseFromMetadata meta
+    checkGovernanceMetadataKeys aggregatedLockKeys meta
+    pure $ AggregatedLock with ..
+
+instance CanAssert m => ParseLockDataFromMeta m VestingLock where
+  parseFromMetadata meta = do
+    startDate <- requireSome "has a valid startDate field in metadata" $ timeFromMeta "cip-105/startDate" meta
+    endDate <- requireSome "has a valid endDate field in metadata" $ timeFromMeta "cip-105/endDate" meta
+    initialAmount <- requireSome "has a valid initialAmount field in metadata" $ "cip-105/initialAmount" `TM.lookup` meta.values >>= parseDecimal
+    checkGovernanceMetadataKeys vestingLockKeys meta
+    controllers <- parseFromMetadata meta
+    pure $ VestingLock with ..
+
+
+-- | Parsing entry point
 
 parseAndValidateGovernanceLock : CanAssert m => Party -> V2.AllocationFactory_Allocate -> m (Optional GovernanceLock)
 parseAndValidateGovernanceLock dso alloc = do
-  lock <- parseGovernanceLock alloc.allocation.meta
+  lock <- parseFromMetadata alloc.allocation.meta
   case lock of
     Some _ -> do
       require "must have the DSO as admin" $ alloc.allocation.admin == dso
       require "must have the DSO as executors" $ alloc.settlement.executors == [dso]
       require "must be a committed allocation" alloc.allocation.committed
       require "must not have specified transfer leg sides" $ null alloc.allocation.transferLegSides
-      require "must not expire" $ alloc.allocation.settlementDeadline == Some maxComparableTime 
+      require "must not expire" $ alloc.allocation.settlementDeadline == Some maxComparableTime
       -- Lock expiry also simply forced to max in computeAllocationExpiry when governance locked.
       -- Note: instrument id of only amulet and non-zero allocation are already checked by AmuletAllocationV2 ensure clause.
       pure lock
@@ -86,18 +128,63 @@ parseAndValidateGovernanceLock dso alloc = do
 maxComparableTime : Time
 maxComparableTime = addRelTime maxTime $ microseconds (-1)
 
-type ControllerSets = [[Party]]
+data SvLockController
+    = SLC_Party Party
+    | SLC_SvRightHolder Text
+  deriving (Eq, Show)
+
+checkSvLockController : TM.TextMap Party -> Party -> SvLockController -> Bool
+checkSvLockController _ partyA (SLC_Party partyB) = partyA == partyB
+checkSvLockController svRightsParties partyA (SLC_SvRightHolder holderName)
+      | Some svParties <- holderName `TM.lookup` svRightsParties = partyA == svParties
+checkSvLockController _ _ _ = False
+
+instance CanAssert m => ParseLockDataFromText m SvLockController where
+  parseFromText t
+    | Some svName <- T.stripPrefix "{SV:" t >>= T.stripSuffix "}" = pure $ SLC_SvRightHolder svName -- Strawman for parsing an SvLockController out of a single field ControllerSpecification.
+    | Some party <- partyFromText t = pure $ SLC_Party party -- Default is a party, assuming partyFromText succeeds.
+    | otherwise = assertFail "Failure parsing SvLockController"
+
+type ControllerSpecification = [[SvLockController]]
+
+defaultControllerSpecification : Party -> ControllerSpecification
+defaultControllerSpecification owner = [[SLC_Party owner]]
+
+
+data GovernanceLockControllers = GovernanceLockControllers with
+    unlock : Optional ControllerSpecification
+    withdraw : Optional ControllerSpecification
+    substitute : Optional ControllerSpecification
+  deriving (Eq, Show)
+
+instance CanAssert m => ParseLockDataFromText m ControllerSpecification where
+  parseFromText = mapA parseFromText . splitOn ";"
+
+instance CanAssert m => ParseLockDataFromText m [SvLockController] where
+  parseFromText = mapA parseFromText . splitOn ","
+
+instance CanAssert m => ParseLockDataFromMeta m GovernanceLockControllers where
+  parseFromMetadata meta = do
+        unlock <- mapA parseFromText $ unlockControllerKey `TM.lookup` meta.values
+        withdraw <- mapA parseFromText $ withdrawControllerKey `TM.lookup` meta.values
+        substitute <- mapA parseFromText $ substituteControllerKey `TM.lookup` meta.values
+        pure $ GovernanceLockControllers with ..
 
 -- TODO / FIXME: Expose the error message from parseGovernanceLock
 partiesFromText : Text -> Optional [Party]
 partiesFromText = eitherToOptional . parseCommaSeparated "Parties" partyFromText
 
-controllerSetFromMeta : Text -> Optional ControllerSets
-controllerSetFromMeta = mapA partiesFromText . splitOn ";"
+checkControllerSpecification : TM.TextMap Party -> [Party] -> ControllerSpecification -> Update ()
+checkControllerSpecification svRightsParties actors set =
+    require "Controllers must be one of the listed options" $
+      any actorsMatch set
+  where
+    actorsMatch : [SvLockController] -> Bool
+    actorsMatch set
+      = all (\s -> any (`checkParty` s) actors) set
+      && all (\a -> any (a `checkParty`) set) actors
 
-checkControllerSet : [Party] -> ControllerSets -> Update ()
-checkControllerSet parties set = 
-    require "Controllers must be one of the listed options" $ any (\conj -> all (`elem` parties) conj && all (`elem` conj) parties) set
+    checkParty = checkSvLockController svRightsParties
 
 -- TODO / FIXME: detangle the module import order or pass newEmptyAllocation as a small typeclass instead of explicit function pointer.
 -- This will also need to get a configuration template to set the vesting period and potentially other settings.
@@ -128,7 +215,7 @@ aggregateLockUnlock newEmptyAllocation lock a aCid arg = do
 
     let ownerParty = regularAccountOwner alloc.allocation.authorizer
 
-    checkControllerSet arg.actors $ fromOptional [[ownerParty]] lock.unlockControllers
+    checkControllerSpecification TM.empty arg.actors $ fromOptional (defaultControllerSpecification ownerParty) lock.controllers.unlock
 
     now <- getFromContextU arg.extraArgs.context effectiveAtKey
 
@@ -212,11 +299,11 @@ vestingLockWithdraw : (HasToInterface a V2.Allocation) => VestingLock -> a -> Co
 vestingLockWithdraw lock a aCid arg = do
     let vestingLock = view $ toInterface @V2.Allocation a
         vestingLockCid = toInterfaceContractId @V2.Allocation aCid
-    
+
     now <- getFromContextU arg.extraArgs.context effectiveAtKey
 
     -- Removed withdraw controllers for the moment on vesting locks, it seems significantly more questionable to restrict withdrawal of conceptually unlocked amulet.
-    
+
     -- That this is a singleton with the amulet insturment ID is enforced by AmuletAllocationV2, but not encoded in the types we see here.
     (instrumentId, nextIterationFunding) <- case TM.toList <$> vestingLock.allocation.nextIterationFunding of
         Some [a] -> pure a
