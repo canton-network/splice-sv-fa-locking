@@ -7,6 +7,7 @@ import DA.Assert
 import DA.Action (void)
 import DA.List (sortOn)
 import DA.Foldable (forA_)
+import qualified DA.TextMap as TextMap
 import DA.Time
 
 import Daml.Script
@@ -365,3 +366,41 @@ test_SvRewardUpdatedWeight = do
     [(_, coupon)] <- queryFilter @SvRewardCoupon sv2 (\co -> co.round == round.round)
     coupon.weight === before.svRewardWeight + 1
 -}
+
+-- NOTE: WIP
+{-
+test_Lifetime_SvRewards_Tracking : Script ()
+test_Lifetime_SvRewards_Tracking = do
+  (app, (dso), (sv1, sv2, _, _)) <- initDecentralizedSynchronizerWithNonZeroRound True 34 True
+
+  -- create validator rights for sv1-4, so that runAmuletDepositBots can collect the rewards
+  forA_ [sv1, sv2] $ \sv -> do
+    submit sv $ createCmd ValidatorRight with
+      dso
+      user = sv
+      validator = sv
+
+  let receiveSvRewardCoupon : Party -> (ContractId OpenMiningRound, OpenMiningRound) -> ContractId DsoRules -> Script ()
+      receiveSvRewardCoupon sv round rulesCid = do
+        (weight, rewardStateCid) <- getSvRewardWeightAndState sv
+        -- collect reward coupon
+        void $ submit (actAs sv <> readAs dso) $ exerciseCmd rulesCid DsoRules_ReceiveSvRewardCouponV2 with
+          openRoundCid = round._1
+          svRewardStates = TextMap.singleton "sv1" (_, _)
+--          rewardStateCid
+--          beneficiaries = [(sv, weight - 1), (extraBeneficiary, 1)]
+          sv = sv
+        -- check that the coupon exists and has the right weight
+        coupons <- queryFilter @SvRewardCoupon sv (\co -> co.round == round._2.round)
+        sortOn (.weight) (map (._2) coupons) === sortOn (.weight)
+          [SvRewardCoupon with
+              dso = app.dso
+              sv
+              beneficiary
+              weight
+              round = round._2.round
+              svRightOwnerName = None
+            | (beneficiary, weight) <- [(sv, weight - 1), (extraBeneficiary, 1)]]
+
+  pure ()
+--
