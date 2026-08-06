@@ -9,6 +9,9 @@ import Splice.Types
 import Splice.DSO.DecentralizedSynchronizer
 import Splice.Util
 
+import DA.Optional
+import DA.Time
+
 
 -- Checked fetches for per-sv state
 ---------------------------------------
@@ -38,7 +41,29 @@ data RewardState = RewardState with
     numRoundsCollected : Int -- ^ Number of rounds for which they collected coupons.
     lastRoundCollected : Round -- ^ Last round for which they collected reward coupons.
     numCouponsIssued : Int -- ^ Number of SV reward coupons issued by them for their beneficiaries.
+    rewardAdjustmentState : Optional RewardAdjustmentState -- ^ Adjustment factor and associated state for the reward weight
   deriving (Eq, Show, Serializable)
+
+
+-- |
+data RewardAdjustmentState = RewardAdjustmentState
+  with
+    permanentWeightFactor : Decimal -- TODO: move to SvRightOwner for voting.
+      -- ^ the permanent maximum weight factor due to permanent underlocking
+    recoverableUnderlocks : [ UnderlockEvent ]
+      -- ^ Still-recoverable underlocks, sorted by the time they become permanent, latest first.
+      -- Additional invariant: weight factors are strictly increasing (less-penalizing later in the list)
+  deriving (Eq, Show)
+
+
+data UnderlockEvent = UnderlockEvent
+  with
+    startTime : Time
+      -- ^ Start time of the underlock event; becomes effective after 7 days, and permanent after 30.
+    newFactor : Decimal
+      -- ^ the new weight factor
+  deriving (Eq, Show)
+
 
 -- | State of reward collection for a sv identified by their sv name.
 template SvRewardState with
@@ -111,6 +136,55 @@ template SvStatusReport with
   where
     signatory dso
 
+
+getAdjustedRewardWeight : Optional RewardAdjustmentState -> Time -> Int -> Int
+getAdjustedRewardWeight None _ weight = weight
+getAdjustedRewardWeight (Some state) now weight
+  = floor $ weightFactor * intToDecimal weight
+  where
+    weightFactor = fromOptional state.permanentWeightFactor $ lookupMinValue activeWeights
+    sevenDaysAgo = now `addRelTime` days (-7)
+    activeWeights = dropWhile ((< sevenDaysAgo) . startTime) state.recoverableUnderlocks
+    lookupMinValue (a::_) = Some $ a.newFactor
+    lookupMinValue [] = None
+
+defaultRewardAdjustmentState = RewardAdjustmentState with
+  permanentWeightFactor = 1.0
+  recoverableUnderlocks = []
+
+updateTemporaryUnderlockState : (CanAssert m) => Decimal -> Time -> Optional RewardAdjustmentState -> m (Optional RewardAdjustmentState)
+updateTemporaryUnderlockState newRewardWeightFactor effectiveTime adjustmentState
+  | newAdjustmentState == adjustmentState = assertFail "Underlock state must change when calling updateTemporaryUnderlockState"
+  | otherwise = do
+      require "newRewardWeightFactor must be nonnegative" $ newRewardWeightFactor >= 0.0
+      require "newRewardWeightFactor must be no greater than permanentWeightFactor" $
+        currentAdjustmentState.permanentWeightFactor <= newRewardWeightFactor
+      pure newAdjustmentState
+  where
+    currentAdjustmentState = fromOptional defaultRewardAdjustmentState adjustmentState
+    stillApplicableUnderlocks = currentAdjustmentState.recoverableUnderlocks
+    newUnderlock = UnderlockEvent with
+      newFactor = newRewardWeightFactor
+      startTime = effectiveTime
+    newRecoverableUnderlocks
+      | newRewardWeightFactor == 1.0 = []
+      | firstUnderlock::_ <- stillApplicableUnderlocks,
+        firstUnderlock.newFactor == newRewardWeightFactor = stillApplicableUnderlocks
+      | otherwise = newUnderlock::stillApplicableUnderlocks
+    newFullAdjustmentState = currentAdjustmentState with
+      recoverableUnderlocks = newRecoverableUnderlocks
+    newAdjustmentState
+      | newFullAdjustmentState == defaultRewardAdjustmentState = None
+      | otherwise = Some newFullAdjustmentState
+
+updatePermanentUnderlockState : (CanAssert m) => Time -> Optional RewardAdjustmentState -> m (Optional RewardAdjustmentState)
+updatePermanentUnderlockState permanentBefore adjustmentState
+  | Some state <- adjustmentState, (recoverableUnderlocks, permanent :: _) <- span isStillTemporary state.recoverableUnderlocks
+    = pure $ Some RewardAdjustmentState with
+          permanentWeightFactor = permanent.newFactor
+          recoverableUnderlocks
+  | otherwise = assertFail "Must make an underlock permanent"
+  where isStillTemporary = (< permanentBefore). startTime
 
 -- instances
 ------------

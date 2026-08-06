@@ -156,6 +156,7 @@ test_SvRewards_With_InitialRound_In_FirstIssuanceCurve = do
       numRoundsCollected = 3
       lastRoundCollected = Round (initialRound + 4)
       numCouponsIssued = 6
+      rewardAdjustmentState = None
 
     [(_, sv2State)] <- queryFilter @SvRewardState dso (\s -> s.svName == "sv2")
     sv2State.state === RewardState with
@@ -163,6 +164,7 @@ test_SvRewards_With_InitialRound_In_FirstIssuanceCurve = do
       numRoundsCollected = 2
       lastRoundCollected = Round (initialRound + 4)
       numCouponsIssued = 4
+      rewardAdjustmentState = None
 
     -- round2 can no longer be received
     receiveSvRewardCouponFails sv1 round2 rulesCid
@@ -301,6 +303,7 @@ test_SvRewards_With_InitialRound_In_SecondIssuanceCurve = do
       numRoundsCollected = 3
       lastRoundCollected = Round (initialRound + 4)
       numCouponsIssued = 6
+      rewardAdjustmentState = None
 
     [(_, sv2State)] <- queryFilter @SvRewardState dso (\s -> s.svName == "sv2")
     sv2State.state === RewardState with
@@ -308,6 +311,7 @@ test_SvRewards_With_InitialRound_In_SecondIssuanceCurve = do
       numRoundsCollected = 2
       lastRoundCollected = Round (initialRound + 4)
       numCouponsIssued = 4
+      rewardAdjustmentState = None
 
     -- round2 can no longer be received
     receiveSvRewardCouponFails sv1 round2 rulesCid

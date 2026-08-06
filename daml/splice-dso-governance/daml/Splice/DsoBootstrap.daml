@@ -84,7 +84,6 @@ template DsoBootstrap with
                 rightOwnerParty = sv1Party
                 voteWeight = fromOptional 0 sv1VoteWeight
                 rewardWeight = sv1RewardWeight
-                rewardFactorState = None
                 rewardNodeOperatorName = rightOwnerName
                 beneficiaries = []
                 svLifetimeRewardsAdjustment = 0.0
