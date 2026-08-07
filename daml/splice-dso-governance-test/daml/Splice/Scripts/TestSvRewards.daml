@@ -7,6 +7,7 @@ import DA.Assert
 import DA.Action (void)
 import DA.List (sortOn)
 import DA.Foldable (forA_)
+import DA.Optional
 import qualified DA.TextMap as TextMap
 import DA.Time
 
@@ -17,6 +18,7 @@ import Splice.Round
 import Splice.Types
 import Splice.Scripts.Util
 import Splice.DsoRules
+import Splice.DSO.SvRightOwner
 import Splice.DSO.SvState
 import Splice.Scripts.DsoTestUtils
 import Splice.Testing.Registries.AmuletRegistry (getActiveOpenRoundsSorted)
@@ -277,7 +279,6 @@ test_SvRewards_With_InitialRound_In_SecondIssuanceCurve = do
     checkBalance sv1 sv1Balance1
     checkBalance sv2 sv2Balance -- no balance change for SV2 as it did not collect round 1
 
-
     -- testing skipping
     -------------------
 
@@ -311,8 +312,6 @@ test_SvRewards_With_InitialRound_In_SecondIssuanceCurve = do
     -- round2 can no longer be received
     receiveSvRewardCouponFails sv1 round2 rulesCid
     receiveSvRewardCouponFails sv2 round2 rulesCid
-
-    return ()
 
 test_SvRewardStateMerge = do
   (_, dso, (sv1, _, _, _)) <- initMainNet
@@ -368,7 +367,6 @@ test_SvRewardUpdatedWeight = do
 -}
 
 -- NOTE: WIP
-{-
 test_Lifetime_SvRewards_Tracking : Script ()
 test_Lifetime_SvRewards_Tracking = do
   (app, (dso), (sv1, sv2, _, _)) <- initDecentralizedSynchronizerWithNonZeroRound True 34 True
@@ -380,27 +378,70 @@ test_Lifetime_SvRewards_Tracking = do
       user = sv
       validator = sv
 
+  [(svRightOwnerCid, svRightOwner)] <- queryFilter @SvRightOwner dso (\s -> s.rightOwnerName == "sv1")
+
+  let checkSvRewardCouponsDoNotExist round = do
+        [] <- queryFilter @SvRewardCoupon app.dso (\co -> co.round == round)
+        pure ()
+  let checkMintReceiptAmount dso amount = do
+        [(_, receipt)] <- query @SvRewardMintReceipt dso
+        require (show receipt.svRightOwnerName <> " balance: expected " <> show amount <> " == " <> show receipt.amount)
+          (receipt.amount == amount)
+  let checkLifetimeRewardTotal dso sv amount = do
+        (name, _) <- getSvInfoByParty app sv
+        -- TODO: Double check this is correct (we get two reward states under sv1)
+        rewardStates <- queryFilter @SvRewardState dso (\s -> s.svName == name)
+        let lifetimeTotal = sum $ flip map (snd <$> rewardStates) $ \r -> fromOptional 0.0 r.lifetimeRewardTotal
+        require (show name <> " lifetimeRewardTotal: expected " <> show amount <> " == " <> show lifetimeTotal)
+          (lifetimeTotal == amount)
   let receiveSvRewardCoupon : Party -> (ContractId OpenMiningRound, OpenMiningRound) -> ContractId DsoRules -> Script ()
       receiveSvRewardCoupon sv round rulesCid = do
-        (weight, rewardStateCid) <- getSvRewardWeightAndState sv
+        (name, _) <- getSvInfoByParty app sv
+        [(rewardStateCid, _)] <- queryFilter @SvRewardState dso (\s -> s.svName == name)
         -- collect reward coupon
         void $ submit (actAs sv <> readAs dso) $ exerciseCmd rulesCid DsoRules_ReceiveSvRewardCouponV2 with
-          openRoundCid = round._1
-          svRewardStates = TextMap.singleton "sv1" (_, _)
---          rewardStateCid
---          beneficiaries = [(sv, weight - 1), (extraBeneficiary, 1)]
           sv = sv
-        -- check that the coupon exists and has the right weight
-        coupons <- queryFilter @SvRewardCoupon sv (\co -> co.round == round._2.round)
-        sortOn (.weight) (map (._2) coupons) === sortOn (.weight)
-          [SvRewardCoupon with
-              dso = app.dso
-              sv
-              beneficiary
-              weight
-              round = round._2.round
-              svRightOwnerName = None
-            | (beneficiary, weight) <- [(sv, weight - 1), (extraBeneficiary, 1)]]
+          openRoundCid = round._1
+          svRewardStates = TextMap.singleton svRightOwner.rightOwnerName (svRightOwnerCid, rewardStateCid)
+
+  [(rulesCid, _)] <- query @DsoRules dso
+
+  [round0, round1, _round2] <- getActiveOpenRoundsSorted app.dso
+  [(_, openRound)] <- queryFilter @OpenMiningRound app.dso (\r -> r.round == round0._2.round)
+  let createFee = openRound.transferConfigUsd.createFee.fee * openRound.amuletPrice
+
+  -- round0 can be received by both SV1 and SV2
+  passTime (hours 1)
+  receiveSvRewardCoupon sv1 round0 rulesCid
+--  receiveSvRewardCoupon sv2 round0 rulesCid
+
+  receiveSvRewardCoupon sv1 round1 rulesCid
+
+  runNextIssuance app
+  runNextIssuance app
+
+  runAmuletDepositBots app
+  checkSvRewardCouponsDoNotExist round0._2.round
+
+  [(_, round)] <- queryFilter @IssuingMiningRound app.dso (\r -> r.round == round0._2.round)
+  -- let sv1Weight = intToDecimal $ bpsMultiplier * 10 - 1
+  -- TODO: Better way to get weight? Weight is 100000, a little unsure how we came to this number
+  let sv1Balance0 = round.issuancePerSvRewardCoupon * 100000.0 - createFee
+
+  checkMintReceiptAmount dso sv1Balance0
+
+  [(rewardReceiptCid, _)] <- query @SvRewardMintReceipt dso
+  debug ("lulthe first", show rewardReceiptCid)
+
+  [(_, rewardState)] <- queryFilter @SvRewardState dso (\s -> s.svName == "sv1")
+
+  submit (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
+    receiptCids = [rewardReceiptCid]
+    svOperator = sv1
+    svRewardState = rewardState
+
+  checkLifetimeRewardTotal dso sv1 sv1Balance0
+  rewardReceiptCids <- query @SvRewardMintReceipt dso
+  debug ("lulthe second", show rewardReceiptCids)
 
   pure ()
---
