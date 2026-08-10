@@ -369,7 +369,7 @@ test_SvRewardUpdatedWeight = do
 -- NOTE: WIP
 test_Lifetime_SvRewards_Tracking : Script ()
 test_Lifetime_SvRewards_Tracking = do
-  (app, (dso), (sv1, sv2, _, _)) <- initDecentralizedSynchronizerWithNonZeroRound True 34 True
+  (app, (dso), (sv1, sv2, _, _)) <- initMainNet
 
   -- create validator rights for sv1-4, so that runAmuletDepositBots can collect the rewards
   forA_ [sv1, sv2] $ \sv -> do
@@ -394,7 +394,6 @@ test_Lifetime_SvRewards_Tracking = do
   let checkLifetimeRewardTotal : Party -> Party -> Decimal -> Script ()
       checkLifetimeRewardTotal dso sv amount = do
         (name, _) <- getSvInfoByParty app sv
-        -- TODO: Double check this is correct (we get two reward states under sv1)
         rewardStates <- queryFilter @SvRewardState dso (\s -> s.svName == name)
         let lifetimeTotal = sum $ flip map (snd <$> rewardStates) $ \r -> fromOptional 0.0 r.lifetimeRewardTotal
         require (show name <> " lifetimeRewardTotal: expected " <> show amount <> " == " <> show lifetimeTotal)
@@ -411,13 +410,11 @@ test_Lifetime_SvRewards_Tracking = do
 
   [(rulesCid, _)] <- query @DsoRules dso
 
-  [round0, round1, _round2] <- getActiveOpenRoundsSorted app.dso
+  [round0, round1, round2] <- getActiveOpenRoundsSorted app.dso
 
   -- round0 can be received by both SV1 and SV2
   passTime (hours 1)
   receiveSvRewardCoupon sv1 round0 rulesCid
---  receiveSvRewardCoupon sv2 round0 rulesCid
-
   receiveSvRewardCoupon sv1 round1 rulesCid
 
   runNextIssuance app
@@ -435,11 +432,45 @@ test_Lifetime_SvRewards_Tracking = do
   [(rewardReceiptCid, _)] <- query @SvRewardMintReceipt dso
   [(rewardStateCid, _)] <- queryFilter @SvRewardState dso (\s -> s.svName == "sv1")
 
+  -- Should fail when no receiptCids are supplied
+  submitMustFail (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
+    receiptCids = []
+    svOperator = sv1
+    svRewardStateCid = rewardStateCid
+
+  -- Should fail when wrong svOperator supplied
+  submitMustFail (actAs sv1 <> actAs sv2 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
+    receiptCids = [rewardReceiptCid]
+    svOperator = sv2
+    svRewardStateCid = rewardStateCid
+
   submit (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
     receiptCids = [rewardReceiptCid]
     svOperator = sv1
     svRewardStateCid = rewardStateCid
 
   checkLifetimeRewardTotal dso sv1 sv1Balance0
+
+  receiveSvRewardCoupon sv1 round2 rulesCid
+  runNextIssuance app
+
+  runAmuletDepositBots app
+
+  [(_, round)] <- queryFilter @IssuingMiningRound app.dso (\r -> r.round == round2._2.round)
+  let sv1Weight = 100000.0
+      sv1Balance1 = round.issuancePerSvRewardCoupon * sv1Weight
+
+  checkMintReceiptAmount dso sv1Balance1
+
+  [(rewardReceiptCid, _)] <- query @SvRewardMintReceipt dso
+  [(rewardStateCid, _)] <- queryFilter @SvRewardState dso (\s -> s.svName == "sv1")
+
+  submit (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
+    receiptCids = [rewardReceiptCid]
+    svOperator = sv1
+    svRewardStateCid = rewardStateCid
+
+  -- Check aggregated balances
+  checkLifetimeRewardTotal dso sv1 $ sv1Balance1 + sv1Balance0
 
   pure ()
