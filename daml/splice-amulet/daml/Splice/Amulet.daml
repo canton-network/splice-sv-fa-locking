@@ -757,7 +757,7 @@ template UnclaimedActivityRecord
         pure UnclaimedActivityRecord_DsoExpireResult with unclaimedRewardCid
 
 -- | A record that tracks an SV rights owner's rewards minted from their weight.
--- This record should be created when minting an SV's reward coupon or if there are any coupons that go unclaimed.
+-- This record should be created when minting an SV's reward coupon.
 template SvRewardMintReceipt with
     dso : Party
     amount : Decimal -- ^ The amount of SV rewards minted.
