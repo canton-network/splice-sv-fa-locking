@@ -79,7 +79,7 @@ template AmuletAllocationV2
       allocation_withdrawExtraObservers _arg = observer this
 
       allocation_withdrawImpl self arg | Some governanceLock <- this.governanceLock =
-        governanceLockedWithdrawImpl emptyCloneWithMeta governanceLock this (fromInterfaceContractId self) arg
+        governanceLockedWithdrawImpl this (fromInterfaceContractId self) arg
       allocation_withdrawImpl self arg@(V2.Allocation_Withdraw{..}) = do
         archiveAndCheckActors self arg.actors [[accountPrincipal allocation.admin allocation.authorizer]]
         ensureWithdrawIsAllowed allocation
@@ -255,3 +255,13 @@ emptyCloneWithMeta src now meta = toInterfaceContractId <$> create src with
 
 instance HasCheckedFetch AmuletAllocationV2 ForDso where
   contractGroupId AmuletAllocationV2{..} = ForDso with dso = allocation.admin
+
+instance GovernanceAllocation AmuletAllocationV2 where
+  getGovernanceLock AmuletAllocationV2 { governanceLock } = governanceLock
+  createUnfundedGovernanceAllocation _dso _lock _ = do
+    undefined
+
+-- Governance Lock Support
+-- =======================
+
+

@@ -1,10 +1,12 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 module Splice.AggregateLock where
 
 import Splice.Amulet.TokenApiUtils
+import Splice.Api.Token.HoldingV2 as V2
 import Splice.Api.Token.AllocationV2 as V2
 import Splice.Api.Token.AllocationInstructionV2 as V2
 import Splice.Api.Token.MetadataV1
-import Splice.TokenStandard.Utils (maxTime, regularAccountOwner)
+import Splice.TokenStandard.Utils (maxTime, regularAccountOwner, isValidAllocationSpecificationV2)
 import Splice.TokenStandard.Utils.Internal.Allocations (settlementFactoryV2_settleBatchDefaultImplNoSelf)
 import Splice.TokenStandard.Utils.Internal.Conversions (timeFromMeta, encodeTime)
 import Splice.Util
@@ -13,12 +15,129 @@ import DA.Either
 import DA.Optional
 import qualified DA.Set as S
 import DA.Text as T
-import DA.List
+import DA.List hiding (concat)
+import qualified DA.Map as Map
 import qualified DA.TextMap as TM
 import DA.Time
-import DA.Traversable
-import Prelude hiding (mapA)
+import DA.Traversable (mapA)
+import DA.Foldable (concat)
+import Prelude hiding (mapA, concat)
 
+-- Lock proposals
+-- ==============
+
+-- Intended to be used to build a template type with just this field, to effectively monomorphize this datatype into a template that supports V2.AllocationInstruction.
+
+data GovernanceLockProposal s a = GovernanceLockProposal with
+    originalInstructionCid : Optional (ContractId V2.AllocationInstruction)
+    availableActions : Map.Map V2.AllocationInstructionAction [[Party]]
+    inputHoldingCids : [ContractId V2.Holding]
+
+    settlement : V2.SettlementInfo
+    -- Makes the view easy to write, but none of this is allowed to vary. Should remove.
+    allocation : V2.AllocationSpecification
+    -- Makes the view easy to write, but only the authorizer and nextIterationFunding map are allowed to vary. Should remove.
+
+    -- Minimal representation of the proposed lock
+    proposedLock : AggregatedLock
+    allocationAuthorizer : Party
+    allocationAmount : Decimal
+
+    admin : Party
+    requestedAt : Time
+
+    -- Cached for the observer; not used for authorization.
+    svParty : Optional Party
+  deriving (Show, Eq)
+
+governanceLockProposal_ensure this =
+      isValidAllocationSpecificationV2 (const True) this.allocation
+
+governanceLockProposal_signatory (GovernanceLockProposal with ..) = [admin, regularAccountOwner allocation.authorizer ]
+governanceLockProposal_observer (GovernanceLockProposal with ..) = optionalToList svParty
+
+governanceLockProposal_viewAllocationInstruction (GovernanceLockProposal with ..) = V2.AllocationInstructionView with
+        originalInstructionCid
+        settlement
+        allocation
+        requestedAt
+        inputHoldingCids
+        availableActions
+        expiresAt =
+          -- Note: in prod you would probably want to limit the maximal TTL to avoid a storage leak
+          allocation.settlementDeadline
+        meta = emptyMetadata
+
+-- Actual core of implementation
+
+governanceLockProposal_withdrawImpl : GovernanceLockProposal s a -> ContractId AllocationInstruction -> AllocationInstruction_Withdraw -> Update AllocationInstructionResult
+governanceLockProposal_withdrawImpl this self
+  V2.AllocationInstruction_Withdraw {actors}
+  = do -- Simple, becasue we only implement single proposal single acceptance and holdings are not locked.
+    require "actor must be the holder for withdraw" $ actors == [regularAccountOwner this.allocation.authorizer]
+    archive self
+    pure V2.AllocationInstructionResult with
+      output = V2.AllocationInstructionResult_Failed
+      authorizerChangeCids = TM.singleton "amulet" this.inputHoldingCids -- FIXME: actually get the right ID.
+      meta = emptyMetadata
+
+governanceLockProposal_acceptImpl : forall a s. ( GovernanceAllocation a, GovernanceAllocationInstruction s a) => GovernanceLockProposal s a -> ContractId s -> AllocationInstruction_Accept -> Update AllocationInstructionResult
+governanceLockProposal_acceptImpl
+    GovernanceLockProposal {..}
+    self
+    AllocationInstruction_Accept {actors, extraArgs}
+  = do
+    -- Should there be a way to send a counter-proposal from the SV right holder via this channel? Mostly to supply corrected controllers for the SV's terms.
+    archive self
+    authRightCid <- extraArgs.context `getFromContextU` "cip-105/svAuthRightCid"
+    let svName = proposedLock.lockBeneficiary
+    _ : SvRightOwnerName <- fetchChecked (ForSv with dso = allocation.admin; svName) authRightCid
+    (_ : ContractId a, result) <- createFundedGovernanceAllocation self allocation.admin (GovernanceLock_SVLocked proposedLock) allocationAmount $ V2.AllocationFactory_Allocate with
+        settlement
+        allocation
+        requestedAt
+        inputHoldingCids
+        extraArgs
+        actors = regularAccountOwner allocation.authorizer :: actors
+    pure result
+
+
+isGovernanceAllocationArgument V2.AllocationFactory_Allocate{extraArgs = ExtraArgs { meta }} = not ( S.null $ governanceMetadataKeys meta )
+
+governanceAllocateImpl : forall s a. (GovernanceAllocationInstruction s a, HasCreate a) => V2.AllocationFactory_Allocate -> Update V2.AllocationInstructionResult
+governanceAllocateImpl arg@V2.AllocationFactory_Allocate{..} = do
+  Some (GovernanceLock_SVLocked proposedLock) <- parseAndValidateGovernanceLock arg.allocation.admin arg
+  let Some [ (_, allocationAmount) ] = TM.toList <$> allocation.nextIterationFunding -- Valid because of the ensure above, but FIXME: better reporting desirable.
+
+  proposalCid <- create $ wrapGovernanceLockProposal @s @a $ GovernanceLockProposal with
+    originalInstructionCid = None
+    availableActions = Map.fromList [] -- Can't actually keep the SvRightHolder name and party in sync for the view.
+    inputHoldingCids
+    settlement -- TODO: Remove in favor of minimal representation
+    allocation -- TODO: Remove in favor of minimal representation
+    -- Minimal representation
+    proposedLock
+    allocationAuthorizer = regularAccountOwner allocation.authorizer
+    allocationAmount
+    admin = allocation.admin
+    requestedAt
+    svParty = None -- Could take cip-105/svAuthRightCid and cache here for observer, or could use explicit disclosure and an API lookup for accept.
+  pure $ undefined -- proposalCid
+
+class GovernanceAllocationInstruction s a where
+  wrapGovernanceLockProposal : GovernanceLockProposal s a -> a
+  createFundedGovernanceAllocation : ContractId s -> Party -> GovernanceLock -> Decimal -> V2.AllocationFactory_Allocate -> Update (ContractId a, V2.AllocationInstructionResult)
+  -- ^ uses ContractId a to avoid an ambiguous type
+
+
+
+-- Lock management
+-- ===============
+
+class GovernanceAllocation a where
+  getGovernanceLock : a -> Optional GovernanceLock
+  createUnfundedGovernanceAllocation : Party -> GovernanceLock -> V2.AllocationFactory_Allocate -> Update (ContractId a, V2.AllocationInstructionResult)
+  -- ^ uses ContractId a to avoid an ambiguous type. There's probably a better way to hook into settlement-like funds movement than to use this and settleBatch.
 
 data GovernanceLock
   = GovernanceLock_SVLocked AggregatedLock
@@ -51,12 +170,17 @@ endDateKey : Text
 endDateKey = "cip-105/endDate"
 initialAmountKey : Text
 initialAmountKey = "cip-105/initialAmount"
+effectiveAtKey : Text
+effectiveAtKey = "cip-105/effectiveAt"
+
+
 unlockControllerKey : Text
-unlockControllerKey = "unlockControllers"
+unlockControllerKey = "cip-105/unlockControllers"
 withdrawControllerKey : Text
-withdrawControllerKey = "withdrawControllers"
+withdrawControllerKey = "cip-105/withdrawControllers"
 substituteControllerKey : Text
-substituteControllerKey = "substituteControllers"
+substituteControllerKey = "cip-105/substituteControllers"
+
 
 governanceMetadataKeys : Metadata -> S.Set Text
 governanceMetadataKeys meta = S.fromList $ fst <$> TM.toList ( TM.filterWithKey ( \_ a -> "cip-105/" `T.isPrefixOf` a ) meta.values )
@@ -186,25 +310,24 @@ checkControllerSpecification svRightsParties actors set =
 
     checkParty = checkSvLockController svRightsParties
 
--- TODO / FIXME: detangle the module import order or pass newEmptyAllocation as a small typeclass instead of explicit function pointer.
+
 -- This will also need to get a configuration template to set the vesting period and potentially other settings.
 
 governanceLockedWithdrawImpl
-  : HasToInterface a V2.Allocation
-  => (a -> Time -> Metadata -> Update (ContractId V2.Allocation))
-  -> GovernanceLock
-  -> a
+  : (HasToInterface a V2.Allocation, GovernanceAllocation a)
+  => a
   -> ContractId a
   -> V2.Allocation_Withdraw
   -> Update V2.AllocationResult
-governanceLockedWithdrawImpl newEmptyAllocation governanceLock a acid arg@(V2.Allocation_Withdraw{..}) =
-  case governanceLock of
-    GovernanceLock_SVLocked lock -> aggregateLockUnlock newEmptyAllocation lock a acid arg
-    GovernanceLock_VestingLocked lock -> vestingLockWithdraw lock a acid arg
+governanceLockedWithdrawImpl this self arg@(V2.Allocation_Withdraw{..}) =
+  case getGovernanceLock this of
+    Some (GovernanceLock_SVLocked lock) -> aggregateLockUnlock lock this self arg
+    Some (GovernanceLock_VestingLocked lock) -> vestingLockWithdraw lock this self arg
+    _ -> assertFail "governanceLockedWithdrawImpl called witha a non-governance lock"
 
 
-aggregateLockUnlock : (HasToInterface a V2.Allocation) => (a -> Time -> Metadata -> Update (ContractId V2.Allocation)) -> AggregatedLock -> a -> ContractId a -> Allocation_Withdraw -> Update V2.AllocationResult
-aggregateLockUnlock newEmptyAllocation lock a aCid arg = do
+aggregateLockUnlock : forall a. (HasToInterface a V2.Allocation, GovernanceAllocation a) => AggregatedLock -> a -> ContractId a -> Allocation_Withdraw -> Update V2.AllocationResult
+aggregateLockUnlock lock a aCid arg = do
     let alloc = view $ toInterface @V2.Allocation a
         allocCid = toInterfaceContractId @V2.Allocation aCid
 
@@ -217,9 +340,9 @@ aggregateLockUnlock newEmptyAllocation lock a aCid arg = do
 
     checkControllerSpecification TM.empty arg.actors $ fromOptional (defaultControllerSpecification ownerParty) lock.controllers.unlock
 
-    now <- getFromContextU arg.extraArgs.context effectiveAtKey
+    now <- getFromContextU arg.extraArgs.context effectiveAtKey -- FIXME: read from metadata not context.
 
-    let endTime = getEndTime now
+    let endDate = getEndTime now
         transferLegId = "unlock"
 
     let alternateAmount = TM.lookup "cip-105/withdraw-amount" arg.extraArgs.meta.values >>= parseDecimal
@@ -228,13 +351,29 @@ aggregateLockUnlock newEmptyAllocation lock a aCid arg = do
         newLockedNextIterationFunding
           | newLockedAmount == 0.0 = None
           | otherwise = Some $ TM.singleton instrumentId newLockedAmount
+        vestingGovernanceLock = GovernanceLock_VestingLocked $ VestingLock with
+          startDate = now
+          endDate
+          initialAmount = amount
+          controllers = lock.controllers
 
     -- Not easy to call directly into amulet_allocationFactoryV2_allocateImpl or the like here as that would make a circular dependency.
-    withdrawTo <- newEmptyAllocation a now $ Metadata $ TM.fromList
-          [ ("cip-105/type", "vestingLock")
-          , ("cip-105/vestingLock.startDate", encodeTime $ now)
-          , ("cip-105/vestingLock.endDate", encodeTime $ endTime)
-          ]
+    (withdrawTo : ContractId a, _) <- createUnfundedGovernanceAllocation alloc.allocation.admin vestingGovernanceLock $ V2.AllocationFactory_Allocate with
+      settlement = alloc.settlement
+      allocation = AllocationSpecification with
+        admin = alloc.allocation.admin
+        authorizer = alloc.allocation.authorizer
+        transferLegSides = []
+        settlementDeadline = Some endDate -- Might as well let it unlock normally at the end of vesting.
+        nextIterationFunding = Some TM.empty -- Iterated settlement enabled, with no funding
+        committed = True
+        meta = emptyMetadata -- governance settings passed in the dedicated argument to createGovernanceAllocation
+      requestedAt = now
+      inputHoldingCids = []
+      extraArgs = ExtraArgs with
+        meta = emptyMetadata
+        context = emptyChoiceContext
+      actors = [ ownerParty ]
 
     settleBatchResult <- settlementFactoryV2_settleBatchDefaultImplNoSelf (\_ _ -> pure arg.extraArgs) alloc.allocation.admin $ SettlementFactory_SettleBatch with
       settlement = alloc.settlement
@@ -263,7 +402,7 @@ aggregateLockUnlock newEmptyAllocation lock a aCid arg = do
               ]
             nextIterationFunding = newLockedNextIterationFunding
         , FinalizedAllocation with
-            allocationCid = withdrawTo
+            allocationCid = toInterfaceContractId withdrawTo
             extraTransferLegSides =
               [ TransferLegSide with
                 transferLegId
@@ -300,7 +439,7 @@ vestingLockWithdraw lock a aCid arg = do
     let vestingLock = view $ toInterface @V2.Allocation a
         vestingLockCid = toInterfaceContractId @V2.Allocation aCid
 
-    now <- getFromContextU arg.extraArgs.context effectiveAtKey
+    now <- getFromContextU arg.extraArgs.context effectiveAtKey -- FIXME: read from metadata, not context.
 
     -- Removed withdraw controllers for the moment on vesting locks, it seems significantly more questionable to restrict withdrawal of conceptually unlocked amulet.
 
@@ -364,4 +503,28 @@ vestingLockWithdraw lock a aCid arg = do
     case settleResult.allocationSettleResults of
       [allocationResult] -> pure allocationResult
       _ -> abort "VestingUnlock_Withdraw should result in one allocation result. "
+
+
+-- WIP hack: SvRightOwner mirror.
+
+template SvRightOwnerName
+  with
+    dso : Party
+    rightOwnerName : Text
+    rightOwnerParty : Party
+  where
+    signatory dso
+
+
+data ForSv = ForSv with
+    dso : Party
+    svName : Text
+  deriving (Eq, Show)
+
+instance HasCheckedFetch SvRightOwnerName ForSv where
+  contractGroupId SvRightOwnerName{..} =
+    ForSv
+      with
+        dso
+        svName = rightOwnerName
 

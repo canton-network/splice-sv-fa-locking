@@ -454,6 +454,8 @@ amulet_allocationFactoryV2_allocateImpl
   -> ContractId V2.AllocationFactory
   -> V2.AllocationFactory_Allocate
   -> Update V2.AllocationInstructionResult
+amulet_allocationFactoryV2_allocateImpl externalAmuletRules _self arg
+  | isGovernanceAllocationArgument arg = governanceAllocateImpl arg
 amulet_allocationFactoryV2_allocateImpl externalAmuletRules _self arg = do
   let netTransferAmount = netAmuletCreditAmount arg.allocation.authorizer arg.allocation.transferLegSides
   outputFundingAmount <- validateAmuletNextIterationFunding arg.allocation.nextIterationFunding
@@ -523,7 +525,7 @@ amulet_allocationFactoryV2_allocateImplCore externalAmuletRules arg fundingAmoun
   -- arg.actors: checked above
 
   governanceLock <- parseAndValidateGovernanceLock dso arg
-  
+
   -- compute the allocation expiry time
   (_, configState) <- getExternalPartyConfigStateFromChoiceContext dso arg.extraArgs.context
   let configAmulet = transferConfigAmuletFromExternalPartyConfigState configState
@@ -605,3 +607,34 @@ requireExpectedAdminMatch expected actual =   require ("Expected admin " <> show
 
 instance HasCheckedFetch ExternalPartyAmuletRules ForDso where
   contractGroupId ExternalPartyAmuletRules{..} = ForDso dso
+
+-- Governance Lock support
+-- =======================
+
+-- Boilerplate to work around `GovernanceLockProposal a` not being a valid template type.
+template AmuletGovernanceLockProposal with
+    governanceLockProposal: GovernanceLockProposal AmuletGovernanceLockProposal AmuletAllocationV2
+  where
+    ensure governanceLockProposal_ensure governanceLockProposal
+    signatory governanceLockProposal_signatory governanceLockProposal
+    observer governanceLockProposal_observer governanceLockProposal
+    interface instance V2.AllocationInstruction for AmuletGovernanceLockProposal where
+      view = governanceLockProposal_viewAllocationInstruction governanceLockProposal
+      allocationInstruction_withdrawExtraObservers _ = observer this
+      allocationInstruction_acceptExtraObservers _ = observer this
+      allocationInstruction_withdrawImpl = governanceLockProposal_withdrawImpl governanceLockProposal
+      allocationInstruction_acceptImpl = governanceLockProposal_acceptImpl governanceLockProposal
+
+  {-instance GovernanceLockProposalOps AmuletGovernanceLockProposal AmuletAllocationV2 where
+  updateGovernanceLockProposal self governanceLockProposal = do
+    archive self
+    create this with
+      governanceLockProposal
+  -}
+
+instance GovernanceAllocationAllocate AmuletAllocationV2 where
+  createFundedGovernanceAllocation dso lock amount arg = do
+    undefined -- FIXME: call into the implementation of AllocationFactory here.
+
+
+

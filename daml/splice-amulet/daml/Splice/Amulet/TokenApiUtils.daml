@@ -180,10 +180,6 @@ lockContextContextKey = "lock-context"
 expireLockKey : Text
 expireLockKey = "expire-lock"
 
--- | Key used to provide an effective time to a choice execution, to avoid getTime
-effectiveAtKey : Text
-effectiveAtKey = "effective-at"
-
 -- Metadata utilities
 ---------------------
 
