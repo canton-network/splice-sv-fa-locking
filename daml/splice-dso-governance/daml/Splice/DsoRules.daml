@@ -1579,6 +1579,8 @@ template DsoRules with
         beneficiaries : [(Party, Int)]
       controller sv
       do
+        -- TODO: Given that we are not tracking lifetime rewards in this choice, we should ensure
+        -- that this choice cannot be called after the activation of on-ledger SV-locking.
         requireNoOnLedgerSvRightOwners this
         let svOperator = sv
         case Map.lookup svOperator svs of
@@ -2236,17 +2238,17 @@ template DsoRules with
         assertDeadlineExceeded "AddSvRightOwnerInstruction.expiresAt" instruction.expiresAt
         pure ()
 
-    choice DsoRules_MergeSvRewardMintReceipts : ContractId SvRewardState
+    nonconsuming choice DsoRules_MergeSvRewardMintReceipts : ContractId SvRewardState
       with
         receiptCids : [ContractId SvRewardMintReceipt]
         svOperator : Party
-        svRewardState : SvRewardState
+        svRewardStateCid : ContractId SvRewardState
       controller svOperator
       do
-        _ <- getAndValidateSvNodeOperatorParty this (Some svOperator)
-
-        require "There must be at least receiptCid in order merge sv reward mint receipts" $
+        name <- getAndValidateSvNodeOperatorParty this (Some svOperator)
+        require "There must be at least one receipt" $
           length receiptCids >= 1
+        svRewardState <- fetchAndArchive (ForSv with dso; svName = name) svRewardStateCid
 
         receiptAmounts <- forA receiptCids $ \cid -> do
           r <- fetchAndArchive (ForDso with dso) cid
