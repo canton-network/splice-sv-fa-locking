@@ -37,6 +37,14 @@ data GovernanceLock
   | GovernanceLock_VestingLocked VestingLock
   deriving (Eq, Show)
 
+data GovernanceLockOperation
+  = GovernanceLockOperation_Allocate GovernanceLock
+  | GovernanceLockOperation_TopUp TopUpAllocation
+
+data TopUpAllocation =
+  TopUpAllocation with
+    allocationCid : ChoiceContext
+
 data AggregatedLock =
   AggregatedLock with
     lockBeneficiary : Text
@@ -83,6 +91,8 @@ initialAmountKey : Text
 initialAmountKey = "cip-105/initialAmount"
 effectiveAtKey : Text
 effectiveAtKey = "cip-105/effectiveAt"
+topUpAllocationMetadataKey : Text
+topUpAllocationMetadataKey = "cip-105/topup-allocation-cid"
 
 
 unlockControllerKey : Text
@@ -114,6 +124,17 @@ class CanAssert m => ParseLockDataFromText m a where
   parseFromText : Text -> m a
 
 governanceLockToMeta _ = Metadata $ TM.singleton "cip-105/gov-lock-flag" "true" -- FIXME: actually serialize to metadata, this just lets allocateImplCore work.
+
+instance CanAssert m => ParseLockDataFromMeta m (Optional GovernanceLockOperation) where
+  parseFromMetadata meta
+    | S.null $ governanceMetadataKeys meta = pure None
+    | otherwise = do
+      case topUpAllocationMetadataKey `TM.lookup` meta.values of
+        Some topUpAllocationCid -> pure . Some . GovernanceLockOperation_TopUp $ TopUpAllocation topUpAllocationCid
+--        Some "svLock" -> Some . GovernanceLock_SVLocked <$> parseFromMetadata meta
+        _ -> case "cip-105/type" `TM.member` meta.values of
+               True -> parseFromMetadata meta
+               False -> assertFail "Unknown governance lock operation"
 
 instance CanAssert m => ParseLockDataFromMeta m (Optional GovernanceLock) where
   parseFromMetadata meta
@@ -148,10 +169,12 @@ instance CanAssert m => ParseLockDataFromMeta m VestingLock where
 
 -- | Parsing entry point
 
-parseAndValidateGovernanceLock : CanAssert m => Bool -> Party -> V2.AllocationFactory_Allocate -> m (Optional GovernanceLock)
-parseAndValidateGovernanceLock fromAllocate dso alloc = do
-  lock <- parseFromMetadata alloc.allocation.meta
-  case lock of
+parseAndValidateGovernanceLockOperation : CanAssert m => Bool -> Party -> V2.AllocationFactory_Allocate -> m (Optional GovernanceLockOperation)
+parseAndValidateGovernanceLockOperation fromAllocate dso alloc = do
+  -- TODO: Get governancelockoperation out of choice context
+  -- And get first Some value
+  lockOperation : Optional GovernanceLockOperation <- parseFromMetadata alloc.allocation.meta
+  case lockOperation of
     Some _ -> do
       require "must have the DSO as admin" $ alloc.allocation.admin == dso
       require "must have the DSO as executors" $ alloc.settlement.executors == [dso]
@@ -160,7 +183,7 @@ parseAndValidateGovernanceLock fromAllocate dso alloc = do
       require "must not expire" $ alloc.allocation.settlementDeadline == Some maxComparableTime
       -- Lock expiry also simply forced to max in computeAllocationExpiry when governance locked.
       -- Note: instrument id of only amulet and non-zero allocation are already checked by AmuletAllocationV2 ensure clause.
-      pure lock
+      pure lockOperation
     None -> pure None
 
 governanceLockProposal_rules (GovernanceLock_VestingLocked _)
