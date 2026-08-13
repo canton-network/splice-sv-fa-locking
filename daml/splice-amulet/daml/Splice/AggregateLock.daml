@@ -125,24 +125,6 @@ class CanAssert m => ParseLockDataFromText m a where
 
 governanceLockToMeta _ = Metadata $ TM.singleton "cip-105/gov-lock-flag" "true" -- FIXME: actually serialize to metadata, this just lets allocateImplCore work.
 
-instance CanAssert m => ParseLockDataFromMeta m (Optional GovernanceLockOperation) where
-  parseFromMetadata meta
-    | S.null $ governanceMetadataKeys meta = pure None
-    | otherwise = do
-      case topUpAllocationMetadataKey `TM.lookup` meta.values of
-        Some topUpAllocationText -> do
-          let tm : TM.TextMap AnyValue = TM.singleton topUpAllocationMetadataKey $ AV_Text topUpAllocationText
-              choiceContext = ChoiceContext with
-                values = tm
-              eitherCid = getFromContext @(ContractId V2.Allocation) choiceContext topUpAllocationMetadataKey
-          case eitherCid of
-            Left t -> assertFail t
-            Right topUpAllocationCid ->
-              pure . Some . GovernanceLockOperation_TopUp $ TopUpAllocation topUpAllocationCid
-        _ -> case "cip-105/type" `TM.member` meta.values of
-               True -> parseFromMetadata meta
-               False -> assertFail "Unknown governance lock operation"
-
 instance CanAssert m => ParseLockDataFromMeta m (Optional GovernanceLock) where
   parseFromMetadata meta
     | S.null $ governanceMetadataKeys meta = pure None
@@ -180,9 +162,9 @@ parseAndValidateGovernanceLockOperation : CanAssert m => Bool -> Party -> V2.All
 parseAndValidateGovernanceLockOperation fromAllocate dso alloc = do
   -- TODO: Get governancelockoperation out of choice context
   -- And get first Some value
-  lockOperation : Optional GovernanceLockOperation <- parseFromMetadata alloc.allocation.meta
-  case lockOperation of
-    Some _ -> do
+  optLock : Optional GovernanceLock <- parseFromMetadata alloc.allocation.meta
+  case optLock of
+    Some lock -> do
       require "must have the DSO as admin" $ alloc.allocation.admin == dso
       require "must have the DSO as executors" $ alloc.settlement.executors == [dso]
       require "must be a committed allocation" alloc.allocation.committed
@@ -190,8 +172,14 @@ parseAndValidateGovernanceLockOperation fromAllocate dso alloc = do
       require "must not expire" $ alloc.allocation.settlementDeadline == Some maxComparableTime
       -- Lock expiry also simply forced to max in computeAllocationExpiry when governance locked.
       -- Note: instrument id of only amulet and non-zero allocation are already checked by AmuletAllocationV2 ensure clause.
-      pure lockOperation
-    None -> pure None
+      pure . Some $ GovernanceLockOperation_Allocate lock
+    None -> do
+      let eitherCid = lookupFromContext @(ContractId V2.Allocation) alloc.extraArgs.context topUpAllocationMetadataKey
+      case eitherCid of
+        Left t -> assertFail t
+        Right None -> pure None
+        Right (Some topUpAllocationCid) ->
+          pure . Some . GovernanceLockOperation_TopUp $ TopUpAllocation topUpAllocationCid
 
 governanceLockProposal_rules (GovernanceLock_VestingLocked _)
   = assertFail "Creating vesting locks from an allocation instruction is not permitted"
