@@ -9,6 +9,7 @@ module Splice.AmuletAllocationV2 (
   validateAmuletTransferLegSides,
   computeAllocationExpiry,
   computeAllocationExpiryInternal,
+  unlockAmuletAllocationV2,
 ) where
 
 import DA.Action

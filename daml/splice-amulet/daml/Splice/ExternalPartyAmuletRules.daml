@@ -732,10 +732,10 @@ governanceAllocateImpl arg@V2.AllocationFactory_Allocate{..} = do
     GovernanceLockOperation_TopUp (TopUpAllocation topUpAllocationCid) -> do
       -- Grab top-up-alloc
       -- fetchButarchiveLater  old
-      topUpAlloc <- fetchButArchiveLater (ForDso with dso) $ topUpAllocationCid
+      topUpAlloc : AmuletAllocationV2 <- fetchButArchiveLater (ForDso with dso) $ topUpAllocationCid
 
       -- unlock amulet to get holdings - unlockAmuletAllocationV2
-      unlockAmuletAllocationV2 topUpAlloc extraArgs
+      holdingsTm <- unlockAmuletAllocationV2 topUpAlloc extraArgs
 
       -- lock with new amount which comes from allocationAmount - inputHoldingCids
       -- call allocate impl core
@@ -745,7 +745,7 @@ governanceAllocateImpl arg@V2.AllocationFactory_Allocate{..} = do
       -- cancel using Allocation_Cancel before using holdings in arg
       -- modify arg below to include new additional holding
       (lockedAmulet, senderChangeCids, expiresAt, meta) <-
-        amulet_allocationFactoryV2_allocateImplCore (ExternalPartyAmuletRules this.admin) arg this.allocationAmount
+        amulet_allocationFactoryV2_allocateImplCore (ExternalPartyAmuletRules dso) arg this.allocationAmount
 
       allocationCid <- toInterfaceContractId <$> create AmuletAllocationV2 with
         settlement = arg.settlement

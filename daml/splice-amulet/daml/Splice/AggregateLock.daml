@@ -43,7 +43,7 @@ data GovernanceLockOperation
 
 data TopUpAllocation =
   TopUpAllocation with
-    allocationCid : ChoiceContext
+    allocationCid : ContractId V2.Allocation
 
 data AggregatedLock =
   AggregatedLock with
@@ -130,8 +130,15 @@ instance CanAssert m => ParseLockDataFromMeta m (Optional GovernanceLockOperatio
     | S.null $ governanceMetadataKeys meta = pure None
     | otherwise = do
       case topUpAllocationMetadataKey `TM.lookup` meta.values of
-        Some topUpAllocationCid -> pure . Some . GovernanceLockOperation_TopUp $ TopUpAllocation topUpAllocationCid
---        Some "svLock" -> Some . GovernanceLock_SVLocked <$> parseFromMetadata meta
+        Some topUpAllocationText -> do
+          let tm : TM.TextMap AnyValue = TM.singleton topUpAllocationMetadataKey $ AV_Text topUpAllocationText
+              choiceContext = ChoiceContext with
+                values = tm
+              eitherCid = getFromContext @(ContractId V2.Allocation) choiceContext topUpAllocationMetadataKey
+          case eitherCid of
+            Left t -> assertFail t
+            Right topUpAllocationCid ->
+              pure . Some . GovernanceLockOperation_TopUp $ TopUpAllocation topUpAllocationCid
         _ -> case "cip-105/type" `TM.member` meta.values of
                True -> parseFromMetadata meta
                False -> assertFail "Unknown governance lock operation"
