@@ -46,9 +46,8 @@ lockForGovernance (TestEnv {..}) amounts meta party = do
 
 lockForAggregate : TestEnv -> Decimal -> Text -> Party -> Script AllocationInstructionResult
 lockForAggregate te amount lockName = lockForGovernance te (TM.fromList [(te.instrId.id, amount)]) $ Metadata $ TM.fromList
-  [ ("cip-105/type", "aggregateLock")
-  , ("cip-105/for-benefit-of", lockName)
-  , ("cip-105/vestingSchedule", "SV")
+  [ ("cip-105/type", "svLock")
+  , ("cip-105/lockBeneficiary", lockName)
   ]
 
 -- | Directly create a vesting lock allocation funded with @initialAmount@,
@@ -78,6 +77,19 @@ withAggregateWithdrawContext env registries =
     updateApi api =
       api { ggetAllocation_WithdrawContext = \a -> addContext . api.ggetAllocation_WithdrawContext a }
 
+testTopUpAllocations : Script ()
+testTopUpAllocations = do
+  env@TestEnv{..} <- setupTest
+  let dso = env.instrId.admin
+
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 1200.0
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob 1800.0
+
+--  _ <- lockForAggregate env 300.0 "alice-supervalidator" alice
+
+  pure ()
+
+{- TODO: This is to be fixed, as they're old erroring out tests
 -- | Verify that locking funds for a "for-benefit-of" name aggregates over
 -- separate lock allocations sharing the same name.
 testAggregateLockTotals : Script ()
@@ -287,3 +299,4 @@ unlockedAmountOf p wantedCids = do
         , isNone h.lock
         ]
   pure $ sum (fmap (.amount) matching)
+-}

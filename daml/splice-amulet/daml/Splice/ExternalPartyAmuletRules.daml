@@ -732,29 +732,49 @@ governanceAllocateImpl arg@V2.AllocationFactory_Allocate{..} = do
     GovernanceLockOperation_TopUp (TopUpAllocation topUpAllocationCid) -> do
       -- Grab top-up-alloc
       -- fetchButarchiveLater  old
-      topUpAlloc : AmuletAllocationV2 <- fetchButArchiveLater (ForDso with dso) $ topUpAllocationCid
+      topUpAlloc : AmuletAllocationV2 <- fetchButArchiveLater (ForDso with dso) $ fromInterfaceContractId topUpAllocationCid
 
       -- unlock amulet to get holdings - unlockAmuletAllocationV2
-      holdingsTm <- unlockAmuletAllocationV2 topUpAlloc extraArgs
+      newHoldingsTm <- unlockAmuletAllocationV2 topUpAlloc extraArgs
+      let newHoldingsToAdd = fromOptional [] $ TextMap.lookup amuletInstrumentIdName newHoldingsTm
 
       -- lock with new amount which comes from allocationAmount - inputHoldingCids
       -- call allocate impl core
-      -- grab governanceLock from allocationCid and throw it into new allocation to create
+      -- grab governanceLock from old allocationCid and throw it into new allocation to create
       -- copy pasta governanceLockProposal_acceptImpl portion
+
+      exercise topUpAllocationCid V2.Allocation_Cancel with
+        extraArgs = ExtraArgs with meta = emptyMetadata; context = emptyChoiceContext
+        actors = [dso]
+
+      let newArg = arg with
+            inputHoldingCids = inputHoldingCids <> newHoldingsToAdd
+
+      let getFundingAmount : Optional (TextMap.TextMap Decimal) -> Update Decimal
+          getFundingAmount None = assertFail "The allocationSpecification's nextIterationFunding should not be None"
+          getFundingAmount (Some tm) = case TextMap.lookup amuletInstrumentIdName tm of
+            None -> assertFail $ "Cannot find nextIterationFunding for " <> amuletInstrumentIdName
+            Some amt -> pure amt
+
+      oldFundingAmount <- getFundingAmount topUpAlloc.allocation.nextIterationFunding
+      newFundingAmount <- getFundingAmount newArg.allocation.nextIterationFunding
+
+      require "New funding amount for Top Up Allocation should be greater than the old nextIterationFundingAmount" $
+        newFundingAmount > oldFundingAmount
 
       -- cancel using Allocation_Cancel before using holdings in arg
       -- modify arg below to include new additional holding
       (lockedAmulet, senderChangeCids, expiresAt, meta) <-
-        amulet_allocationFactoryV2_allocateImplCore (ExternalPartyAmuletRules dso) arg this.allocationAmount
+        amulet_allocationFactoryV2_allocateImplCore (ExternalPartyAmuletRules dso) newArg newFundingAmount
 
       allocationCid <- toInterfaceContractId <$> create AmuletAllocationV2 with
-        settlement = arg.settlement
-        allocation = arg.allocation
+        settlement = newArg.settlement
+        allocation = newArg.allocation
         lockedAmulet
         expiresAt
-        createdAt = arg.requestedAt
+        createdAt = newArg.requestedAt
         numIterations = 0
-        governanceLock = Some this.proposedLock
+        governanceLock = topUpAlloc.governanceLock
 
       pure V2.AllocationInstructionResult with
         authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, map upcast senderChangeCids)]

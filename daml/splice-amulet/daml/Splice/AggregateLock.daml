@@ -160,8 +160,6 @@ instance CanAssert m => ParseLockDataFromMeta m VestingLock where
 
 parseAndValidateGovernanceLockOperation : CanAssert m => Bool -> Party -> V2.AllocationFactory_Allocate -> m (Optional GovernanceLockOperation)
 parseAndValidateGovernanceLockOperation fromAllocate dso alloc = do
-  -- TODO: Get governancelockoperation out of choice context
-  -- And get first Some value
   optLock : Optional GovernanceLock <- parseFromMetadata alloc.allocation.meta
   case optLock of
     Some lock -> do
