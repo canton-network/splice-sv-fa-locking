@@ -1,0 +1,158 @@
+module Splice.GovernanceSubstitutionProposal where
+
+import Splice.AmuletAllocationV2
+import Splice.Amulet.TokenApiUtils
+import Splice.AmuletRules
+import Splice.Amulet.TwoStepTransfer
+import Splice.AmuletAllocation as AmuletAllocationV1
+import Splice.Api.Token.HoldingV1 as V1
+import Splice.Api.Token.HoldingV2 as V2
+import Splice.Api.Token.AllocationV2 as V2
+import Splice.Api.Token.AllocationInstructionV2 as V2
+import Splice.Api.Token.MetadataV1
+import Splice.TokenStandard.Utils hiding (require) -- (maxTime, regularAccountOwner, isValidAllocationSpecificationV2)
+import Splice.TokenStandard.Utils.Internal.Allocations -- (settlementFactoryV2_settleBatchDefaultImplNoSelf)
+import Splice.TokenStandard.Utils.Internal.Conversions (timeFromMeta, encodeTime)
+import Splice.Util
+
+import Splice.Amulet
+
+import DA.Action hiding (mapA)
+import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
+import DA.Either
+import DA.Optional
+import qualified DA.Set as S
+import DA.Text as T
+import DA.List hiding (concat)
+import qualified DA.Map as Map
+import qualified DA.TextMap as TM
+import DA.Time
+import DA.Traversable (mapA)
+import DA.Foldable (concat, forA_)
+import Prelude hiding (mapA, concat)
+
+
+template GovernanceLockSubstitutionProposal with
+    admin : Party
+    proposedBy : Party
+    proposedTo : Party
+    substituteWithCid : ContractId AmuletAllocationV2
+    topUpAllocationCid : Optional (ContractId AmuletAllocationV2)
+  where
+    signatory admin, proposedBy
+    interface instance V2.AllocationInstruction for GovernanceLockSubstitutionProposal where
+      view = V2.AllocationInstructionView with
+        originalInstructionCid
+        settlement = V2.SettlementInfo with
+          executors = [ admin ]
+          id = "cip-105/Substitution"
+          cid = None
+          meta = emptyMetadata
+        allocation = V2.AllocationSpecification with
+          admin
+          authorizer = basicAccount allocationAuthorizer
+          transferLegSides = []
+          settlementDeadline = Some maxComparableTime
+          nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName allocationAmount
+          committed = True -- Revisit for FA locks
+          meta = governanceLockToMeta proposedLock
+        requestedAt
+        inputHoldingCids
+        availableActions = Map.fromList
+          [ (V2.AIA_Withdraw, [[allocationAuthorizer]])
+          , (V2.AIA_Accept, [optionalToList svParty])
+          ]
+        expiresAt = None
+        meta = emptyMetadata
+
+      allocationInstruction_withdrawExtraObservers _ = observer this
+      allocationInstruction_acceptExtraObservers _ = observer this
+      allocationInstruction_withdrawImpl self arg = do
+        require "the offering party must be the party to authorize withdraw" $ arg.actors == [ proposedBy ]
+        archive self
+      allocationInstruction_acceptImpl self arg = do
+        substitutedCid <- arg.extraArgs.context `getFromContextU` "cip-105/substituteCid" -- Possibly extend later to allow more than one unlocking CID; does not change offer model.
+        substitutedAllocation <- fetchChecked (ForDso admin) substitutedCid
+        require "substituted-for allocation must be owned by the specified party" $ substitutedAllocation.authorizer.owner == proposedTo
+        let substituteControllers = fromOptional [[proposedTo]] $ (substitutingAllocation.governanceLock >>= lockControllersFromGovernanceLock >>= substitute)
+        checkControllerSpecification TM.empty arg.actors substituteControllers
+        -- We have auth from every required party at this point, move on to checking constraints.
+
+        substituteWithAllocation <- fetchChecked (ForDso admin) substituteWithCid
+        require "substituted-by allocation must be owned by the proposing party" $ substituteWithAllocation.authorizer.owner == proposedTo
+
+        -- Using amount becuase the settlement legs below will all have this amount. nextIterationFunding maps will vary.
+        let Some [(_, amount)] = TM.toList substituteWithAllocation.allocation.nextIterationFunding
+
+        require "lock subjects must match between substituted allocations" $
+          (governanceLockKey <$> substituteWithAllocation.governanceLock) == (governanceLockKey <$> substitutedAllocation.governanceLock)
+
+        -- Update the proposing party's allocations
+        case topUpAllocationCid of
+          None -> do -- No allocation to top up, so we can just convert the input allocation to the new lock.
+            archive substituteWithCid
+            create substituteWithAllocation with
+              committed = True
+              governanceLock = governanceLockForSubstitution <$> substituteWithAllocation.governanceLock
+          Some topUpAllocationCid -> do
+            topUpAllocation <- fetchChecked (ForDso admin) substituteWithCid
+            require "top up allocation must match the substituting lock"
+              (governanceLockKey <$> topUpAllocation.governanceLock) == (governanceLockKey <$> substitutedAllocation.governanceLock)
+            let Some [(_, topupInitialAmount)] = TM.toList substituteWithAllocation.allocation.nextIterationFunding
+            let topUpResultingAmount = topupInitialAmount + amount
+            settlementFactoryV2_settleBatchDefaultImplNoSelf (\_ _ -> pure arg.extraArgs) admin $ SettlementFactory_SettleBatch with
+              settlement = topUpAllocation.settlement
+              actors = [ admin ]
+              extraArgs = arg.extraArgs
+              transferLegs =
+                [ TransferLeg with
+                    transferLegId
+                    sender = basicAccount $ proposedBy
+                    receiver = basicAccount $ proposedBy
+                    amount
+                    instrumentId
+                    meta = emptyMetadata
+                ]
+              allocations =
+                [ FinalizedAllocation with
+                    allocationCid = toInterfaceContractId substituteWithCid
+                    extraTransferLegSides =
+                      [ TransferLegSide with
+                        transferLegId
+                        side = SenderSide
+                        otherside = basicAccount $ proposedBy
+                        amount
+                        instrumentId
+                        meta = emptyMetadata
+                      ]
+                    nextIterationFunding = newLockedNextIterationFunding
+                , FinalizedAllocation with
+                    allocationCid = toInterfaceContractId topUpAllocationCid
+                    extraTransferLegSides =
+                      [ TransferLegSide with
+                        transferLegId
+                        side = ReceiverSide
+                        otherside = alloc.allocation.authorizer
+                        amount
+                        instrumentId
+                        meta = emptyMetadata
+                      ]
+                    nextIterationFunding = Some $ TM.singleton amuletInstrumentIdName topUpResultingAmount
+                ]
+
+        -- And update the acceptor's holding to reflect the released funds.
+        let Some [(_, acceptingAmount)] = TM.toList substituteWithAllocation.allocation.nextIterationFunding
+        let newAccepterAmount = acceptingAmount - amount
+        let nextIterationFunding = if acceptingAmount == amount then None else Some TM.singleton amuletInstrumentIdName newAccepterAmount
+        settleBatchResult <- settlementFactoryV2_settleBatchDefaultImplNoSelf (\_ _ -> pure arg.extraArgs) admin $ SettlementFactory_SettleBatch with
+          settlement = topUpAllocation.settlement
+          actors = [ admin ]
+          extraArgs = arg.extraArgs
+          transferLegs = []
+          allocations =
+            [ FinalizedAllocation with
+                allocationCid = toInterfaceContractId substituteWithCid
+                extraTransferLegSides = []
+                nextIterationFunding
+            ]
+        pure $ head settleBatchResult.allocationSettleResults

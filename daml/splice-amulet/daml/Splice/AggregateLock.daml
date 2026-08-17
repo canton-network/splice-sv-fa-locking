@@ -41,6 +41,7 @@ class GovernanceAllocation a where
 data GovernanceLock
   = GovernanceLock_SVLocked AggregatedLock
   | GovernanceLock_VestingLocked VestingLock
+  | GovernanceLock_SubstituteProposal SubstitutionProposal
   deriving (Eq, Show)
 
 data GovernanceLockOperation
@@ -51,6 +52,13 @@ data GovernanceLockOperation
 data TopUpAllocation =
   TopUpAllocation with
     allocationCid : ContractId V2.Allocation
+
+data SubstitutionProposal
+  = Substitute_SV AggregatedLock
+  | Substitute_Vesting VestingLock
+
+governanceLockForSubstitution Substitute_SV al = GovernanceLock_SVLocked al
+governanceLockForSubstitution Substitute_Vesting vl = GovernanceLock_VestingLocked vl
 
 data SubstituteAllocation =
   SubstituteAllocation with
@@ -72,6 +80,9 @@ data VestingLock =
     controllers : GovernanceLockControllers
   deriving (Eq, Show)
 
+lockControllersFromGovernanceLock (GovernanceLock_SVLocked (AggregatedLock with controllers)) = Some controllers
+lockControllersFromGovernanceLock (GovernanceLock_VestingLocked (VestingLock with controllers)) = Some controllers
+lockControllersFromGovernanceLock (GovernanceLock_SubstituteProposal _) = None
 
 data GovernanceLockKey
   = GLK_SVLocked with
@@ -84,6 +95,8 @@ data GovernanceLockKey
 governanceLockKey : GovernanceLock -> GovernanceLockKey
 governanceLockKey (GovernanceLock_SVLocked (AggregatedLock with lockBeneficiary)) = GLK_SVLocked lockBeneficiary
 governanceLockKey (GovernanceLock_VestingLocked (VestingLock with startDate; endDate)) = GLK_Vesting with startDate; endDate
+governanceLockKey (GovernanceLock_SubstituteProposal (Substitute_SV (AggregatedLock with lockBeneficiary))) = GLK_SVLocked lockBeneficiary
+governanceLockKey (GovernanceLock_SubstituteProposal (Substitute_Vesting (VestingLock with startDate; endDate))) = GLK_Vesting with startDate; endDate
 
 getBeneficiaryPartyOptional : Party -> GovernanceLock -> ExtraArgs -> Update (Optional Party)
 getBeneficiaryPartyOptional dso (GovernanceLock_SVLocked lock) extraArgs
@@ -548,7 +561,7 @@ governance_allocateImplCore dso arg fundingAmount = do
     -- return input cids as change, so they can be reused on chaining
     return (None, map downcast inputHoldingCids, expiresAt, emptyMetadata)
   else do
-  
+
     -- We are using an unfeatured payment context, as the locking to self should not be featured.
     paymentContext <- unfeaturedPaymentContextFromChoiceContext dso extraArgs.context
 
@@ -612,7 +625,7 @@ settleVirtualLock alloc transferLegSides nextIterationFunding extraArgs = do
               numIterations = numIterations + 1
               createdAt
               governanceLock
-      pure V2.AllocationResult with 
+      pure V2.AllocationResult with
         output = V2.AllocationResult_Settled with
           nextIterationAllocationCid
 
