@@ -1,17 +1,23 @@
-{-# LANGUAGE AllowAmbiguousTypes #-}
 module Splice.AggregateLock where
 
 import Splice.Amulet.TokenApiUtils
+import Splice.AmuletRules
+import Splice.Amulet.TwoStepTransfer
+import Splice.AmuletAllocation as AmuletAllocationV1
+import Splice.Api.Token.HoldingV1 as V1
 import Splice.Api.Token.HoldingV2 as V2
 import Splice.Api.Token.AllocationV2 as V2
 import Splice.Api.Token.AllocationInstructionV2 as V2
 import Splice.Api.Token.MetadataV1
-import Splice.TokenStandard.Utils (maxTime, regularAccountOwner, isValidAllocationSpecificationV2)
-import Splice.TokenStandard.Utils.Internal.Allocations (settlementFactoryV2_settleBatchDefaultImplNoSelf)
+import Splice.TokenStandard.Utils hiding (require) -- (maxTime, regularAccountOwner, isValidAllocationSpecificationV2)
+import Splice.TokenStandard.Utils.Internal.Allocations -- (settlementFactoryV2_settleBatchDefaultImplNoSelf)
 import Splice.TokenStandard.Utils.Internal.Conversions (timeFromMeta, encodeTime)
 import Splice.Util
 
+import Splice.Amulet
+
 import DA.Action hiding (mapA)
+import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
 import DA.Either
 import DA.Optional
 import qualified DA.Set as S
@@ -21,7 +27,7 @@ import qualified DA.Map as Map
 import qualified DA.TextMap as TM
 import DA.Time
 import DA.Traversable (mapA)
-import DA.Foldable (concat)
+import DA.Foldable (concat, forA_)
 import Prelude hiding (mapA, concat)
 
 -- Lock management
@@ -40,10 +46,16 @@ data GovernanceLock
 data GovernanceLockOperation
   = GovernanceLockOperation_Allocate GovernanceLock
   | GovernanceLockOperation_TopUp TopUpAllocation
+  | GovernanceLockOperation_Substitute SubstituteAllocation
 
 data TopUpAllocation =
   TopUpAllocation with
     allocationCid : ContractId V2.Allocation
+
+data SubstituteAllocation =
+  SubstituteAllocation with
+    substituteCid : ContractId V2.Allocation
+    topupCid : Optional (ContractId V2.Allocation)
 
 data AggregatedLock =
   AggregatedLock with
@@ -60,6 +72,18 @@ data VestingLock =
     controllers : GovernanceLockControllers
   deriving (Eq, Show)
 
+
+data GovernanceLockKey
+  = GLK_SVLocked with
+      beneficiary : Text
+  | GLK_Vesting with
+      startDate : Time
+      endDate : Time
+  deriving (Ord, Eq)
+
+governanceLockKey : GovernanceLock -> GovernanceLockKey
+governanceLockKey (GovernanceLock_SVLocked (AggregatedLock with lockBeneficiary)) = GLK_SVLocked lockBeneficiary
+governanceLockKey (GovernanceLock_VestingLocked (VestingLock with startDate; endDate)) = GLK_Vesting with startDate; endDate
 
 getBeneficiaryPartyOptional : Party -> GovernanceLock -> ExtraArgs -> Update (Optional Party)
 getBeneficiaryPartyOptional dso (GovernanceLock_SVLocked lock) extraArgs
@@ -94,7 +118,6 @@ effectiveAtKey = "cip-105/effectiveAt"
 topUpAllocationMetadataKey : Text
 topUpAllocationMetadataKey = "cip-105/topup-allocation-cid"
 
-
 unlockControllerKey : Text
 unlockControllerKey = "cip-105/unlockControllers"
 withdrawControllerKey : Text
@@ -102,6 +125,8 @@ withdrawControllerKey = "cip-105/withdrawControllers"
 substituteControllerKey : Text
 substituteControllerKey = "cip-105/substituteControllers"
 
+substituteAllocationContextKey : Text
+substituteAllocationContextKey = "cip-105/topup-allocation-cid"
 
 governanceMetadataKeys : Metadata -> S.Set Text
 governanceMetadataKeys meta = S.fromList $ fst <$> TM.toList ( TM.filterWithKey ( \_ a -> "cip-105/" `T.isPrefixOf` a ) meta.values )
@@ -173,11 +198,14 @@ parseAndValidateGovernanceLockOperation fromAllocate dso alloc = do
       pure . Some $ GovernanceLockOperation_Allocate lock
     None -> do
       let eitherCid = lookupFromContext @(ContractId V2.Allocation) alloc.extraArgs.context topUpAllocationMetadataKey
-      case eitherCid of
+      let substituteCid = lookupFromContext @(ContractId V2.Allocation) alloc.extraArgs.context substituteAllocationContextKey
+      case (,) <$> eitherCid <*> substituteCid of
         Left t -> assertFail t
-        Right None -> pure None
-        Right (Some topUpAllocationCid) ->
+        Right (None, None) -> pure None
+        Right (Some topUpAllocationCid, None) ->
           pure . Some . GovernanceLockOperation_TopUp $ TopUpAllocation topUpAllocationCid
+        Right (optTopUpAllocationCid, Some substituteCid) ->
+          pure . Some . GovernanceLockOperation_Substitute $ SubstituteAllocation substituteCid optTopUpAllocationCid
 
 governanceLockProposal_rules (GovernanceLock_VestingLocked _)
   = assertFail "Creating vesting locks from an allocation instruction is not permitted"
@@ -461,4 +489,216 @@ instance HasCheckedFetch SvRightOwnerName ForSv where
       with
         dso
         svName = rightOwnerName
+
+
+
+
+
+-- | Trimmed down version of amulet_allocateionFactoryV2_allocateImplCore specialized to to governance AmuletAllocationV2 instances.
+governance_allocateImplCore
+  : Party
+  -> V2.AllocationFactory_Allocate
+  -> Decimal
+  -> Update (Optional (ContractId LockedAmulet), [ContractId V1.Holding], Time, Metadata)
+governance_allocateImplCore dso arg fundingAmount = do
+  let (V2.AllocationFactory_Allocate with settlement, allocation, requestedAt, inputHoldingCids, extraArgs, actors) = arg
+
+  -- check actors
+  ensureBasicAccount "allocation.authorizer" allocation.authorizer
+  let authorizer = accountPrincipal dso allocation.authorizer
+  checkActors actors [[authorizer]]
+
+  -- == validate each field of the requested allocation
+
+  -- settlement.executors: no check
+  -- settlement.id: no check
+  -- settlement.cid: no check
+  -- settlement.meta: no check
+
+  -- allocation.settlementDeadline:
+  whenSome allocation.settlementDeadline \d -> do
+    assertWithinDeadline "Allocation.settlementDeadline" d
+
+  -- allocation.admin:
+  requireMatchExpected ("allocation.admin", allocation.admin) dso
+  -- allocation.authorizer: checked above as part of actors
+  -- allocation.transferLegSides:
+  require "governance locks must not specify transferLegSides" $ null allocation.transferLegSides
+  require "governance locks must specify nextIterationFunding" $ isSome allocation.nextIterationFunding
+
+  -- allocation.nextIterationFunding: validated `amulet_allocationFactoryV2_allocateImpl`
+  -- allocation.committed: nothing to validate
+  -- allocation.meta: check no redundant account information
+  ensureNoAccountMeta "allocation" "authorizer" allocation.meta
+
+  -- arg.requestedAt (of the allocation instruction itself):
+  assertDeadlineExceeded "requestedAt" requestedAt
+  -- arg.inputHoldingCids: validated by prepareTwoStepTransfer if funidng is required
+  -- arg.extraArgs: no check other than what's done when retrieving reference data
+  -- arg.actors: checked above
+
+  -- compute the allocation expiry time
+  -- (_, configState) <- getExternalPartyConfigStateFromChoiceContext dso arg.extraArgs.context
+  -- let configAmulet = transferConfigAmuletFromExternalPartyConfigState configState
+  expiresAt <- pure maxComparableTime -- computeAllocationExpiry configAmulet (isGovernanceAllocationArgument arg) requestedAt allocation.settlementDeadline
+
+  -- create locked amulet if required
+  if fundingAmount <= 0.0
+  then do
+    -- return input cids as change, so they can be reused on chaining
+    return (None, map downcast inputHoldingCids, expiresAt, emptyMetadata)
+  else do
+  
+    -- We are using an unfeatured payment context, as the locking to self should not be featured.
+    paymentContext <- unfeaturedPaymentContextFromChoiceContext dso extraArgs.context
+
+    require "At least one input holding must be provided for allocations that require funding" (not (null inputHoldingCids))
+    -- lock the funds
+    let twoStepTransfer = TwoStepTransfer with
+          dso
+          sender = authorizer
+          amount = fundingAmount
+          lockContext = AmuletAllocationV1.mkAllocationLockContext (downcast settlement)
+          transferBefore = expiresAt
+          transferBeforeDeadline = "allocation.expiresAt"
+          -- Minor hack: we use the authorizer for receiver and provider as these fields are irrlevant
+          -- for preparing the two-step transfer .
+          receiver = authorizer
+          provider = authorizer
+          allowFeaturing = False
+    (la, cids, meta) <- prepareTwoStepTransfer twoStepTransfer arg.requestedAt (map downcast inputHoldingCids) paymentContext
+    return (Some la, cids, expiresAt, meta)
+
+
+-- Execution primitives; a version of settleBatch that can operate on "virtual" allocations and is restricted from modifying net account holdings.
+
+
+data AbstractGovernanceAllocation = AbstractGovernanceAllocation with
+  allocView : V2.AllocationView
+  lock : GovernanceLock
+
+data VirtualFinalizedAllocation = VirtualFinalizedAllocation with
+  allocation : AbstractGovernanceAllocation
+  extraTransferLegSides : [ TransferLegSide ]
+  nextIterationFunding : Decimal
+
+settleVirtualLock
+  : AbstractGovernanceAllocation
+  -> [TransferLegSide]
+  -> Decimal
+  -> ExtraArgs
+  -> Update AllocationResult
+settleVirtualLock alloc transferLegSides nextIterationFunding extraArgs = do
+  requireUnique "transferLegSides (id + side)" (map (\leg -> (leg.transferLegId, leg.side)) transferLegSides)
+
+  case netAmount > 0.0 of
+    True -> do
+      lockedAmuletCid <- create LockedAmulet with
+              lock = TimeLock with
+                holders = [authorizer, allocation.admin]
+                expiresAt = newExpiresAt
+                optContext = Some $ AmuletAllocationV1.mkAllocationLockContext (downcast settlement)
+              amulet = Amulet with
+                dso = allocation.admin
+                owner = authorizer
+                amount = expiringAmount configAmulet.holdingFee outputFundingAmount configState.holdingFeesOpenRoundNumber
+      nextIterationAllocationCid <- Some <$> create AmuletAllocationV2 with
+              lockedAmulet
+              settlement
+              allocation = this.allocation with
+                transferLegSides = []
+                nextIterationFunding = arg.nextIterationFunding
+              expiresAt = newExpiresAt
+              numIterations = numIterations + 1
+              createdAt
+              governanceLock
+      pure V2.AllocationResult with 
+        output = V2.AllocationResult_Settled with
+          nextIterationAllocationCid
+
+  pure undefined
+
+governanceLocks_settleBatchWithVirtualAllocations
+  :  Party
+     -- ^ Admin of the allocations and the settlement factory
+  -> [VirtualFinalizedAllocation] -- ([V2.TransferLegSide], V2.AllocationView, GovernanceLock)]
+     -- ^ "virtual" finalized allocations. Allocations with output amounts are created, and allocations with input funding imply allocation of holdings.
+  -> V2.SettlementFactory_SettleBatch
+  -> Update V2.SettlementFactory_SettleBatchResult
+governanceLocks_settleBatchWithVirtualAllocations admin virtualAllocations arg = do
+  let V2.SettlementFactory_SettleBatch {..} = arg
+  checkActors actors [settlement.executors]
+
+  let virtualAuthorizedLegs = [ (alloc.allocation.allocView.allocation.authorizer, transferLegSide)
+                                | alloc <- virtualAllocations, transferLegSide <- alloc.extraTransferLegSides ]
+  -- validate call to factory and retrieve context
+  allocations <- fetchAndValidateAllocationsWithExtraLegs admin virtualAuthorizedLegs arg
+
+  -- settle all allocations
+  allocationSettleResults <- forA allocations $ \(finalizedAlloc, allocView) -> do
+    let settleArg = V2.Allocation_Settle with
+          -- Use default controllers as the actors
+          actors = allocView.allocation.admin :: allocView.settlement.executors
+          extraTransferLegSides = finalizedAlloc.extraTransferLegSides
+          nextIterationFunding = finalizedAlloc.nextIterationFunding
+          extraArgs
+    exercise finalizedAlloc.allocationCid settleArg with
+
+  virtualAllocationSettleResults <- forA virtualAllocations $ \alloc -> do
+    settleVirtualLock alloc.allocation alloc.extraTransferLegSides alloc.nextIterationFunding extraArgs
+
+  -- return result
+  pure V2.SettlementFactory_SettleBatchResult with
+    allocationSettleResults = virtualAllocationSettleResults <> allocationSettleResults
+    meta = emptyMetadata
+
+-- | Core logic to validate the allocations for a batch settlement.
+-- Used in `settlementFactoryV2_settleBatchDefaultImpl` and exposed as a standalone function to
+-- be reused by factories that need custom settlement execution logic.
+fetchAndValidateAllocationsWithExtraLegs
+  : Party -> [(V2.Account, TransferLegSide)] -> V2.SettlementFactory_SettleBatch
+  -> Update [(V2.FinalizedAllocation, V2.AllocationView)]
+fetchAndValidateAllocationsWithExtraLegs admin virtualAllocations V2.SettlementFactory_SettleBatch { settlement, transferLegs, allocations } = do
+  requireUnique "SettleBatch.transferLegsIds" (map (.transferLegId) transferLegs)
+  forA_ transferLegs $ \leg -> do
+    require' ("transferLeg.amount", leg.amount) isGreaterR ("zero", 0.0)
+
+  -- fetch and validate all allocations
+  allocations <- forA allocations $ \finalizedAlloc -> do
+    allocation0 <- fetch finalizedAlloc.allocationCid
+    let allocationView = view allocation0
+    let allocation = allocationView.allocation
+
+    requireMatchExpected ("allocation.settlement", allocationView.settlement) settlement
+    requireMatchExpected ("allocation.admin", allocation.admin) admin
+    -- validate finalized allocation and record extra legs
+    validateNextIterationArgs "finalizedAllocation" (isSome allocation.nextIterationFunding)
+      finalizedAlloc.extraTransferLegSides allocation.nextIterationFunding
+    let adjustedAllocView = allocationView with
+          allocation = allocation with
+            transferLegSides = allocation.transferLegSides ++ finalizedAlloc.extraTransferLegSides
+
+    pure (finalizedAlloc, adjustedAllocView)
+
+  -- ensure there are no duplicate authorizations, even when looking just at the transfer-leg ids
+  let allocatedAuthorizations = do
+        (_, allocationView) <- allocations
+        leg <- allocationView.allocation.transferLegSides
+        pure (allocationView.allocation.authorizer, leg)
+  requireUnique "transferLegIds of allocated authorizations"
+    [ (authorizer, leg.transferLegId, leg.side) | (authorizer, leg) <- allocatedAuthorizations ]
+
+  -- check that exactly the required allocations are present
+  let requiredAuthorizations = S.fromList $ concatMap transferLegSidesWithAuthorizer transferLegs
+  let allocatedAuthorizationsSet = S.fromList $ allocatedAuthorizations <> virtualAllocations
+  let superfluousAuthorizations = allocatedAuthorizationsSet `S.difference` requiredAuthorizations
+  let missingAuthorizations = requiredAuthorizations `S.difference` allocatedAuthorizationsSet
+
+  require' ("missing authorizations", missingAuthorizations) isEqualR ("empty set", S.empty)
+  require' ("superfluous authorizations", superfluousAuthorizations) isEqualR ("empty set", S.empty)
+
+  require "governance lock actions must preserve account holding totals" $
+    all (\leg -> leg.sender == leg.receiver) transferLegs
+
+  pure allocations
 
