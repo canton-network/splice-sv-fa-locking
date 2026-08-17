@@ -626,11 +626,6 @@ template GovernanceLockProposal with
     admin : Party
     requestedAt : Time
 
-    -- requiredAuthorizers : ControllerSpecification
-
-    substituteCid : Optional (ContractId AmuletAllocationV2)
-    topupCid : Optional (ContractId AmuletAllocationV2)
-
     -- Cached for the observer; not used for authorization.
     svParty : Optional Party
   where
@@ -683,8 +678,7 @@ governanceLockProposal_acceptImpl this self V2.AllocationInstruction_Accept {act
 
   checkIsBeneficiary this.admin this.proposedLock extraArgs actors
 
---governanceLockProposal_execute : GovernanceLockProposal -> ContractId V2.AllocationInstruction -> Update V2.AllocationInstructionResult
---   let V2.AllocationInstructionView { .. } = view $ toInterface @V2.AllocationInstruction this
+  let V2.AllocationInstructionView { .. } = view $ toInterface @V2.AllocationInstruction this
 
   let arg = V2.AllocationFactory_Allocate with
         settlement
@@ -693,24 +687,6 @@ governanceLockProposal_acceptImpl this self V2.AllocationInstruction_Accept {act
         inputHoldingCids
         extraArgs
         actors = [ this.allocationAuthorizer ]
-
-  topUpAlloc : AmuletAllocationV2 <- fetchButArchiveLater (ForDso with dso) $ fromInterfaceContractId topUpAllocationCid
-
-  -- unlock amulet to get holdings - unlockAmuletAllocationV2
-  newHoldingsTm <- unlockAmuletAllocationV2 topUpAlloc extraArgs
-  newHoldingsSm <- unlockAmuletAllocationV2 substituteAlloc extraArgs
-  let newHoldingsToAdd = concat $ catOptionals $
-        [ TextMap.lookup amuletInstrumentIdName newHoldingsTm
-        , TextMap.lookup amuletInstrumentIdName newHoldingsSm
-        ]
-
-  -- unlock amulet to get holdings - unlockAmuletAllocationV2
-  newHoldingsTm <- unlockAmuletAllocationV2 topUpAlloc extraArgs
-  let newHoldingsToAdd = fromOptional [] $ TextMap.lookup amuletInstrumentIdName newHoldingsTm
-
-    -- amulet_allocationFactoryV2_allocateImplCore is the only reason any of this needs to be in this file.
-  (lockedAmulet, senderChangeCids, expiresAt, meta) <-
-    amulet_allocationFactoryV2_allocateImplCore (ExternalPartyAmuletRules this.admin) arg this.allocationAmount
 
     -- amulet_allocationFactoryV2_allocateImplCore is the only reason any of this needs to be in this file.
   (lockedAmulet, senderChangeCids, expiresAt, meta) <-
@@ -746,8 +722,6 @@ governanceAllocateImpl arg@V2.AllocationFactory_Allocate{..} = do
         proposedLock
         allocationAuthorizer = regularAccountOwner allocation.authorizer
         allocationAmount
-        topupCid = None
-        substituteCid = None
         admin = allocation.admin
         requestedAt
         svParty = None -- Could take cip-105/svAuthRightCid and cache here for observer, or could use explicit disclosure and an API lookup for accept.
@@ -755,7 +729,7 @@ governanceAllocateImpl arg@V2.AllocationFactory_Allocate{..} = do
         authorizerChangeCids = TextMap.empty
         output = V2.AllocationInstructionResult_Pending with allocationInstructionCid
         meta = emptyMetadata
-    GovernanceLockOperation_Substitute op -> governanceAllocateSubstitutionImpl arg op allocationAmount
+    GovernanceLockOperation_Substitute op -> undefined -- FIXME: governanceAllocateSubstitutionImpl arg op allocationAmount
     GovernanceLockOperation_TopUp (TopUpAllocation topUpAllocationCid) -> do
       -- Grab top-up-alloc
       -- fetchButarchiveLater  old
@@ -807,33 +781,3 @@ governanceAllocateImpl arg@V2.AllocationFactory_Allocate{..} = do
         authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, map upcast senderChangeCids)]
         output = V2.AllocationInstructionResult_Completed with allocationCid
         meta
-
-governanceAllocateSubstitutionImpl : V2.AllocationFactory_Allocate -> SubstituteAllocation -> Decimal -> Update V2.AllocationInstructionResult
-governanceAllocateSubstitutionImpl arg@V2.AllocationFactory_Allocate {..} SubstituteAllocation { substituteCid, topupCid } allocationAmount = do
-      substituted <- fetchChecked (ForDso arg.allocation.admin) (fromInterfaceContractId @AmuletAllocationV2 substituteCid)
-      proposedLock <- requireSome "allocation to substitute must be a governance locked allocation" substituted.governanceLock
-      topupOpt <- Trav.forA topupCid $ \topupCid -> do
-        topup <- fetchChecked (ForDso arg.allocation.admin) (fromInterfaceContractId @AmuletAllocationV2 topupCid)
-        require "governance locks must match on beneficiary or vesting terms when substituting with topup" $
-                Some (governanceLockKey proposedLock) == (governanceLockKey <$> topup.governanceLock)
-        pure topup
-
-      svParty <- getBeneficiaryPartyOptional arg.allocation.admin proposedLock extraArgs
-      allocationInstructionCid <- fmap toInterfaceContractId $ create $ GovernanceLockProposal with
-        originalInstructionCid = None
-        availableActions = Map.fromList [] -- Can't actually keep the SvRightHolder name and party in sync for the view.
-        inputHoldingCids
-        -- Minimal representation
-        proposedLock
-        allocationAuthorizer = regularAccountOwner allocation.authorizer
-        allocationAmount
-        admin = allocation.admin
-        requestedAt
-        svParty = None -- Could take cip-105/svAuthRightCid and cache here for observer, or could use explicit disclosure and an API lookup for accept.
-        topupCid = fromInterfaceContractId <$> topupCid
-        substituteCid = Some $ fromInterfaceContractId substituteCid
-      pure V2.AllocationInstructionResult with
-        authorizerChangeCids = TextMap.empty
-        output = V2.AllocationInstructionResult_Pending with allocationInstructionCid
-        meta = emptyMetadata
-
