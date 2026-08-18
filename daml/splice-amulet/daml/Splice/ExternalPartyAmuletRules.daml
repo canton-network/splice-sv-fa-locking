@@ -729,7 +729,7 @@ governanceAllocateImpl arg@V2.AllocationFactory_Allocate{..} = do
         authorizerChangeCids = TextMap.empty
         output = V2.AllocationInstructionResult_Pending with allocationInstructionCid
         meta = emptyMetadata
-    GovernanceLockOperation_Substitute op -> undefined -- FIXME: governanceAllocateSubstitutionImpl arg op allocationAmount
+    GovernanceLockOperation_Substitute op -> governanceAllocateSubstitutionImpl arg op allocationAmount
     GovernanceLockOperation_TopUp (TopUpAllocation topUpAllocationCid) -> do
       -- Grab top-up-alloc
       -- fetchButarchiveLater  old
@@ -781,3 +781,34 @@ governanceAllocateImpl arg@V2.AllocationFactory_Allocate{..} = do
         authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, map upcast senderChangeCids)]
         output = V2.AllocationInstructionResult_Completed with allocationCid
         meta
+
+
+governanceAllocateSubstitutionImpl : V2.AllocationFactory_Allocate -> GovernanceLockOperation -> Decimal -> Update V2.AllocationInstructionResult
+governanceAllocateSubstitutionImpl arg (SubstituteAllocation with substituteForParty; offeredLock; topupCid) allocationAmount = do
+
+      -- Allocate the funds for the substitution
+      (lockedAmulet, senderChangeCids, expiresAt, meta) <-
+        amulet_allocationFactoryV2_allocateImplCore (ExternalPartyAmuletRules dso) newArg allocationAmount
+
+      substituteWithCid <- toInterfaceContractId <$> create AmuletAllocationV2 with
+        settlement = arg.settlement
+        allocation = arg.allocation
+        lockedAmulet
+        expiresAt
+        createdAt = arg.requestedAt
+        numIterations = 0
+        governanceLock = offeredLock
+
+      allocationInstructionCid <- create GovernanceLockSubstitutionProposal with
+        admin = allocation.admin
+        proposedBy = regularAccountOwner allocation.authorizer
+        proposedTo = substituteForParty
+        topUpAllocationCid = topupCid
+        substituteWithCid
+
+      pure V2.AllocationInstructionResult with
+        authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, map upcast senderChangeCids)]
+        output = V2.AllocationInstructionResult_Pending with allocationInstructionCid
+        meta
+
+

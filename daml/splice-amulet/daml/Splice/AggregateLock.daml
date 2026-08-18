@@ -62,7 +62,8 @@ governanceLockForSubstitution Substitute_Vesting vl = GovernanceLock_VestingLock
 
 data SubstituteAllocation =
   SubstituteAllocation with
-    substituteCid : ContractId V2.Allocation
+    substituteForParty : Party
+    offeredLock : GovernanceLock
     topupCid : Optional (ContractId V2.Allocation)
 
 data AggregatedLock =

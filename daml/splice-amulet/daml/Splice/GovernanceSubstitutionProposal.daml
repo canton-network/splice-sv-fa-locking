@@ -84,6 +84,12 @@ template GovernanceLockSubstitutionProposal with
         -- Using amount becuase the settlement legs below will all have this amount. nextIterationFunding maps will vary.
         let Some [(_, amount)] = TM.toList substituteWithAllocation.allocation.nextIterationFunding
 
+        case substitutedWithAllocation.governanceLock of
+          Some GovernanceLock_SVLock (AggregatedLock with lockBeneficiary)
+            | Some GovernanceLock_SVLock (AggregatedLock with lockBeneficiary = otherBeneficiary) <- substitutedAllocation.governanceLock
+              -> require "lock subjects must match between substituted allocations" $ lockBeneficiary == otherBeneficiary
+          glk@(Some (GLK_Vesting with endDate))
+            -> require "vesting period must end no later than offered" $ Some endDate < (governanceLockKey <$> substitutedAllocation.governanceLock)
         require "lock subjects must match between substituted allocations" $
           (governanceLockKey <$> substituteWithAllocation.governanceLock) == (governanceLockKey <$> substitutedAllocation.governanceLock)
 
