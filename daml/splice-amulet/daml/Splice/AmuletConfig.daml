@@ -112,6 +112,7 @@ data AmuletConfig unit = AmuletConfig with
     rewardConfig : Optional RewardConfig
       -- ^ Configuration for the reward accounting and calculation. If None, then on-ledger reward tracking is used.
     transferPreapprovalBaseDuration : Optional RelTime -- ^ Base duration of a transfer pre-approval granted for free on creation and renewal. Default: 90 days.
+    minimumGovernanceLock : Optional Decimal -- ^ The minimum amount to enforce for a governance lock. Default: 10k Amulet.
   deriving (Eq, Show)
 
 getExternalPartyConfigStateTickDuration : AmuletConfig a -> RelTime
@@ -209,6 +210,7 @@ instance Patchable (AmuletConfig USD) where
     externalPartyConfigStateTickDuration = patch new.externalPartyConfigStateTickDuration base.externalPartyConfigStateTickDuration current.externalPartyConfigStateTickDuration
     rewardConfig = patch new.rewardConfig base.rewardConfig current.rewardConfig
     transferPreapprovalBaseDuration = patch new.transferPreapprovalBaseDuration base.transferPreapprovalBaseDuration current.transferPreapprovalBaseDuration
+    minimumGovernanceLock = patch new.minimumGovernanceLock base.minimumGovernanceLock current.minimumGovernanceLock
 
 instance Patchable RewardConfig where
   patch new base current = RewardConfig with
