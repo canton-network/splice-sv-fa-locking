@@ -5,14 +5,13 @@ import DA.Optional
 import DA.Time
 
 import Splice.Amulet
-import Splice.ExternalPartyConfigState
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
-import Splice.TokenStandard.Utils hiding (require)
 import Splice.Expiry
 import Splice.Fees (relTimeToSeconds)
+import Splice.ExternalPartyConfigState
 import Splice.TokenStandard.Utils hiding (require)
 import Splice.Types
 import Splice.Util
