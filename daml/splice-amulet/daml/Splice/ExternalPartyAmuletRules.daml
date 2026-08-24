@@ -139,8 +139,8 @@ template ExternalPartyAmuletRules
         amount : Decimal
         inputs : [ContractId V1.Holding]
         specification : GovernanceLockSpecification
-        owner : Party
         extraArgs : ExtraArgs
+        owner : Party
       controller owner
       do
         (governanceLock, changeHolding) <- governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner

@@ -2,12 +2,15 @@ module Splice.Scripts.TestGovernanceLocks where
 
 import DA.Action (unless)
 import DA.List.Total
+import DA.TextMap qualified as TextMap
 import DA.Time
 
 import Daml.Script
 import Splice.Amulet
+import Splice.Amulet.TokenApiUtils
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV2 qualified as V2
+import Splice.Api.Token.MetadataV1
 import Splice.ExternalPartyAmuletRules
 import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
@@ -128,8 +131,22 @@ checkLockedHolding p lockCid amount = do
   Some lock <- queryContractId p lockCid
   checkHolding' p lock.lockedAmulet amount
 
-getExternalPartyTransferContext : Party -> Script (ExternalPartyTransferContext, Disclosures')
-getExternalPartyTransferContext dso = do
+getExternalPartyConfigStateContext : Party -> Script OpenApiChoiceContext
+getExternalPartyConfigStateContext dso = do
+  extPartyConfigs <- query @ExternalPartyConfigState dso
+  let (newestConfigCid, _) = case maximumOn (\(_, c) -> c.targetArchiveAfter) extPartyConfigs of
+        None -> error "No ExternalPartyConfigState found: have you initialized the Amulet registry?"
+        Some c -> c
+  extConfigDD <- queryDisclosure' @ExternalPartyConfigState dso newestConfigCid
+  pure OpenApiChoiceContext with
+    choiceContext = ChoiceContext $ TextMap.fromList
+        [(externalPartyConfigStateContextKey, AV_ContractId $ coerceContractId newestConfigCid)]
+    disclosures = extConfigDD
+
+
+
+getExternalPartyConfigStateContext2 : Party -> Script (ExternalPartyTransferContext, Disclosures')
+getExternalPartyConfigStateContext2 dso = do
   extPartyConfigs <- query @ExternalPartyConfigState dso
   let (externalPartyConfigState, _) = case maximumOn (\(_, c) -> c.targetArchiveAfter) extPartyConfigs of
         None -> error "No ExternalPartyConfigState found: have you initialized the Amulet registry?"
@@ -140,11 +157,11 @@ getExternalPartyTransferContext dso = do
 
 
 -- | a couple helpers to make the raw choice implementations easier to write
-submitWithTransferContext : TestEnv -> SubmitOptions -> (ExternalPartyTransferContext -> Commands a) -> Script (Either SubmitError a)
+submitWithTransferContext : TestEnv -> SubmitOptions -> (ChoiceContext -> Commands a) -> Script (Either SubmitError a)
 submitWithTransferContext env options commands = do
   let dso = env.instrId.admin
-  (context, disclosures) <- getExternalPartyTransferContext dso
-  trySubmit (options <> discloseMany' disclosures) $ commands context
+  context <- getExternalPartyConfigStateContext dso
+  trySubmit (options <> discloseMany' context.disclosures) $ commands context.choiceContext
 
 errorIfLeft : (Show e, CanAssert m) => Either e a -> m a
 errorIfLeft (Left e) = assertFail (show e)
@@ -164,7 +181,7 @@ governanceLockRawChoice' env owner amount specification = do
       amount
       inputs = coerceContractId <$> inputs -- These are Amulet and LockedAmulet, but we don't have convenient constraints to show that.
       specification
-      context
+      extraArgs = emptyExtraArgs with context
       owner
   pure $ (.governanceLock) <$> result
 
@@ -187,8 +204,8 @@ governanceUnlockRawChoice'
 governanceUnlockRawChoice' env cid unlockAmount unlockAt actors = do
   result <- submitWithTransferContext env (actAs actors) $ \context -> exerciseCmd cid GovernanceLock_Unlock with
     unlockAmount
-    context
     unlockAt
+    extraArgs = emptyExtraArgs with context
     actors
   pure $ ((,) <$> (.vestingLock) <*> (.governanceLock)) <$> result
 
@@ -208,8 +225,8 @@ vestingWithdrawRawChoice'
   -> Script (Either SubmitError (ContractId V2.Holding, Optional (ContractId VestingLock)))
 vestingWithdrawRawChoice' env cid requestedAt actors = do
   result <- submitWithTransferContext env (actAs actors) $ \context -> exerciseCmd cid VestingLock_Withdraw with
-    context
     requestedAt
+    extraArgs = emptyExtraArgs with context
     actors
   pure $ ((,) <$> upcast . (.unlocked) <*> (.vestingLock)) <$> result
 

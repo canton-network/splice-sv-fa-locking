@@ -99,6 +99,8 @@ defaultAmuletConfig = AmuletConfig with
 
   transferPreapprovalBaseDuration = None
 
+  minimumGovernanceLock = None
+
 -- | Default configuration schedule with single current amulet config
 defaultAmuletConfigSchedule : Schedule Time (AmuletConfig USD)
 defaultAmuletConfigSchedule = Schedule with
