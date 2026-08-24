@@ -119,6 +119,7 @@ data AmuletConfig unit = AmuletConfig with
       -- ^ Minimum delay between allocation and minting. Default: 0 days.
     amuletSwitchOverTimes : Optional (TextMap Time)
       -- ^ Timepoints for synchronized switch-overs of amulet functionality both on and off-ledger.
+    governanceLockConfig : Optional GovernanceLockConfig -- ^ The governance lock configuration
   deriving (Eq, Show, Serializable)
 
 getExternalPartyConfigStateTickDuration : AmuletConfig a -> RelTime
@@ -218,6 +219,17 @@ data PackageConfig = PackageConfig
 validPackageConfig : PackageConfig -> Bool
 validPackageConfig _ = True
 
+-- | Governance lock configuration.
+data GovernanceLockConfig = GovernanceLockConfig with
+    minimumGovernanceLockAmount : Decimal
+      -- ^ The minimum amount for a governance lock. Default: 10k Amulet.
+  deriving (Eq, Show, Serializable)
+
+-- | Unwrap Optional GovernanceLockConfig, using the defaults if None.
+getGovernanceLockConfig : Optional GovernanceLockConfig -> GovernanceLockConfig
+getGovernanceLockConfig cfg = flip fromOptional cfg $ GovernanceLockConfig with
+  minimumGovernanceLockAmount = 10000.0
+
 instance Patchable RewardVersion where
   patch = patchScalar
 
@@ -238,6 +250,7 @@ instance Patchable (AmuletConfig USD) where
     transferPreapprovalBaseDuration = patch new.transferPreapprovalBaseDuration base.transferPreapprovalBaseDuration current.transferPreapprovalBaseDuration
     minDevelopmentFundMintingDelay = patch new.minDevelopmentFundMintingDelay base.minDevelopmentFundMintingDelay current.minDevelopmentFundMintingDelay
     amuletSwitchOverTimes = patch new.amuletSwitchOverTimes base.amuletSwitchOverTimes current.amuletSwitchOverTimes
+    governanceLockConfig = patch new.governanceLockConfig base.governanceLockConfig current.governanceLockConfig
 
 instance Patchable RewardConfig where
   patch new base current = RewardConfig with
@@ -267,3 +280,7 @@ instance Patchable PackageConfig where
     validatorLifecycle = patch new.validatorLifecycle base.validatorLifecycle current.validatorLifecycle
     wallet = patch new.wallet base.wallet current.wallet
     walletPayments = patch new.walletPayments base.walletPayments current.walletPayments
+
+instance Patchable GovernanceLockConfig where
+  patch new base current = GovernanceLockConfig with
+    minimumGovernanceLockAmount = patch new.minimumGovernanceLockAmount base.minimumGovernanceLockAmount current.minimumGovernanceLockAmount
