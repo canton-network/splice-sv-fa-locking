@@ -129,6 +129,38 @@ template GovernanceLock
           vestingLock
           governanceLock
 
+    choice GovernanceLock_TopUp : GovernanceLock_TopUpResult
+      with
+        amount : Decimal
+--        inputs : [ContractId Holding]
+        requestedAt : Time
+        context : ExternalPartyTransferContext
+        actors : [Party]
+      controller owner
+      do
+        require "Only the owner may Top Up on an GovernanceLock" $ actors == [owner] -- TODO: custom controllers
+        -- TODO add more requries
+
+        unlockedAmuletCid <- unlockAmulet (ForOwner with dso; owner) holding
+        unlockedAmulet <- fetchChecked @Amulet (ForOwner with dso; owner) unlockedAmuletCid
+
+        -- TODO: Should change holding here always be none? Like if we want to topup,
+        -- we want to do the full amount we're asked of?
+        ([newHolding], changeHolding) <- lockAmulet
+          (ForOwner with dso; owner)
+          [amount + unlockedAmulet.amount.initialAmount]
+          [toInterfaceContractId unlockedAmuletCid]
+          context
+
+        newGovernanceLock <- create GovernanceLock with
+          dso
+          owner
+          holding = newHolding
+          specification
+
+        pure $ GovernanceLock_TopUpResult with
+          governanceLock = newGovernanceLock
+
   -- TODO: implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO: implement pending V1 transfer for the above, for backwards compatibility.
   -- TODO: substitution, probably with a loose function for implementation sharing.
@@ -137,6 +169,11 @@ data GovernanceLock_UnlockResult
   = GovernanceLock_UnlockResult with
       vestingLock : ContractId VestingLock
       governanceLock : Optional (ContractId GovernanceLock)
+  deriving (Eq, Show, Serializable)
+
+data GovernanceLock_TopUpResult
+  = GovernanceLock_TopUpResult with
+      governanceLock : ContractId GovernanceLock
   deriving (Eq, Show, Serializable)
 
 template VestingLock
