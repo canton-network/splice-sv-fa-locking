@@ -76,6 +76,21 @@ testGovernanceLockHappyPath = do
   checkHolding' alice unlockedHolding2 70000.0
   checkIsUnlocked alice unlockedHolding2
 
+testTopUpHappyPath : Script ()
+testTopUpHappyPath = do
+  env@TestEnv{..} <- setupTest
+  let dso = env.instrId.admin
+      someSvSpec = GovernanceLockSpecification with
+        subject = GLS_SuperValidatorRightsOwner "SomeApp"
+
+  submit (actAs dso) $ createCmd GovernanceLockFactory with dso
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 280000.0
+
+  aliceLock <- governanceLockRawChoice env alice 10000.0 someSvSpec
+  assertLockedHoldingAmount alice aliceLock 10000.0
+
+  aliceLock' <- governanceLockTopUpRawChoice env aliceLock 5000.0 [alice]
+  assertLockedHoldingAmount alice aliceLock' 15000.0
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
@@ -144,3 +159,16 @@ vestingWithdrawRawChoice env cid requestedAt actors = do
     actors
   pure (upcast result.unlocked, result.vestingLock)
 
+governanceLockTopUpRawChoice : TestEnv -> ContractId GovernanceLock -> Decimal -> [Party] -> Script (ContractId GovernanceLock)
+governanceLockTopUpRawChoice env cid amount actors = do
+  let [owner] = actors
+  inputs <- fmap fst <$> queryInterface @Holding owner
+  (Some governanceLock) <- queryContractId @GovernanceLock owner cid
+  -- We want to make sure that we don't include the governanceLock holding as an input
+  let inputs' : [ContractId Holding] = deleteBy (==) (toInterfaceContractId @Holding governanceLock.holding) inputs
+  result <- submitWithTransferContext env (actAs actors) $ \context -> exerciseCmd cid GovernanceLock_TopUp with
+    amount
+    inputs = inputs'
+    context
+    actors
+  pure result.governanceLock

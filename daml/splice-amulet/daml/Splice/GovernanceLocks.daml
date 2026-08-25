@@ -132,26 +132,15 @@ template GovernanceLock
     choice GovernanceLock_TopUp : GovernanceLock_TopUpResult
       with
         amount : Decimal
---        inputs : [ContractId Holding]
-        requestedAt : Time
+        inputs : [ContractId Holding]
         context : ExternalPartyTransferContext
         actors : [Party]
       controller owner
       do
-        require "Only the owner may Top Up on an GovernanceLock" $ actors == [owner] -- TODO: custom controllers
-        -- TODO add more requries
+        require "Only the owner may Top Up on a GovernanceLock" $ actors == [owner] -- TODO: custom controllers
+        require "Top up amount should be positive" $ amount > 0.0
 
-        unlockedAmuletCid <- unlockAmulet (ForOwner with dso; owner) holding
-        unlockedAmulet <- fetchChecked @Amulet (ForOwner with dso; owner) unlockedAmuletCid
-
-        -- TODO: Should change holding here always be none? Like if we want to topup,
-        -- we want to do the full amount we're asked of?
-        ([newHolding], changeHolding) <- lockAmulet
-          (ForOwner with dso; owner)
-          [amount + unlockedAmulet.amount.initialAmount]
-          [toInterfaceContractId unlockedAmuletCid]
-          context
-
+        ([newHolding], changeHolding) <- addAmountToLockedAmulet holding (ForOwner with dso; owner) context inputs amount
         newGovernanceLock <- create GovernanceLock with
           dso
           owner
@@ -160,6 +149,7 @@ template GovernanceLock
 
         pure $ GovernanceLock_TopUpResult with
           governanceLock = newGovernanceLock
+          changeHolding
 
   -- TODO: implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO: implement pending V1 transfer for the above, for backwards compatibility.
@@ -174,6 +164,7 @@ data GovernanceLock_UnlockResult
 data GovernanceLock_TopUpResult
   = GovernanceLock_TopUpResult with
       governanceLock : ContractId GovernanceLock
+      changeHolding : Optional (ContractId Amulet)
   deriving (Eq, Show, Serializable)
 
 template VestingLock
@@ -321,3 +312,13 @@ fetchAmount : ForOwner -> ContractId LockedAmulet -> Update Decimal
 fetchAmount forOwner holding = do
   holdingView <- view . toInterface @Holding <$> fetchChecked forOwner holding
   pure holdingView.amount
+
+addAmountToLockedAmulet : ContractId LockedAmulet -> ForOwner -> ExternalPartyTransferContext -> [ContractId Holding] -> Decimal -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
+addAmountToLockedAmulet lockedAmulet forOwner context inputHoldingCids amount = do
+  unlockedAmuletCid <- unlockAmulet forOwner lockedAmulet
+  unlockedAmulet <- fetchChecked @Amulet forOwner unlockedAmuletCid
+  lockAmulet
+    forOwner
+    [unlockedAmulet.amount.initialAmount + amount]
+    inputHoldingCids
+    context
