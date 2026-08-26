@@ -131,16 +131,14 @@ template GovernanceLock
 
     choice GovernanceLock_TopUp : GovernanceLock_TopUpResult
       with
-        amount : Decimal
+        topupAmount : Decimal -- ^ Amount by which the locked amount should be increased.
         inputs : [ContractId Holding]
         context : ExternalPartyTransferContext
-        actors : [Party]
       controller owner
       do
-        require "Only the owner may Top Up on a GovernanceLock" $ actors == [owner] -- TODO: custom controllers
-        require "Top up amount should be positive" $ amount > 0.0
+        require "Top up amount should be positive" $ topupAmount > 0.0
 
-        ([newHolding], changeHolding) <- addAmountToLockedAmulet holding (ForOwner with dso; owner) context inputs amount
+        ([newHolding], changeHolding) <- addAmountToLockedAmulet holding (ForOwner with dso; owner) context inputs topupAmount
         newGovernanceLock <- create GovernanceLock with
           dso
           owner

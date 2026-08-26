@@ -89,8 +89,11 @@ testTopUpHappyPath = do
   aliceLock <- governanceLockRawChoice env alice 10000.0 someSvSpec
   assertLockedHoldingAmount alice aliceLock 10000.0
 
-  aliceLock' <- governanceLockTopUpRawChoice env aliceLock 5000.0 [alice]
+  (aliceLock', Some changeHolding) <- governanceLockTopUpRawChoice env aliceLock 5000.0 alice
   assertLockedHoldingAmount alice aliceLock' 15000.0
+
+  -- Alice had 1000.0 coming from setupTest
+  assertHoldingAmount alice changeHolding 256000.0
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
@@ -159,16 +162,11 @@ vestingWithdrawRawChoice env cid requestedAt actors = do
     actors
   pure (upcast result.unlocked, result.vestingLock)
 
-governanceLockTopUpRawChoice : TestEnv -> ContractId GovernanceLock -> Decimal -> [Party] -> Script (ContractId GovernanceLock)
-governanceLockTopUpRawChoice env cid amount actors = do
-  let [owner] = actors
-  inputs <- fmap fst <$> queryInterface @Holding owner
-  (Some governanceLock) <- queryContractId @GovernanceLock owner cid
-  -- We want to make sure that we don't include the governanceLock holding as an input
-  let inputs' : [ContractId Holding] = deleteBy (==) (toInterfaceContractId @Holding governanceLock.holding) inputs
-  result <- submitWithTransferContext env (actAs actors) $ \context -> exerciseCmd cid GovernanceLock_TopUp with
-    amount
-    inputs = inputs'
+governanceLockTopUpRawChoice : TestEnv -> ContractId GovernanceLock -> Decimal -> Party -> Script (ContractId GovernanceLock, Optional (ContractId Amulet))
+governanceLockTopUpRawChoice env cid topupAmount owner = do
+  inputs <- listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
+  result <- submitWithTransferContext env (actAs owner) $ \context -> exerciseCmd cid GovernanceLock_TopUp with
+    topupAmount
+    inputs = downcast <$> inputs -- = inputs'
     context
-    actors
-  pure result.governanceLock
+  pure (result.governanceLock, result.changeHolding)
