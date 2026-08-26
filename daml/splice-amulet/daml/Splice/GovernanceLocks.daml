@@ -138,7 +138,7 @@ template GovernanceLock
       do
         require "Top up amount should be positive" $ topupAmount > 0.0
 
-        ([newHolding], changeHolding) <- addAmountToLockedAmulet lockedAmulet (ForOwner with dso; owner) context inputs topupAmount
+        ([newHolding], changeHolding) <- addAmountToLockedAmulet lockedAmulet (ForOwner with dso; owner) context inputs (amount + topupAmount)
         newGovernanceLock <- create GovernanceLock with
           dso
           owner
@@ -315,9 +315,8 @@ fetchAmount forOwner holding = do
 addAmountToLockedAmulet : ContractId LockedAmulet -> ForOwner -> ExternalPartyTransferContext -> [ContractId Holding] -> Decimal -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
 addAmountToLockedAmulet lockedAmulet forOwner context inputHoldingCids amount = do
   unlockedAmuletCid <- unlockAmulet forOwner lockedAmulet
-  unlockedAmulet <- fetchChecked @Amulet forOwner unlockedAmuletCid
   lockAmulet
     forOwner
-    [unlockedAmulet.amount.initialAmount + amount]
+    [amount]
     inputHoldingCids
     context
