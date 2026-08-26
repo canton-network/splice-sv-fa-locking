@@ -1,5 +1,6 @@
 module Splice.Scripts.TestGovernanceLocks where
 
+import DA.Action (unless)
 import DA.List.Total
 import DA.Time
 
@@ -14,6 +15,7 @@ import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2
 import Splice.Testing.Utils
+import Splice.TokenStandard.Utils
 
 
 testGovernanceLockHappyPath : Script ()
@@ -72,10 +74,21 @@ testGovernanceLockHappyPath = do
 
   -- Check that we withdrew all and exactly the 70k _remaining_ after the above withdrawal.
   checkHolding' alice unlockedHolding2 70000.0
+  checkIsUnlocked alice unlockedHolding2
+
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
 checkHolding' party holding amount = checkHolding party (toInterfaceContractId holding) amount
+
+checkIsUnlocked : (Implements a V2.Holding) => Party -> ContractId a -> Script ()
+checkIsUnlocked p holdingCid = do
+  holdingO <- queryInterfaceContractId p $ toInterfaceContractId @V2.Holding holdingCid
+  now <- getTime
+  let holding = case holdingO of
+        None -> error $ "Holding " <> show holdingCid <> " was not found"
+        Some holding -> holding
+  unless (isUnlocked now holding.lock) $ fail $ "Holding " <> show holding <> " is not unlocked"
 
 -- | Find the holding for a GovernanceLock or VestingLock, and check that it has the correct amount.
 checkLockedHolding : (Template t, HasEnsure t, HasField "lockedAmulet" t (ContractId LockedAmulet)) => Party -> ContractId t -> Decimal -> Script ()
@@ -123,11 +136,11 @@ governanceUnlockRawChoice env cid unlockAmount unlockAt actors = do
     actors
   pure (result.vestingLock, result.governanceLock)
 
-vestingWithdrawRawChoice : TestEnv -> ContractId VestingLock -> Time -> [Party] -> Script (ContractId Amulet, Optional (ContractId VestingLock))
+vestingWithdrawRawChoice : TestEnv -> ContractId VestingLock -> Time -> [Party] -> Script (ContractId V2.Holding, Optional (ContractId VestingLock))
 vestingWithdrawRawChoice env cid requestedAt actors = do
   result <- submitWithTransferContext env (actAs actors) $ \context -> exerciseCmd cid VestingLock_Withdraw with
     context
     requestedAt
     actors
-  pure (result.unlocked, result.vestingLock)
+  pure (upcast result.unlocked, result.vestingLock)
 
