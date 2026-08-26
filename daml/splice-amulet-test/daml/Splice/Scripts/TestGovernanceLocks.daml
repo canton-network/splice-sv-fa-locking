@@ -83,17 +83,16 @@ testTopUpHappyPath = do
       someSvSpec = GovernanceLockSpecification with
         subject = GLS_SuperValidatorRightsOwner "SomeApp"
 
-  submit (actAs dso) $ createCmd GovernanceLockFactory with dso
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 280000.0
 
   aliceLock <- governanceLockRawChoice env alice 10000.0 someSvSpec
-  assertLockedHoldingAmount alice aliceLock 10000.0
+  checkLockedHolding alice aliceLock 10000.0
 
   (aliceLock', Some changeHolding) <- governanceLockTopUpRawChoice env aliceLock 5000.0 alice
-  assertLockedHoldingAmount alice aliceLock' 15000.0
+  checkLockedHolding alice aliceLock' 15000.0
 
   -- Alice had 1000.0 coming from setupTest
-  assertHoldingAmount alice changeHolding 256000.0
+  checkHolding' alice changeHolding 256000.0
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()

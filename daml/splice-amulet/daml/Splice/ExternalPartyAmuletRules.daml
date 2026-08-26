@@ -54,6 +54,12 @@ data ExternalPartyAmuletRules_LockForGovernanceResult = ExternalPartyAmuletRules
     changeHolding : Optional (ContractId Amulet)
   deriving (Eq, Show, Serializable)
 
+data ExternalPartyAmuletRules_LockForGovernanceResult = ExternalPartyAmuletRules_LockForGovernanceResult
+  with
+    governanceLock : ContractId GovernanceLock
+    changeHolding : Optional (ContractId Amulet)
+  deriving (Eq, Show, Serializable)
+
 -- | Rules contract that can be used in transactions that require signatures
 -- from an external party. This is intended to get archived and recreated as rarely as possible
 -- to support long delays between preparing and signing a transaction.
