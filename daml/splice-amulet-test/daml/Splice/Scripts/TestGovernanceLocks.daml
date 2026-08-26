@@ -166,6 +166,6 @@ governanceLockTopUpRawChoice env cid topupAmount owner = do
   inputs <- listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
   result <- submitWithTransferContext env (actAs owner) $ \context -> exerciseCmd cid GovernanceLock_TopUp with
     topupAmount
-    inputs = downcast <$> inputs -- = inputs'
+    inputs = downcast <$> inputs
     context
   pure (result.governanceLock, result.changeHolding)
