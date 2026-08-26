@@ -93,7 +93,7 @@ template GovernanceLock
           owner
           lockedAmulet = vestingLockedHolding
           vestingPeriod
-          startTime = unlockAt
+          endTime = unlockAt `addRelTime` vestingPeriod
           vestingAmount
 
         pure $ GovernanceLock_UnlockResult with
@@ -116,7 +116,7 @@ template VestingLock
     owner : Party
     lockedAmulet : ContractId LockedAmulet
     vestingPeriod : RelTime  -- ^ Duration over which the amount vests in a linear fashion.
-    startTime : Time  -- ^ Time at which vesting starts.
+    endTime : Time  -- ^ Time at which vesting completes.
     vestingAmount : Decimal  -- ^ The amount that is vesting.
   where
     signatory dso, owner
@@ -132,24 +132,25 @@ template VestingLock
       controller actors
       do
         checkActors actors [[owner]] -- ^ TODO: custom controllers
-        currentAmount <- fetchAmount (ForOwner with dso; owner) lockedAmulet
         assertDeadlineExceeded "requestedAt" requestedAt
 
-        let withdrawAmount = calculateAvailableWithdrawAmount currentAmount requestedAt this
+        let retainedAmount = calculateStillLockedAmount requestedAt this
 
-        forA_ withdrawAmount $ -- None in this case is the maximum value.
-          \amount -> require' ("withdraw amount", amount) isGreaterR ("zero", 0.0)
+        forA_ retainedAmount $ -- None in this case is the maximum value.
+            \amount -> require' ("withdraw amount", vestingAmount - amount) isGreaterR ("zero", 0.0)
 
-        case withdrawAmount of
+        case retainedAmount of
           None -> do -- No split or partial availability, unlock everything.
             unlockResult <- exercise lockedAmulet LockedAmulet_UnlockV2
             pure VestingLock_WithdrawResult with
               vestingLock = None
               unlocked = unlockResult.amuletCid
-          Some partial -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
-            (locked, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet partial context
+          Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
+            (locked, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet stillLockedAmount context
             vestingLock <- Some <$> create this with
               lockedAmulet = locked
+              vestingPeriod = endTime `subTime` requestedAt
+              vestingAmount = stillLockedAmount
             pure VestingLock_WithdrawResult with
               vestingLock
               unlocked
@@ -164,12 +165,12 @@ data VestingLock_WithdrawResult
       unlocked : ContractId Amulet
   deriving (Eq, Show, Serializable)
 
-calculateAvailableWithdrawAmount : Decimal -> Time -> VestingLock -> Optional Decimal -- None indicates the _full_ amount is available
-calculateAvailableWithdrawAmount currentAmount currentTime VestingLock{ .. }
-    | currentTime > (startTime `addRelTime` vestingPeriod) = None
-    | otherwise = Some $ vestingAmount `mul` fractionElapsed - (vestingAmount - currentAmount)
+calculateStillLockedAmount : Time -> VestingLock -> Optional Decimal -- None indicates the _full_ amount is available; the amount remaining is always _positive_.
+calculateStillLockedAmount currentTime VestingLock{ .. }
+    | currentTime >= endTime = None
+    | otherwise = Some $ vestingAmount `mul` fractionRemaining
   where
-    fractionElapsed = (currentTime `subTime` startTime) `divRelTime` vestingPeriod
+    fractionRemaining = (endTime `subTime` currentTime) `divRelTime` vestingPeriod
     divRelTime : RelTime -> RelTime -> Numeric 37 -- Specifically valid and maximum cleanly represented range for 0 < a < b
     divRelTime = \a b -> (intToDecimal $ convertRelTimeToMicroseconds a) `div` (intToDecimal $ convertRelTimeToMicroseconds b)
 
@@ -198,10 +199,9 @@ multiSplitLockedAmulet forOwner lockedAmuletCid amounts context = do
   pure (specifiedLocks, remainderLock)
 
 partialUnlock : ForOwner -> ContractId LockedAmulet -> Decimal -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, ContractId Amulet)
-partialUnlock forOwner lockedAmuletCid amount context = do
-  currentAmount <- fetchAmount forOwner lockedAmuletCid
+partialUnlock forOwner lockedAmuletCid stillLockedAmount context = do
   unlockResult <- exercise lockedAmuletCid LockedAmulet_UnlockV2
-  ([newLockedCid], Some unlockedAmulet) <- lockAmulet forOwner [currentAmount - amount] [toInterfaceContractId $ unlockResult.amuletCid] context
+  ([newLockedCid], Some unlockedAmulet) <- lockAmulet forOwner [stillLockedAmount] [toInterfaceContractId $ unlockResult.amuletCid] context
   pure (newLockedCid, unlockedAmulet)
 
 lockAmulet : ForOwner -> [Decimal] -> [ContractId Holding] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
