@@ -73,8 +73,8 @@ template GovernanceLock
             newLockedAmulet <- relockAmulet (ForOwner with dso; owner) lockedAmulet vestingLockProperties context
             pure (newLockedAmulet, None, amount)
           Some unlockAmount -> do -- Splitting.
-            (vesting, stillLockedHolding, stillLockedAmount) <- splitLockedAmulet (ForOwner with dso; owner) lockedAmulet (unlockAmount, vestingLockProperties) context
             require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
+            (vesting, stillLockedHolding, stillLockedAmount) <- splitLockedAmulet (ForOwner with dso; owner) lockedAmulet (unlockAmount, vestingLockProperties) context
             requireMinimumLock state stillLockedAmount
             requireMinimumLock state unlockAmount
             governanceLock <- create

@@ -38,7 +38,7 @@ testGovernanceLockHappyPath = do
   now <- getTime
 
   -- Check that negative allocations are impossible
-  actionMustFail (expectMessageContains "The requirement 'Amount is positive' was not met.") $
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $
     governanceLockRawChoice' env bob (-10000.0) someSvSpec
 
   -- Check that we can't unlock with a time in the past
@@ -107,6 +107,48 @@ testGovernanceLockHappyPath = do
   checkIsUnlocked alice unlockedHolding2
 
 
+testGovernanceLockMinimumLocksLockUnlockWithdraw : Script ()
+testGovernanceLockMinimumLocksLockUnlockWithdraw = do
+  env@TestEnv{..} <- setupTest
+
+  let someSvSpec = GovernanceLockSpecification with
+        subject = GLS_SuperValidatorRightsOwner "TestSV"
+
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 180000.0
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob 10000.0
+
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $ governanceLockRawChoice' env alice 8000.0 someSvSpec
+
+  successfulLockCid <- governanceLockRawChoice env alice 20000.0 someSvSpec
+
+  unlockAt <- (`addRelTime` minutes 5) <$> getTime
+
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $ governanceUnlockRawChoice' env successfulLockCid (Some 5000.0) unlockAt [alice]
+
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $ governanceUnlockRawChoice' env successfulLockCid (Some 15000.0) unlockAt [alice]
+
+  -- Exact amount should succeed.
+  (firstWithdrawnCid, Some remainingLockCid) <- governanceUnlockRawChoice env successfulLockCid (Some 10000.0) unlockAt [alice]
+
+  -- Unlock of full amount should succeed.
+  (_secondWithdrawnCid, None) <- governanceUnlockRawChoice env remainingLockCid None unlockAt [alice]
+
+  passTime (days 180)
+
+  now <- getTime
+
+  -- Partial withdraw should work even if the remainder is less than the minimum
+  (_, Some stillVestingCid) <- vestingWithdrawRawChoice env firstWithdrawnCid now [alice]
+
+  passTime (days 200)
+
+  now <- getTime
+
+  (_, None) <- vestingWithdrawRawChoice env stillVestingCid now [alice]
+
+  pure ()
+
+
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
 checkHolding' party holding amount = WalletClientV2.checkHolding party (toInterfaceContractId holding) amount
@@ -142,18 +184,6 @@ getExternalPartyConfigStateContext dso = do
     choiceContext = ChoiceContext $ TextMap.fromList
         [(externalPartyConfigStateContextKey, AV_ContractId $ coerceContractId newestConfigCid)]
     disclosures = extConfigDD
-
-
-
-getExternalPartyConfigStateContext2 : Party -> Script (ExternalPartyTransferContext, Disclosures')
-getExternalPartyConfigStateContext2 dso = do
-  extPartyConfigs <- query @ExternalPartyConfigState dso
-  let (externalPartyConfigState, _) = case maximumOn (\(_, c) -> c.targetArchiveAfter) extPartyConfigs of
-        None -> error "No ExternalPartyConfigState found: have you initialized the Amulet registry?"
-        Some c -> c
-  ecDD <- queryDisclosure' @ExternalPartyConfigState dso externalPartyConfigState
-  let eptc = ExternalPartyTransferContext with externalPartyConfigState; featuredAppRight = None
-  pure (eptc, ecDD)
 
 
 -- | a couple helpers to make the raw choice implementations easier to write
