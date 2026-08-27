@@ -121,6 +121,7 @@ data DsoRules_ActionRequiringConfirmation
     -- ^ Create BootstrapExternalPartyConfigStateInstruction
   | SRARC_UpdateFeaturedAppRight DsoRules_UpdateFeaturedAppRight
     -- ^ Update a specific featured app right.
+  | SRARC_UpdateFeaturedAppUnderlock DsoRules_UpdateFeaturedAppUnderlock
   deriving (Eq, Show, Serializable)
 
 data AnsEntryContext_ActionRequiringConfirmation
@@ -233,6 +234,9 @@ data DsoRules_RevokeFeaturedAppRightResult = DsoRules_RevokeFeaturedAppRightResu
 
 data DsoRules_UpdateFeaturedAppRightResult = DsoRules_UpdateFeaturedAppRightResult with
     result : FeaturedAppRight_UpdateResult
+  deriving (Serializable)
+
+data DsoRules_UpdateFeaturedAppUnderlockResult = DsoRules_UpdateFeaturedAppUnderlockResult
   deriving (Serializable)
 
 data DsoRules_OnboardValidatorResult = DsoRules_OnboardValidatorResult with
@@ -543,12 +547,26 @@ data DsoRulesConfig = DsoRulesConfig with
     nextScheduledSynchronizerUpgrade: Optional SynchronizerUpgradeSchedule
     voteCooldownTime : Optional RelTime -- ^ The minimum time between two votes by the same SV.
     nextScheduledLogicalSynchronizerUpgrade: Optional LogicalSynchronizerUpgradeSchedule
+    faDefaultRequiredLockAmount : Optional Decimal -- ^ The amount of amulet required to be locked by an FA to maintain their FeaturedAppRight if its requiredLockAmount is None.
+    faUnderlockGracePeriod : Optional RelTime -- ^ The amount of time after which automatic enforcement will withdraw a FeaturedAppRight if its provider remains underlocked.
+    faUnderlockEnforcementEnabled : Optional Bool -- ^ Whether automatic FA underlock enforcement may now occur, used to support a transitionary period.
   deriving (Eq, Show, Serializable)
 
 -- | Read the `voteCooldownTime` from the `DsoRulesConfig` with a default value of 1 minute.
 getVoteCooldownTime : DsoRulesConfig -> RelTime
 getVoteCooldownTime config = fromOptional (minutes 1) config.voteCooldownTime
 
+-- | Read the `faDefaultRequiredLockAmount` from the `DsoRulesConfig` with a default value of 5_000_000.0
+getFaDefaultRequiredLockAmount : DsoRulesConfig -> Decimal
+getFaDefaultRequiredLockAmount config = fromOptional 5_000_000.0 config.faDefaultRequiredLockAmount
+
+-- | Read the `faUnderlockGracePeriod` from the `DsoRulesConfig` with a default value of 7 days.
+getFaUnderlockGracePeriod : DsoRulesConfig -> RelTime
+getFaUnderlockGracePeriod config = fromOptional (days 7) config.faUnderlockGracePeriod
+
+-- | Read the `faUnderlockEnforcementEnabled` from the `DsoRulesConfig` with a default value of False.
+getFaUnderlockEnforcementEnabled : DsoRulesConfig -> Bool
+getFaUnderlockEnforcementEnabled config = fromOptional False config.faUnderlockEnforcementEnabled
 
 data SynchronizerUpgradeSchedule = SynchronizerUpgradeSchedule with
     time : Time
@@ -573,6 +591,13 @@ data LogicalSynchronizerUpgradeSchedule = LogicalSynchronizerUpgradeSchedule
 
 data TrafficState = TrafficState with
     consumedTraffic: Int -- ^ Bytes of extra traffic consumed before the decentralized synchronizer was bootstrapped.
+  deriving (Eq, Show, Serializable)
+
+-- | This is an enumeration of the transitions in underlocking state that can be caused by DsoRules_UpdateFeaturedAppUnderlock
+data FaUnderlockTransition =
+    FaUnderlockTransition_Open -- ^ Transition to underlocked state
+  | FaUnderlockTransition_Close -- ^ Transition to compliant state
+  | FaUnderlockTransition_Enforce -- ^ Withdraw rights
   deriving (Eq, Show, Serializable)
 
 template DsoRules with
@@ -1072,12 +1097,15 @@ template DsoRules with
       with
         provider : Party
         activityWeight : Optional Decimal
+        requiredLockAmount : Optional Decimal
       controller dso
       do
         featuredAppRight <- create FeaturedAppRight with
           dso
           provider
           activityWeight
+          requiredLockAmount
+          firstUnderlockObservedAt = None
         return DsoRules_GrantFeaturedAppRightResult with ..
 
     nonconsuming choice DsoRules_RevokeFeaturedAppRight : DsoRules_RevokeFeaturedAppRightResult
@@ -1100,6 +1128,28 @@ template DsoRules with
         result <- exercise rightCid update
         return DsoRules_UpdateFeaturedAppRightResult with result
 
+    nonconsuming choice DsoRules_UpdateFeaturedAppUnderlock : DsoRules_UpdateFeaturedAppUnderlockResult
+      with
+        rightCid : ContractId FeaturedAppRight
+        transition : FaUnderlockTransition
+      controller dso
+      do
+        right <- fetchChecked (ForDso with dso) rightCid
+        now <- getTime
+        require "FA underlock enforcement is active"
+          (getFaUnderlockEnforcementEnabled this.config)
+        case transition of
+          FaUnderlockTransition_Open -> void $ exercise rightCid FeaturedAppRight_UpdateUnderlock with underlocked = True
+          FaUnderlockTransition_Close -> void $ exercise rightCid FeaturedAppRight_UpdateUnderlock with underlocked = False
+          FaUnderlockTransition_Enforce -> do
+            case right.firstUnderlockObservedAt of
+              None -> fail "FA right is not underlocked"
+              Some observedAt -> do
+                require "grace period elapsed"
+                  (observedAt `addRelTime` getFaUnderlockGracePeriod this.config <= now)
+                void $ exercise rightCid FeaturedAppRight_Withdraw with
+                  reason = "CIP-XXX underlock enforcement"
+        return DsoRules_UpdateFeaturedAppUnderlockResult
 
     -- Validator onboarding
     -----------------------
@@ -1868,6 +1918,7 @@ executeActionRequiringConfirmation dso dsoRulesCid amuletRulesCid act = case act
       SRARC_GrantFeaturedAppRight choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_RevokeFeaturedAppRight choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_UpdateFeaturedAppRight choiceArg -> void $ exercise dsoRulesCid choiceArg
+      SRARC_UpdateFeaturedAppUnderlock choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_SetConfig choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_UpdateSvRewardWeight choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_CreateExternalPartyAmuletRules choiceArg -> void $ exercise dsoRulesCid choiceArg
@@ -2109,6 +2160,9 @@ instance Patchable DsoRulesConfig where
     nextScheduledSynchronizerUpgrade = patch new.nextScheduledSynchronizerUpgrade base.nextScheduledSynchronizerUpgrade current.nextScheduledSynchronizerUpgrade
     nextScheduledLogicalSynchronizerUpgrade = patch new.nextScheduledLogicalSynchronizerUpgrade base.nextScheduledLogicalSynchronizerUpgrade current.nextScheduledLogicalSynchronizerUpgrade
     voteCooldownTime = patch new.voteCooldownTime base.voteCooldownTime current.voteCooldownTime
+    faDefaultRequiredLockAmount = patch new.faDefaultRequiredLockAmount base.faDefaultRequiredLockAmount current.faDefaultRequiredLockAmount
+    faUnderlockGracePeriod = patch new.faUnderlockGracePeriod base.faUnderlockGracePeriod current.faUnderlockGracePeriod
+    faUnderlockEnforcementEnabled = patch new.faUnderlockEnforcementEnabled base.faUnderlockEnforcementEnabled current.faUnderlockEnforcementEnabled
 
 instance Patchable SynchronizerUpgradeSchedule where
   patch new base current = SynchronizerUpgradeSchedule with

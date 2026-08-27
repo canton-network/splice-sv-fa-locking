@@ -110,6 +110,10 @@ data FeaturedAppRight_UpdateResult = FeaturedAppRight_UpdateResult with
 data FeaturedAppRight_CancelResult = FeaturedAppRight_CancelResult
   deriving (Serializable)
 
+data FeaturedAppRight_UpdateUnderlockResult = FeaturedAppRight_UpdateUnderlockResult with
+  featuredAppRightCid : ContractId FeaturedAppRight
+    deriving (Serializable)
+
 data AppRewardCoupon_DsoExpireResult = AppRewardCoupon_DsoExpireResult with
   featured : Bool
   amount : Decimal
@@ -307,10 +311,18 @@ template FeaturedAppRight with
       -- ^ Weight of the this provider's app activity in the computation of traffic-based app rewards.
       --
       -- If not set, the default weight of 1.0 is used.
+    requiredLockAmount : Optional Decimal
+      -- ^ Override of the network-wide minimum lock threshold.
+      -- None means that the default in DsoRulesConfig applies.
+    firstUnderlockObservedAt : Optional Time
+      -- ^ Ledger time at which the DSO first observed this provider underlocked.
+      -- Some t means suspended since time t, and archivable from t + grace period.
+      -- None means compliant. Never set before enforcement is activated.
   where
     signatory dso
     observer provider
     ensure 0.0 <= fromOptional defaultAppActivityWeight activityWeight
+        && 0.0 <= fromOptional 0.0 requiredLockAmount
 
     choice FeaturedAppRight_Update : FeaturedAppRight_UpdateResult
       with
@@ -333,6 +345,21 @@ template FeaturedAppRight with
     choice FeaturedAppRight_Cancel : FeaturedAppRight_CancelResult
       controller provider
       do return FeaturedAppRight_CancelResult
+
+    choice FeaturedAppRight_UpdateUnderlock : FeaturedAppRight_UpdateUnderlockResult
+      with
+        underlocked : Bool
+      controller dso
+      do
+        now <- getTime
+        let newObservedAt =
+              if underlocked
+                then Some (fromOptional now firstUnderlockObservedAt)
+                else None
+        featuredAppRightCid <- create this with
+          firstUnderlockObservedAt = newObservedAt
+        return FeaturedAppRight_UpdateUnderlockResult with
+          featuredAppRightCid
 
     interface instance Splice.Api.FeaturedAppRightV1.FeaturedAppRight for FeaturedAppRight where
       view = Splice.Api.FeaturedAppRightV1.FeaturedAppRightView with dso, provider
