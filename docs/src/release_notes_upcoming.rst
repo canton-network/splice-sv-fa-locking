@@ -25,3 +25,12 @@ release-notes:: Upcoming
 
         - Added a new public ``/v0/events/latest-record-time`` endpoint that returns the latest
           record time for which ``/v0/events`` will be able to return events.
+
+    - App Providers
+
+        - FeaturedAppRight now carries two optional fields: ``config`` for per-app configuration and
+          ``underlockPermanentAt`` for underlock enforcement.
+        - Once either is populated, either by a governance vote setting app-specific config, or by the right being
+          suspended for underlocking, that contract can no longer be read by participants running on an older version
+          of ``splice-amulet``. App providers whose nodes have not upgraded will lose visibility of their
+          ``FeaturedAppRight`` until their node upgrades.
