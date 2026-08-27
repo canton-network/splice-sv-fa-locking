@@ -315,9 +315,9 @@ fetchAmount forOwner holding = do
 
 changeLockedAmuletAmount : ContractId LockedAmulet -> ForOwner -> ExternalPartyTransferContext -> [ContractId Holding] -> Decimal -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
 changeLockedAmuletAmount lockedAmulet forOwner context inputHoldingCids amount = do
-  unlockedAmuletCid <- unlockAmulet forOwner lockedAmulet
+  (unlockedAmuletCid, lockProps) <- unlockAmulet forOwner lockedAmulet
   lockAmulet
     forOwner
-    [amount]
+    [(amount, lockProps)]
     inputHoldingCids
     context
