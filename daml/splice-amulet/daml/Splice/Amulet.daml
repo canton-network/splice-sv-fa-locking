@@ -110,6 +110,21 @@ data FeaturedAppRight_UpdateResult = FeaturedAppRight_UpdateResult with
 data FeaturedAppRight_CancelResult = FeaturedAppRight_CancelResult
   deriving (Serializable)
 
+data FeaturedAppRight_UpdateConfigResult = FeaturedAppRight_UpdateConfigResult with
+  featuredAppRightCid : ContractId FeaturedAppRight
+    deriving (Serializable)
+
+data FeaturedAppRight_SetUnderlockResult = FeaturedAppRight_SetUnderlockResult with
+  featuredAppRightCid : ContractId FeaturedAppRight
+    deriving (Serializable)
+
+data FeaturedAppRight_SetRecoveringResult = FeaturedAppRight_SetRecoveringResult with
+  featuredAppRightCid : ContractId FeaturedAppRight
+    deriving (Serializable)
+
+data FeaturedAppRight_EnforceUnderlockResult = FeaturedAppRight_EnforceUnderlockResult
+    deriving (Serializable)
+
 data AppRewardCoupon_DsoExpireResult = AppRewardCoupon_DsoExpireResult with
   featured : Bool
   amount : Decimal
@@ -299,18 +314,50 @@ template ValidatorRight with
 defaultAppActivityWeight : Decimal
 defaultAppActivityWeight = 1.0
 
+defaultFeaturedAppConfigInternal : FeaturedAppConfigInternal
+defaultFeaturedAppConfigInternal = FeaturedAppConfigInternal with
+  requiredLockAmount = None
+
+defaultFeaturedAppConfig : FeaturedAppConfig
+defaultFeaturedAppConfig = FeaturedAppConfig with
+  activityWeight = defaultAppActivityWeight
+  requiredLockAmount = None
+
+data FeaturedAppConfig = FeaturedAppConfig with
+    activityWeight : Decimal
+      -- ^ Weight of the this provider's app activity in the computation of traffic-based app rewards.
+    requiredLockAmount : Optional Decimal
+      -- ^ Override of the network-wide minimum lock threshold.
+      -- None means that the default in DsoRulesConfig applies.
+  deriving (Eq, Show, Serializable)
+
+data FeaturedAppConfigInternal = FeaturedAppConfigInternal with
+    requiredLockAmount : Optional Decimal
+  deriving (Eq, Show, Serializable)
+
+data FeaturedAppUnderlockState
+  = FAUS_Underlocked with permanentAt : Time
+  -- ^ Indicates that a FeaturedAppRight is suspended due to being underlocked, and gives the ledger time at which the right may be archived.
+  | FAUS_Recovering with compliantAt : Time
+  -- ^ Indicates that a FeaturedAppRight is suspended due to having recently recovered from its underlock state, and gives the ledger time at
+  -- which the suspension is lifted.
+  deriving (Eq, Show, Serializable)
+
 -- | The right for an application provider to earn featured app rewards.
 template FeaturedAppRight with
     dso : Party
     provider : Party
     activityWeight : Optional Decimal
       -- ^ Weight of the this provider's app activity in the computation of traffic-based app rewards.
-      --
-      -- If not set, the default weight of 1.0 is used.
+      -- If not set, use the default value of 1.0
+    config : Optional FeaturedAppConfigInternal
+    underlockState : Optional FeaturedAppUnderlockState
+      -- ^ If set, indicates that the featured app right is suspended, either because it is underlocked
   where
     signatory dso
     observer provider
     ensure 0.0 <= fromOptional defaultAppActivityWeight activityWeight
+        && 0.0 <= fromOptional 0.0 ((getFeaturedAppConfig this).requiredLockAmount)
 
     choice FeaturedAppRight_Update : FeaturedAppRight_UpdateResult
       with
@@ -334,20 +381,70 @@ template FeaturedAppRight with
       controller provider
       do return FeaturedAppRight_CancelResult
 
+    choice FeaturedAppRight_UpdateConfig : FeaturedAppRight_UpdateConfigResult
+      with
+        baseConfig : FeaturedAppConfig
+        newConfig : FeaturedAppConfig
+        reason : Text
+      controller dso
+      do
+        let configToSet = patch newConfig baseConfig (getFeaturedAppConfig this)
+        featuredAppRightCid <- create (setFeaturedAppConfig configToSet this)
+        return FeaturedAppRight_UpdateConfigResult with
+          featuredAppRightCid
+
+    choice FeaturedAppRight_SetUnderlock : FeaturedAppRight_SetUnderlockResult
+      with
+        permanentAt : Time
+      controller dso
+      do
+        -- To ensure that we don't accidentally extend an existing grace period automatically via this choice,
+        -- we leave the state unchanged if it is already underlocked.
+        featuredAppRightCid <- case this.underlockState of
+          Some (FAUS_Underlocked _) -> create this
+          _ -> create this with underlockState = Some (FAUS_Underlocked with permanentAt)
+        return FeaturedAppRight_SetUnderlockResult with
+          featuredAppRightCid
+
+    choice FeaturedAppRight_SetRecovering : FeaturedAppRight_SetRecoveringResult
+      with
+        compliantAt : Time
+      controller dso
+      do
+        featuredAppRightCid <- case this.underlockState of
+          None -> fail "FeaturedAppRight_SetRecovering: not underlocked"
+          Some (FAUS_Recovering _) -> create this
+          Some (FAUS_Underlocked _) -> create this with underlockState = Some (FAUS_Recovering with compliantAt)
+        return FeaturedAppRight_SetRecoveringResult with
+          featuredAppRightCid
+
+    choice FeaturedAppRight_EnforceUnderlock : FeaturedAppRight_EnforceUnderlockResult
+      controller dso
+      do
+        case underlockState of
+          Some (FAUS_Underlocked permanentAt) -> assertDeadlineExceeded "underlock permanence" permanentAt
+          _ -> fail "FeaturedAppRight_EnforceUnderlock: not underlocked"
+        -- archive
+        return FeaturedAppRight_EnforceUnderlockResult
+
     interface instance Splice.Api.FeaturedAppRightV1.FeaturedAppRight for FeaturedAppRight where
       view = Splice.Api.FeaturedAppRightV1.FeaturedAppRightView with dso, provider
 
       featuredAppRight_CreateActivityMarkerImpl _self arg = do
         validateAppRewardBeneficiaries arg.beneficiaries
-        let groupedBeneficiaries = Map.fromListWithR (+) (map (\b -> (b.beneficiary, b.weight)) arg.beneficiaries)
-        cids <- forA (Map.toList groupedBeneficiaries) $ \(beneficiary, weight) ->
-          create FeaturedAppActivityMarker
-            with
-              dso
-              provider
-              beneficiary = beneficiary
-              weight = weight
-        pure (Splice.Api.FeaturedAppRightV1.FeaturedAppRight_CreateActivityMarkerResult $ map toInterfaceContractId cids)
+        now <- getTime
+        if isFeaturedAppRightSuspended now this
+          then pure (Splice.Api.FeaturedAppRightV1.FeaturedAppRight_CreateActivityMarkerResult [])
+          else do
+            let groupedBeneficiaries = Map.fromListWithR (+) (map (\b -> (b.beneficiary, b.weight)) arg.beneficiaries)
+            cids <- forA (Map.toList groupedBeneficiaries) $ \(beneficiary, weight) ->
+              create FeaturedAppActivityMarker
+                with
+                  dso
+                  provider
+                  beneficiary = beneficiary
+                  weight = weight
+            pure (Splice.Api.FeaturedAppRightV1.FeaturedAppRight_CreateActivityMarkerResult $ map toInterfaceContractId cids)
 
     interface instance Splice.Api.FeaturedAppRightV2.FeaturedAppRight for FeaturedAppRight where
       view = Splice.Api.FeaturedAppRightV2.FeaturedAppRightView with dso, provider
@@ -356,15 +453,20 @@ template FeaturedAppRight with
         validateAppRewardBeneficiariesV2 arg.beneficiaries
         require "Weight >= 1.0" (fromOptional 1.0 arg.weight >= 1.0)
         require "Weight <= 10000.0" (fromOptional 1.0 arg.weight <= 10000.0)
-        let groupedBeneficiaries = Map.fromListWithR (+) (map (\b -> (b.beneficiary, b.weight)) arg.beneficiaries)
-        cids <- forA (Map.toList groupedBeneficiaries) $ \(beneficiary, weight) ->
-          create FeaturedAppActivityMarker
-            with
-              dso
-              provider
-              beneficiary = beneficiary
-              weight = weight * fromOptional 1.0 arg.weight
-        pure (Splice.Api.FeaturedAppRightV2.FeaturedAppRight_CreateActivityMarkerResult $ map toInterfaceContractId cids)
+
+        now <- getTime
+        if isFeaturedAppRightSuspended now this
+          then pure (Splice.Api.FeaturedAppRightV2.FeaturedAppRight_CreateActivityMarkerResult [])
+          else do
+            let groupedBeneficiaries = Map.fromListWithR (+) (map (\b -> (b.beneficiary, b.weight)) arg.beneficiaries)
+            cids <- forA (Map.toList groupedBeneficiaries) $ \(beneficiary, weight) ->
+              create FeaturedAppActivityMarker
+                with
+                  dso
+                  provider
+                  beneficiary = beneficiary
+                  weight = weight * fromOptional 1.0 arg.weight
+            pure (Splice.Api.FeaturedAppRightV2.FeaturedAppRight_CreateActivityMarkerResult $ map toInterfaceContractId cids)
 
 validateAppRewardBeneficiaries : [Splice.Api.FeaturedAppRightV1.AppRewardBeneficiary] -> Update ()
 validateAppRewardBeneficiaries beneficiaries = do
@@ -377,6 +479,49 @@ validateAppRewardBeneficiariesV2 beneficiaries = do
   require "Beneficiary weights are between 0.0 and 1.0" (all (\beneficiary -> 0.0 < beneficiary.weight && beneficiary.weight <= 1.0) beneficiaries)
   require "Beneficiary weights add up to 1.0" (sum (map (.weight) beneficiaries) == 1.0)
   require "There are at most 20 beneficiaries" (length beneficiaries <= 20)
+
+getFeaturedAppConfig : FeaturedAppRight -> FeaturedAppConfig
+getFeaturedAppConfig right = FeaturedAppConfig with
+  activityWeight = fromOptional defaultAppActivityWeight right.activityWeight
+  requiredLockAmount = (.requiredLockAmount) =<< right.config
+
+setFeaturedAppConfig : FeaturedAppConfig -> FeaturedAppRight -> FeaturedAppRight
+setFeaturedAppConfig newConfig right =
+  let newInternalConfig = FeaturedAppConfigInternal with
+        requiredLockAmount = newConfig.requiredLockAmount
+  in right with
+    activityWeight = if newConfig.activityWeight == defaultAppActivityWeight
+      then None
+      else Some $ newConfig.activityWeight
+    config = if newInternalConfig == defaultFeaturedAppConfigInternal then None else Some newInternalConfig
+
+isFeaturedAppRightSuspended : Time -> FeaturedAppRight -> Bool
+isFeaturedAppRightSuspended now right = case right.underlockState of
+  None -> False
+  Some (FAUS_Underlocked _) -> True
+  Some (FAUS_Recovering compliantAt) -> now < compliantAt
+
+-- | A governance-approved change to a FeaturedAppRight config.
+template FeaturedAppConfigUpdateInstruction with
+    dso : Party
+    provider : Party
+    baseConfig : FeaturedAppConfig
+    newConfig : FeaturedAppConfig
+    reason : Text
+  where
+    signatory dso
+    observer provider
+
+-- | A record of governance consensus that a FeaturedApp provider was underlocked.
+template FeaturedAppUnderlockInstruction with
+    dso : Party
+    provider : Party
+    underlocked : Bool
+      -- ^ True indicates that the DSO observed the given provider to be underlocked.
+      -- False indicates observed recovered from underlock.
+  where
+    signatory dso
+    observer provider
 
 -- | A marker created by a featured application for activity generated from that app. This is used
 -- to record activity other than amulet transfers where regular AppRewardCoupons are not created directly.
@@ -765,6 +910,12 @@ instance HasCheckedFetch FeaturedAppActivityMarker ForOwner where
 instance HasCheckedFetch FeaturedAppActivityMarker ForDso where
   contractGroupId FeaturedAppActivityMarker {..} = ForDso with dso
 
+instance HasCheckedFetch FeaturedAppConfigUpdateInstruction ForDso where
+  contractGroupId FeaturedAppConfigUpdateInstruction {..} = ForDso with dso
+
+instance HasCheckedFetch FeaturedAppUnderlockInstruction ForDso where
+  contractGroupId FeaturedAppUnderlockInstruction {..} = ForDso with dso
+
 instance HasCheckedFetch UnclaimedActivityRecord ForOwner where
   contractGroupId UnclaimedActivityRecord{..} = ForOwner with dso; owner = beneficiary
 
@@ -776,3 +927,8 @@ instance HasCheckedFetch DevelopmentFundCoupon ForOwner where
 
 instance HasCheckedFetch DevelopmentFundCoupon ForDso where
   contractGroupId DevelopmentFundCoupon{..} = ForDso with dso
+
+instance Patchable FeaturedAppConfig where
+  patch new base current = FeaturedAppConfig with
+    activityWeight = patch new.activityWeight base.activityWeight current.activityWeight
+    requiredLockAmount = patch new.requiredLockAmount base.requiredLockAmount current.requiredLockAmount

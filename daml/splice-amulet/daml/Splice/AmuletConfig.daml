@@ -223,12 +223,21 @@ validPackageConfig _ = True
 data GovernanceLockConfig = GovernanceLockConfig with
     minimumGovernanceLockAmount : Decimal
       -- ^ The minimum amount for a governance lock. Default: 10k Amulet.
+    faDefaultRequiredLockAmount : Decimal
+      -- ^ The amount of amulet required to be locked by an FA to maintain their FeaturedAppRight if its requiredLockAmount is None.
+    faUnderlockGracePeriod : RelTime
+      -- ^ The amount of time after which automatic enforcement will withdraw a FeaturedAppRight if its provider remains underlocked.
+    faUnderlockRecoveryPeriod : RelTime
+      -- ^ The amount of time after a suspended FA right is observed to be adequately locked before the suspension is lifted.
   deriving (Eq, Show, Serializable)
 
 -- | Unwrap Optional GovernanceLockConfig, using the defaults if None.
 getGovernanceLockConfig : Optional GovernanceLockConfig -> GovernanceLockConfig
 getGovernanceLockConfig cfg = flip fromOptional cfg $ GovernanceLockConfig with
   minimumGovernanceLockAmount = 10000.0
+  faDefaultRequiredLockAmount = 5_000_000.0
+  faUnderlockGracePeriod = days 7
+  faUnderlockRecoveryPeriod = hours 24
 
 instance Patchable RewardVersion where
   patch = patchScalar
@@ -284,3 +293,6 @@ instance Patchable PackageConfig where
 instance Patchable GovernanceLockConfig where
   patch new base current = GovernanceLockConfig with
     minimumGovernanceLockAmount = patch new.minimumGovernanceLockAmount base.minimumGovernanceLockAmount current.minimumGovernanceLockAmount
+    faDefaultRequiredLockAmount = patch new.faDefaultRequiredLockAmount base.faDefaultRequiredLockAmount current.faDefaultRequiredLockAmount
+    faUnderlockGracePeriod = patch new.faUnderlockGracePeriod base.faUnderlockGracePeriod current.faUnderlockGracePeriod
+    faUnderlockRecoveryPeriod = patch new.faUnderlockRecoveryPeriod base.faUnderlockRecoveryPeriod current.faUnderlockRecoveryPeriod
