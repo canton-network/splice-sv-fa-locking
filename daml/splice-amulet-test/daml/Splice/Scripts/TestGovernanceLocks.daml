@@ -10,10 +10,10 @@ import Splice.AmuletRules
 import Splice.Api.Token.HoldingV2 qualified as V2
 import Splice.ExternalPartyAmuletRules
 import Splice.ExternalPartyConfigState
-import Splice.GovernanceLocks
+import Splice.GovernanceLock
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
-import Splice.Testing.TokenStandard.WalletClientV2
+import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 import Splice.TokenStandard.Utils
 
@@ -34,36 +34,44 @@ testGovernanceLockHappyPath = do
 
   now <- getTime
 
-  let unlockTime = now `addRelTime` days 1
-
   -- Check that negative allocations are impossible
-  actionMustFail (expectMessageContains "The requirement 'Amount is positive' was not met.") $ governanceLockRawChoice' env bob (-10000.0) someSvSpec
+  actionMustFail (expectMessageContains "The requirement 'Amount is positive' was not met.") $
+    governanceLockRawChoice' env bob (-10000.0) someSvSpec
 
   -- Check that we can't unlock with a time in the past
-  actionMustFail (expectMessageContains "Ledger time is at or past deadline 'unlockAt' at") $ governanceUnlockRawChoice' env aliceLock (Some 80000.0) (now `addRelTime` days (-60)) [alice]
+  actionMustFail (expectMessageContains "Ledger time is at or past deadline 'unlockAt' at") $
+    governanceUnlockRawChoice' env aliceLock (Some 80000.0) (now `addRelTime` days (-60)) [alice]
 
   -- Check that bob can't unlock for alice - TODO: disclose to bob with explicit disclosure for this.
   -- actionMustFail (expectMessageContains "noodle") $ governanceUnlockRawChoice' env aliceLock (Some 80000.0) now [bob]
 
+  let unlockTime = now `addRelTime` days 1
+
   -- Unlock 80k Amulet such that 1/8th should result in 10k Amulet withdrawable after 1/8th year.
   (aliceVesting, Some aliceLock) <- governanceUnlockRawChoice env aliceLock (Some 80000.0) (unlockTime) [alice]
+
+  actionMustFail (expectMessageContains "'unlockAmount' is not greater than 'zero'") $
+    governanceUnlockRawChoice' env aliceLock (Some -80000.0) (unlockTime) [alice]
 
   -- Assert that we have a lock remaining of 100k Amulet.
   checkLockedHolding alice aliceLock 100000.0
 
   -- Check that we can't withdraw immediately, before unlockTime has arrived on-ledger
-  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'requestedAt' at") $ vestingWithdrawRawChoice' env aliceVesting unlockTime [alice]
+  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'requestedAt' at") $
+    vestingWithdrawRawChoice' env aliceVesting unlockTime [alice]
 
   passTime (hours 12)
   now <- getTime
 
   -- Check that we can't withdraw between now and the unlockTime
-  actionMustFail (expectMessageContains "'withdraw amount' is not greater than 'zero'") $ vestingWithdrawRawChoice' env aliceVesting now [alice]
+  actionMustFail (expectMessageContains "'withdraw amount' is not greater than 'zero'") $
+    vestingWithdrawRawChoice' env aliceVesting now [alice]
 
   passTime (days 1)
 
   -- Check that we can't withdraw exactly at the unlock time (nothing is vested yet).
-  actionMustFail (expectMessageContains "'withdraw amount' is not greater than 'zero'") $ vestingWithdrawRawChoice' env aliceVesting (unlockTime) [alice]
+  actionMustFail (expectMessageContains "'withdraw amount' is not greater than 'zero'") $
+    vestingWithdrawRawChoice' env aliceVesting (unlockTime) [alice]
 
   passTime (days 47)
 
@@ -76,7 +84,8 @@ testGovernanceLockHappyPath = do
 
   (unlocked, Some newVestingLock) <- vestingWithdrawRawChoice env aliceVesting withdrawTime [alice]
 
-  actionMustFail (expectMessageContains "'withdraw amount' is not greater than 'zero'") $ vestingWithdrawRawChoice' env newVestingLock withdrawTime [alice]
+  actionMustFail (expectMessageContains "'withdraw amount' is not greater than 'zero'") $
+    vestingWithdrawRawChoice' env newVestingLock withdrawTime [alice]
 
   -- Check that we did indeed unlock 10k amulet as expected - 1/8th of the total vesting amount of 80k.
   checkHolding' alice unlocked 10000.0
@@ -97,7 +106,7 @@ testGovernanceLockHappyPath = do
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
-checkHolding' party holding amount = checkHolding party (toInterfaceContractId holding) amount
+checkHolding' party holding amount = WalletClientV2.checkHolding party (toInterfaceContractId holding) amount
 
 checkIsUnlocked : (Implements a V2.Holding) => Party -> ContractId a -> Script ()
 checkIsUnlocked p holdingCid = do
@@ -106,10 +115,15 @@ checkIsUnlocked p holdingCid = do
   let holding = case holdingO of
         None -> error $ "Holding " <> show holdingCid <> " was not found"
         Some holding -> holding
-  unless (isUnlocked now holding.lock) $ fail $ "Holding " <> show holding <> " is not unlocked"
+  unless (WalletClientV2.isUnlocked now holding.lock) $ fail $ "Holding " <> show holding <> " is not unlocked"
 
 -- | Find the holding for a GovernanceLock or VestingLock, and check that it has the correct amount.
-checkLockedHolding : (Template t, HasEnsure t, HasField "lockedAmulet" t (ContractId LockedAmulet)) => Party -> ContractId t -> Decimal -> Script ()
+checkLockedHolding
+  :  (Template t, HasEnsure t, HasField "lockedAmulet" t (ContractId LockedAmulet))
+  => Party
+  -> ContractId t
+  -> Decimal
+  -> Script ()
 checkLockedHolding p lockCid amount = do
   Some lock <- queryContractId p lockCid
   checkHolding' p lock.lockedAmulet amount
@@ -144,7 +158,7 @@ governanceLockRawChoice' env owner amount specification = do
   let dso = env.instrId.admin
   [(eparCid, _)] <- query @ExternalPartyAmuletRules dso -- TODO: low priority: determine if there's already a way to call choices on this in the test env.
   disc <- queryDisclosure' dso eparCid
-  inputs <- listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
+  inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
   result <- submitWithTransferContext env (actAs [owner] <> discloseMany' disc) $
     \context -> exerciseCmd eparCid ExternalPartyAmuletRules_LockForGovernance with
       amount
@@ -154,10 +168,22 @@ governanceLockRawChoice' env owner amount specification = do
       owner
   pure $ (.governanceLock) <$> result
 
-governanceUnlockRawChoice : TestEnv -> ContractId GovernanceLock -> Optional Decimal -> Time -> [Party] -> Script (ContractId VestingLock, Optional (ContractId GovernanceLock))
+governanceUnlockRawChoice
+  :  TestEnv
+  -> ContractId GovernanceLock
+  -> Optional Decimal
+  -> Time
+  -> [Party]
+  -> Script (ContractId VestingLock, Optional (ContractId GovernanceLock))
 governanceUnlockRawChoice env cid unlockAmount unlockAt actors = errorIfLeft =<< governanceUnlockRawChoice' env cid unlockAmount unlockAt actors
 
-governanceUnlockRawChoice' : TestEnv -> ContractId GovernanceLock -> Optional Decimal -> Time -> [Party] -> Script (Either SubmitError (ContractId VestingLock, Optional (ContractId GovernanceLock)))
+governanceUnlockRawChoice'
+  :  TestEnv
+  -> ContractId GovernanceLock
+  -> Optional Decimal
+  -> Time
+  -> [Party]
+  -> Script (Either SubmitError (ContractId VestingLock, Optional (ContractId GovernanceLock)))
 governanceUnlockRawChoice' env cid unlockAmount unlockAt actors = do
   result <- submitWithTransferContext env (actAs actors) $ \context -> exerciseCmd cid GovernanceLock_Unlock with
     unlockAmount
@@ -166,10 +192,20 @@ governanceUnlockRawChoice' env cid unlockAmount unlockAt actors = do
     actors
   pure $ ((,) <$> (.vestingLock) <*> (.governanceLock)) <$> result
 
-vestingWithdrawRawChoice : TestEnv -> ContractId VestingLock -> Time -> [Party] -> Script (ContractId V2.Holding, Optional (ContractId VestingLock))
+vestingWithdrawRawChoice
+  :  TestEnv
+  -> ContractId VestingLock
+  -> Time
+  -> [Party]
+  -> Script (ContractId V2.Holding, Optional (ContractId VestingLock))
 vestingWithdrawRawChoice env cid requestedAt actors = errorIfLeft =<< vestingWithdrawRawChoice' env cid requestedAt actors
 
-vestingWithdrawRawChoice' : TestEnv -> ContractId VestingLock -> Time -> [Party] -> Script (Either SubmitError (ContractId V2.Holding, Optional (ContractId VestingLock)))
+vestingWithdrawRawChoice'
+  :  TestEnv
+  -> ContractId VestingLock
+  -> Time
+  -> [Party]
+  -> Script (Either SubmitError (ContractId V2.Holding, Optional (ContractId VestingLock)))
 vestingWithdrawRawChoice' env cid requestedAt actors = do
   result <- submitWithTransferContext env (actAs actors) $ \context -> exerciseCmd cid VestingLock_Withdraw with
     context
