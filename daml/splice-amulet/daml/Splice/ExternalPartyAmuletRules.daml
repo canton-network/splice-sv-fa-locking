@@ -29,7 +29,7 @@ import Splice.AmuletAllocation as AmuletAllocationV1
 import Splice.AmuletAllocationV2 as AmuletAllocationV2
 import Splice.AmuletTransferInstruction
 import Splice.AmuletRules
-import Splice.GovernanceLocks
+import Splice.GovernanceLock
 import Splice.Types
 import Splice.Util
 
@@ -143,7 +143,7 @@ template ExternalPartyAmuletRules
         owner : Party
       controller owner
       do
-        (governanceLock, changeHolding) <- createGovernanceLock dso amount inputs specification context owner
+        (governanceLock, changeHolding) <- governanceLock_lockForGovernance_impl dso amount inputs specification context owner
         pure $ ExternalPartyAmuletRules_LockForGovernanceResult with
           governanceLock
           changeHolding
