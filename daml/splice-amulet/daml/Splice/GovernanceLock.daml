@@ -36,7 +36,8 @@ data VestingLockSpecification
       subject : GovernanceLockType
   deriving (Eq, Show, Serializable)
 
-
+-- | A lock created to satisfy governance requirements, e.g., locking CC
+-- to retain SV weight or FA rights.
 template GovernanceLock
   with
     dso : Party
@@ -79,7 +80,6 @@ template GovernanceLock
                 lockedAmulet = stillLockedHolding
                 amount = amount - unlockAmount
             pure (vesting, Some governanceLock, unlockAmount)
-
 
         vestingLock <- create VestingLock with
           dso
@@ -159,7 +159,8 @@ data VestingLock_WithdrawResult
       -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
   deriving (Eq, Show, Serializable)
 
-calculateStillLockedAmount : Time -> VestingLock -> Optional Decimal -- None indicates the _full_ amount is available; the amount remaining is always _positive_.
+-- | Uses `None` to represent that no amount remains.
+calculateUnvestedAmount : Time -> VestingLock -> Optional Decimal 
 calculateStillLockedAmount currentTime VestingLock{ .. }
     | currentTime <= (endTime `addRelTime` (- vestingPeriod)) = Some 1.0
     | currentTime >= endTime = None
@@ -212,6 +213,7 @@ describeVestingSpecification lock = "Unlocking from supporting " <> describeGove
 
 -- Lock properties for LockSubject types
 
+-- TODO: make configurable
 vestingDurationFor : GovernanceLockType -> ExternalPartyTransferContext -> RelTime
 vestingDurationFor (GLS_FeaturedApp _) _ = days 60
 vestingDurationFor (GLS_SuperValidatorRightsOwner _) _ = days 365 + hours 6
@@ -219,7 +221,7 @@ vestingDurationFor (GLS_SuperValidatorRightsOwner _) _ = days 365 + hours 6
 -- Helpers for handling LockedAmulet
 -- =================================
 
--- Invariant: _none_ of these functions move amounts to new parties or modify total amounts of amulet, except potentially by minting from reward coupons.
+-- Invariant: _none_ of these functions move amounts to new parties or modify total amounts of amulet (except when minting from reward coupons).
 
 type LockSpecification = (Decimal, LockProperties)
 data LockProperties = LockProperties with
@@ -263,7 +265,7 @@ lockAmulet forOwner@ForOwner {..} amounts inputHoldingCids context = do
   let transfer = Splice.AmuletRules.Transfer with
         sender = owner
         provider = owner -- the sender is serving as its own "app provider"
-        outputs = (amounts <&>) $ \(amount, spec) ->
+        outputs = forA amounts $ \(amount, spec) ->
             TransferOutput with
               receiver = owner
               amount = amount
