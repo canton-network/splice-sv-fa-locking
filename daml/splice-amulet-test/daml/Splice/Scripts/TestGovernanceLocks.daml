@@ -106,8 +106,7 @@ testGovernanceLockHappyPath = do
 testTopUpHappyPath : Script ()
 testTopUpHappyPath = do
   env@TestEnv{..} <- setupTest
-  let dso = env.instrId.admin
-      someSvSpec = GovernanceLockSpecification with
+  let someSvSpec = GovernanceLockSpecification with
         subject = GLS_SuperValidatorRightsOwner "SomeApp"
 
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 280000.0
@@ -120,6 +119,30 @@ testTopUpHappyPath = do
 
   -- Alice had 1000.0 coming from setupTest
   checkHolding' alice changeHolding 256000.0
+
+testTopUpNegativePath : Script ()
+testTopUpNegativePath = do
+  env@TestEnv{..} <- setupTest
+  let someSvSpec = GovernanceLockSpecification with
+        subject = GLS_SuperValidatorRightsOwner "SomeApp"
+
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 280000.0
+
+  aliceLock <- governanceLockRawChoice env alice 10000.0 someSvSpec
+  checkLockedHolding alice aliceLock 10000.0
+
+  actionMustFail (expectMessageContains "The requirement 'Top up amount should be positive' was not met.") $
+    governanceLockTopUpRawChoice' env aliceLock (-5000.0) alice
+
+  actionMustFail (expectMessageContains "Insufficient funds: you are missing 39000.0 to complete this transfer.") $
+    governanceLockTopUpRawChoice' env aliceLock (300000.0) alice
+
+  actionMustFail (expectMessageContains "Insufficient funds: you are missing 15000.0 to complete this transfer.") $
+    submitWithTransferContext env (actAs alice)
+      $ \context -> exerciseCmd aliceLock GovernanceLock_TopUp with
+        topupAmount = 5000.0
+        inputs = []
+        context
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
