@@ -62,8 +62,6 @@ template GovernanceLock
       do
         checkActors actors [[owner]] -- TODO(canton-network/splice-sv-fa-locking#39): custom controllers
         assertWithinDeadline "unlockAt" unlockAt
-        forA_ unlockAmount $ \unlockAmount ->
-          require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
 
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
