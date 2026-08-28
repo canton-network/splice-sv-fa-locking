@@ -1,7 +1,6 @@
 module Splice.GovernanceLock where
 
 import DA.Assert
-import DA.Foldable (forA_)
 import DA.Functor
 import DA.Numeric
 import DA.Optional
@@ -59,8 +58,6 @@ template GovernanceLock
       do
         checkActors actors [[owner]] -- ^ TODO: custom controllers
         assertWithinDeadline "unlockAt" unlockAt
-        forA_ unlockAmount $ \unlockAmount ->
-          require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
 
         let vestingPeriod = vestingDurationFor specification.subject context
         let endTime = unlockAt `addRelTime` vestingPeriod
@@ -74,6 +71,7 @@ template GovernanceLock
             newLockedAmulet <- relockAmulet (ForOwner with dso; owner) lockedAmulet vestingLockProperties context
             pure (newLockedAmulet, None, amount)
           Some unlockAmount -> do -- Splitting.
+            require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
             (vesting, stillLockedHolding) <- splitLockedAmulet (ForOwner with dso; owner) lockedAmulet (unlockAmount, vestingLockProperties) context
             governanceLock <- create
               this with
@@ -157,7 +155,7 @@ template VestingLock
         checkActors actors [[owner]] -- ^ TODO: custom controllers
         assertDeadlineExceeded "requestedAt" requestedAt
 
-        let retainedAmount = calculateStillLockedAmount requestedAt this
+        let retainedAmount = calculateUnvestedAmount requestedAt this
 
         case retainedAmount of
           None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
@@ -188,9 +186,9 @@ data VestingLock_WithdrawResult
   deriving (Eq, Show, Serializable)
 
 -- | Uses `None` to represent that no amount remains.
-calculateUnvestedAmount : Time -> VestingLock -> Optional Decimal 
-calculateStillLockedAmount currentTime VestingLock{ .. }
-    | currentTime <= (endTime `addRelTime` (- vestingPeriod)) = Some 1.0
+calculateUnvestedAmount : Time -> VestingLock -> Optional Decimal
+calculateUnvestedAmount currentTime VestingLock{ .. }
+    | currentTime <= (endTime `addRelTime` (- vestingPeriod)) = Some vestingAmount
     | currentTime >= endTime = None
     | otherwise = Some $ vestingAmount `mul` fractionRemaining
   where
@@ -293,7 +291,7 @@ lockAmulet forOwner@ForOwner {..} amounts inputHoldingCids context = do
   let transfer = Splice.AmuletRules.Transfer with
         sender = owner
         provider = owner -- the sender is serving as its own "app provider"
-        outputs = forA amounts $ \(amount, spec) ->
+        outputs = amounts <&> \(amount, spec) ->
             TransferOutput with
               receiver = owner
               amount = amount

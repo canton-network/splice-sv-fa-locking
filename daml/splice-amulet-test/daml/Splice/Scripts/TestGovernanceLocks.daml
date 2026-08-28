@@ -51,7 +51,7 @@ testGovernanceLockHappyPath = do
   (aliceVesting, Some aliceLock) <- governanceUnlockRawChoice env aliceLock (Some 80000.0) (unlockTime) [alice]
 
   actionMustFail (expectMessageContains "'unlockAmount' is not greater than 'zero'") $
-    governanceUnlockRawChoice' env aliceLock (Some -80000.0) (unlockTime) [alice]
+    governanceUnlockRawChoice' env aliceLock (Some $ -80000.0) (unlockTime) [alice]
 
   -- Assert that we have a lock remaining of 100k Amulet.
   checkLockedHolding alice aliceLock 100000.0
