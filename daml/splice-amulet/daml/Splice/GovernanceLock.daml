@@ -62,6 +62,8 @@ template GovernanceLock
       do
         checkActors actors [[owner]] -- TODO(canton-network/splice-sv-fa-locking#39): custom controllers
         assertWithinDeadline "unlockAt" unlockAt
+        forA_ unlockAmount $ \unlockAmount ->
+          require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
 
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
@@ -246,6 +248,47 @@ describeGovernanceSpecification lock = "Locked to support " <> describeGovernanc
 describeVestingSpecification : VestingLockSpecification -> Text
 describeVestingSpecification lock = "Unlocking from supporting " <> describeGovernanceLockKind lock.kind
 
+-- Implementation for the LockForGovernance choice on ExternalPartyAmuletRules and core implementation of token standard v1 and v2 interfaces.
+
+governanceLock_lockForGovernance_impl
+  : Party
+ -> Decimal
+ -> [ContractId Holding]
+ -> GovernanceLockSpecification
+ -> ExternalPartyTransferContext
+ -> Party
+ -> Update (ContractId GovernanceLock, Optional (ContractId Amulet))
+governanceLock_lockForGovernance_impl dso amount inputs specification context owner = do
+  let lockProperties = LockProperties with
+        context = describeGovernanceSpecification specification
+        expiresAt = maxBound
+  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] inputs context
+  governanceLock <- create GovernanceLock with
+    dso
+    owner
+    amount
+    lockedAmulet
+    specification
+  pure $ (governanceLock, changeHolding)
+
+  -- TODO: implement V2 AllocationFactory in terms of above.
+  -- TODO: find and use binding point for "magic address" V1 token standard to above.
+
+-- Helpers for
+
+governanceToVestingSpecification : GovernanceLockSpecification -> VestingLockSpecification
+governanceToVestingSpecification GovernanceLockSpecification {..} = VestingLockSpecification {..}
+
+describeGovernanceLockType : GovernanceLockType -> Text
+describeGovernanceLockType (GLS_FeaturedApp with provider) = "Featured App party " <> partyToText provider
+describeGovernanceLockType (GLS_SuperValidatorRightsOwner with svName) = "Super Validator rights for " <> svName
+
+describeGovernanceSpecification : GovernanceLockSpecification -> Text
+describeGovernanceSpecification lock = "Locked to support " <> describeGovernanceLockType lock.subject
+
+describeVestingSpecification : VestingLockSpecification -> Text
+describeVestingSpecification lock = "Unlocking from supporting " <> describeGovernanceLockType lock.subject
+
 -- Lock properties for LockSubject types
 
 -- TODO(canton-network/splice-sv-fa-locking#39): make configurable
@@ -333,17 +376,3 @@ lockAmulet forOwner@ForOwner {..} specs inputHoldingCids context = do
     ( lockedAmulets
     , result.senderChangeAmulet
     )
-
-fetchAmount : ForOwner -> ContractId LockedAmulet -> Update Decimal
-fetchAmount forOwner holding = do
-  holdingView <- view . toInterface @Holding <$> fetchChecked forOwner holding
-  pure holdingView.amount
-
-changeLockedAmuletAmount : ContractId LockedAmulet -> ForOwner -> ExternalPartyTransferContext -> [ContractId Holding] -> Decimal -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
-changeLockedAmuletAmount lockedAmulet forOwner context inputHoldingCids amount = do
-  (unlockedAmuletCid, lockProps) <- unlockAmulet forOwner lockedAmulet
-  lockAmulet
-    forOwner
-    [(amount, lockProps)]
-    inputHoldingCids
-    context
