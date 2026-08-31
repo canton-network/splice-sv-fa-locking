@@ -257,7 +257,7 @@ unlockAmulet forOwner lockedAmuletCid = do
   return (unlockResult.amuletCid, (lock.amulet.amount.initialAmount, LockProperties with context = fromOptional "governance" lock.lock.optContext; expiresAt = lock.lock.expiresAt))
 
 lockAmulet : ForOwner -> [LockSpecification] -> [ContractId Holding] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
-lockAmulet forOwner@ForOwner {..} amounts inputHoldingCids context = do
+lockAmulet forOwner@ForOwner {..} specs inputHoldingCids context = do
   -- lock the amulet
   transferInputs <- holdingToTransferInputs forOwner inputHoldingCids
   let transfer = Splice.AmuletRules.Transfer with
