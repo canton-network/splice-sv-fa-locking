@@ -127,7 +127,7 @@ template VestingLock
         checkActors actors [[owner]] -- ^ TODO: custom controllers
         assertDeadlineExceeded "requestedAt" requestedAt
 
-        let retainedAmount = calculateUnvestedAmount requestedAt this
+        let unvestedAmount = calculateUnvestedAmount requestedAt this
 
         case retainedAmount of
           None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
