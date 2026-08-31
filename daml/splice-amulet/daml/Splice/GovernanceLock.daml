@@ -310,3 +310,12 @@ lockAmulet forOwner@ForOwner {..} amounts inputHoldingCids context = do
     ( lockedAmulets
     , result.senderChangeAmulet
     )
+
+changeLockedAmuletAmount : ContractId LockedAmulet -> ForOwner -> ExternalPartyTransferContext -> [ContractId Holding] -> Decimal -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
+changeLockedAmuletAmount lockedAmulet forOwner context inputHoldingCids amount = do
+  (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmulet
+  lockAmulet
+    forOwner
+    [(amount, lockProps)]
+    (toInterfaceContractId unlockedAmuletCid :: inputHoldingCids)
+    context
