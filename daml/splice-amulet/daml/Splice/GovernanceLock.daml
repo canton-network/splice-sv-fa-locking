@@ -95,7 +95,8 @@ template GovernanceLock
     choice GovernanceLock_TopUp : GovernanceLock_TopUpResult
       with
         topupAmount : Decimal -- ^ Amount by which the locked amount should be increased.
-        inputs : [ContractId Holding]
+        --inputs : [ContractId Holding]
+        inputs : GovernanceLock_Inputs
         context : ExternalPartyTransferContext
       controller owner
       do
@@ -129,6 +130,19 @@ data GovernanceLock_TopUpResult
       governanceLock : ContractId GovernanceLock
       changeHolding : Optional (ContractId Amulet)
   deriving (Eq, Show, Serializable)
+
+-- TODO: Should this be singular? Where we can pass in both holdings or svrewardcoupons together?
+data GovernanceLock_Inputs
+  = GovernanceLock_InputHolding [ContractId Holding]
+  | GovernanceLock_InputSvRewardCoupon TopUpSvRewardCoupon
+  deriving (Eq, Show, Serializable)
+
+data TopUpSvRewardCoupon
+  = TopUpSvRewardCoupon with
+      svRewardCoupons : [ContractId SvRewardCoupon]
+      rewardLockingPercentage : Decimal
+      -- TODO: Make sure this is enforced
+        -- ^ Percentage (specified as a number between 0.0 and 1.0) of the reward minting allowance to top up a governance lock with.
 
 template VestingLock
   with
@@ -284,9 +298,10 @@ unlockAmulet forOwner lockedAmuletCid = do
   return (unlockResult.amuletCid, (lock.amulet.amount.initialAmount, LockProperties with context = fromOptional "governance" lock.lock.optContext; expiresAt = lock.lock.expiresAt))
 
 lockAmulet : ForOwner -> [LockSpecification] -> [ContractId Holding] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
-lockAmulet forOwner@ForOwner {..} amounts inputHoldingCids context = do
+lockAmulet forOwner@ForOwner {..} amounts inputs context = do
   -- lock the amulet
-  transferInputs <- holdingToTransferInputs forOwner inputHoldingCids
+  -- TODO: Accept SVRewardCoupons as a transfer input
+  transferInputs <- holdingToTransferInputs forOwner inputs
   let transfer = Splice.AmuletRules.Transfer with
         sender = owner
         provider = owner -- the sender is serving as its own "app provider"
@@ -310,11 +325,17 @@ lockAmulet forOwner@ForOwner {..} amounts inputHoldingCids context = do
     , result.senderChangeAmulet
     )
 
-changeLockedAmuletAmount : ContractId LockedAmulet -> ForOwner -> ExternalPartyTransferContext -> [ContractId Holding] -> Decimal -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
-changeLockedAmuletAmount lockedAmulet forOwner context inputHoldingCids amount = do
+changeLockedAmuletAmount : ContractId LockedAmulet -> ForOwner -> ExternalPartyTransferContext -> GovernanceLock_Inputs -> Decimal -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
+changeLockedAmuletAmount lockedAmulet forOwner context inputs amount = do
   (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmulet
   lockAmulet
     forOwner
     [(amount, lockProps)]
-    (toInterfaceContractId unlockedAmuletCid :: inputHoldingCids)
+    (toInterfaceContractId unlockedAmuletCid :: inputs)
     context
+
+-- | Converting a set of top up inputs to inputs for an amulet transfer,
+-- unlocking any expired LockedAmulet holdings on the fly.
+topUpInputsToTransferInputs : ForOwner -> GovernanceLock_Inputs -> Update [TransferInput]
+topUpInputsToTransferInputs forOwner (TopUpInputHolding holdingCids) = holdingToTransferInputs forOwner holdingCids
+topUpInputsToTransferInputs forOwner _ = undefined
