@@ -22,13 +22,13 @@ import DA.Either
 import DA.Optional
 import qualified DA.Set as S
 import DA.Text as T
-import DA.List hiding (concat)
+import DA.List hiding (concat, any)
 import qualified DA.Map as Map
 import qualified DA.TextMap as TM
 import DA.Time
 import DA.Traversable (mapA)
-import DA.Foldable (concat, forA_)
-import Prelude hiding (mapA, concat)
+import DA.Foldable (concat, forA_, any, fold)
+import Prelude hiding (mapA, concat, any)
 
 -- Lock management
 -- ===============
@@ -48,23 +48,26 @@ data GovernanceLockOperation
   = GovernanceLockOperation_Allocate GovernanceLock
   | GovernanceLockOperation_TopUp TopUpAllocation
   | GovernanceLockOperation_Substitute SubstituteAllocation
+  deriving (Eq, Show)
 
 data TopUpAllocation =
   TopUpAllocation with
     allocationCid : ContractId V2.Allocation
+  deriving (Eq, Show)
 
 data SubstitutionProposal
   = Substitute_SV AggregatedLock
   | Substitute_Vesting VestingLock
+  deriving (Eq, Show)
 
-governanceLockForSubstitution Substitute_SV al = GovernanceLock_SVLocked al
-governanceLockForSubstitution Substitute_Vesting vl = GovernanceLock_VestingLocked vl
+governanceLockForSubstitution (Substitute_SV al) = GovernanceLock_SVLocked al
+governanceLockForSubstitution (Substitute_Vesting vl) = GovernanceLock_VestingLocked vl
 
 data SubstituteAllocation =
   SubstituteAllocation with
-    substituteForParty : Party
-    offeredLock : GovernanceLock
+    substituteCid : ContractId V2.Allocation
     topupCid : Optional (ContractId V2.Allocation)
+  deriving (Eq, Show)
 
 data AggregatedLock =
   AggregatedLock with
@@ -211,15 +214,17 @@ parseAndValidateGovernanceLockOperation fromAllocate dso alloc = do
       -- Note: instrument id of only amulet and non-zero allocation are already checked by AmuletAllocationV2 ensure clause.
       pure . Some $ GovernanceLockOperation_Allocate lock
     None -> do
-      let eitherCid = lookupFromContext @(ContractId V2.Allocation) alloc.extraArgs.context topUpAllocationMetadataKey
+      let topUpCid = lookupFromContext @(ContractId V2.Allocation) alloc.extraArgs.context topUpAllocationMetadataKey
       let substituteCid = lookupFromContext @(ContractId V2.Allocation) alloc.extraArgs.context substituteAllocationContextKey
-      case (,) <$> eitherCid <*> substituteCid of
+      case (,) <$> topUpCid <*> substituteCid of
         Left t -> assertFail t
         Right (None, None) -> pure None
         Right (Some topUpAllocationCid, None) ->
           pure . Some . GovernanceLockOperation_TopUp $ TopUpAllocation topUpAllocationCid
-        Right (optTopUpAllocationCid, Some substituteCid) ->
-          pure . Some . GovernanceLockOperation_Substitute $ SubstituteAllocation substituteCid optTopUpAllocationCid
+        Right (topupCid, Some substituteCid) ->
+          pure . Some . GovernanceLockOperation_Substitute $ SubstituteAllocation with
+            substituteCid
+            topupCid
 
 governanceLockProposal_rules (GovernanceLock_VestingLocked _)
   = assertFail "Creating vesting locks from an allocation instruction is not permitted"
@@ -274,7 +279,7 @@ instance CanAssert m => ParseLockDataFromMeta m GovernanceLockControllers where
 partiesFromText : Text -> Optional [Party]
 partiesFromText = eitherToOptional . parseCommaSeparated "Parties" partyFromText
 
-checkControllerSpecification : TM.TextMap Party -> [Party] -> ControllerSpecification -> Update ()
+checkControllerSpecification : CanAssert m => TM.TextMap Party -> [Party] -> ControllerSpecification -> m ()
 checkControllerSpecification svRightsParties actors set =
     require "Controllers must be one of the listed options" $
       any actorsMatch set
@@ -285,6 +290,26 @@ checkControllerSpecification svRightsParties actors set =
       && all (\a -> any (a `checkParty`) set) actors
 
     checkParty = checkSvLockController svRightsParties
+
+
+type SimpleControllerSpecification = [[Party]]
+
+updateGovernanceLockForApprovers
+  : (HasToInterface a V2.Allocation, GovernanceAllocation a, CanAssert m)
+  => a
+  -> (GovernanceLock -> Optional [[Party]])
+  -> [Party]
+  -> [Party]
+  -> m ([Party], Bool)
+updateGovernanceLockForApprovers alloc accessor priorActors actors = do
+    require "all actors must be mentioned in the lock controllers" $ S.fromList actors `S.isSubsetOf` partiesInSet
+    pure (S.toList newActors, any (`S.isSubsetOf` newActors) lockSets)
+  where
+    allocView : V2.AllocationView = view $ toInterface @V2.Allocation alloc
+    lockView = fromOptional [[regularAccountOwner allocView.allocation.authorizer]] $ getGovernanceLock alloc >>= accessor
+    lockSets = S.fromList $ S.fromList <$> lockView
+    partiesInSet = fold lockSets
+    newActors = S.fromList $ priorActors <> actors
 
 
 -- This will also need to get a configuration template to set the vesting period and potentially other settings.

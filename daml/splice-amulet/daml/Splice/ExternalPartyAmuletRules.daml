@@ -784,11 +784,14 @@ governanceAllocateImpl arg@V2.AllocationFactory_Allocate{..} = do
 
 
 governanceAllocateSubstitutionImpl : V2.AllocationFactory_Allocate -> GovernanceLockOperation -> Decimal -> Update V2.AllocationInstructionResult
-governanceAllocateSubstitutionImpl arg (SubstituteAllocation with substituteForParty; offeredLock; topupCid) allocationAmount = do
+governanceAllocateSubstitutionImpl arg (SubstituteAllocation with substituteCid; topupCid) allocationAmount = do
+
+      -- Check allocation constraints
+      let [(_, allocationAmount)] = TextMap.toList arg.allocation.nextIterationFunding
 
       -- Allocate the funds for the substitution
       (lockedAmulet, senderChangeCids, expiresAt, meta) <-
-        amulet_allocationFactoryV2_allocateImplCore (ExternalPartyAmuletRules dso) newArg allocationAmount
+        amulet_allocationFactoryV2_allocateImplCore (ExternalPartyAmuletRules dso) arg allocationAmount
 
       substituteWithCid <- toInterfaceContractId <$> create AmuletAllocationV2 with
         settlement = arg.settlement
