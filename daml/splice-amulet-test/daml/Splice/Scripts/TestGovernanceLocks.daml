@@ -380,6 +380,104 @@ testGovernanceLockProvisionalPartialWithdrawScenario ops = do
   -- The remaining 10k stays locked
   checkLockedHolding alice remainingLock 20000.0
 
+-- FIXME: test proposal withdrawal
+-- FIXME: test with vesting locks
+-- FIXME: test that the resulting locks are as expected wrt their properties
+
+testSubstitution_governanceLock : Script ()
+testSubstitution_governanceLock = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+
+  let dso = env.instrId.admin
+  let someSvSpec = GovernanceLockSpecification with
+        kind = GLK_SuperValidatorRightsOwner "TestSV"
+
+  let testLockAmount = 180000.0
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice (testLockAmount - 1000.0) -- Env creates 1000.0 for alice, so we top up to 180k
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob testLockAmount
+
+  aliceLock <- governanceLockRawChoice registry alice testLockAmount someSvSpec
+
+  -- check balances
+  let checkBalances (aliceUnlocked, aliceLocked) (bobUnlocked, bobLocked) = do
+        WalletClientV2.checkUnlockedBalance alice env.instrId aliceUnlocked
+        WalletClientV2.checkBalance alice env.instrId (aliceUnlocked + aliceLocked)
+        WalletClientV2.checkUnlockedBalance bob env.instrId bobUnlocked
+        WalletClientV2.checkBalance bob env.instrId (bobUnlocked + bobLocked)
+
+  checkBalances (0.0, testLockAmount) (testLockAmount, 0.0)
+
+  -- propose partial subst
+  let testSubstAmount = 50000.0
+
+  -- FIXME: share that submission code with the other instances
+  [(rulesCid, _)] <- query @ExternalPartyAmuletRules dso
+  disc <- queryDisclosure' dso rulesCid
+  inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
+  result <- submitWithTransferContext registry (actAs [bob] <> discloseMany' disc) $ \context ->
+    exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
+      args = CreateSubstitutionProposalArgs with
+        dso
+        substitutedLock = SubstitutedLock with
+          owner = alice
+          amount = testLockAmount
+          specification = someSvSpec
+        proposer = bob
+        amount = testSubstAmount
+        inputHoldingCids = map downcast inputHoldingCids
+        extraArgs = emptyExtraArgs with context
+  errorIfLeft result
+
+  checkBalances (0.0, testLockAmount) (testLockAmount - testSubstAmount, testSubstAmount)
+
+  -- accept substitution
+  [(proposalCid, _)] <- query @SubstitutionProposal dso
+  result <- submitWithTransferContext registry (actAs [alice]) $ \context ->
+    exerciseCmd proposalCid SubstitutionProposal_Accept with
+      target = ST_GovernanceLock aliceLock
+      extraArgs = emptyExtraArgs with context
+  errorIfLeft result
+
+  checkBalances (testSubstAmount, testLockAmount - testSubstAmount) (testLockAmount - testSubstAmount, testSubstAmount)
+
+  -- propose full subst
+  [(rulesCid, _)] <- query @ExternalPartyAmuletRules dso
+  disc <- queryDisclosure' dso rulesCid
+  inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
+  result <- submitWithTransferContext registry (actAs [bob] <> discloseMany' disc) $ \context ->
+    exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
+      args = CreateSubstitutionProposalArgs with
+        dso
+        substitutedLock = SubstitutedLock with
+          owner = alice
+          amount = testLockAmount - testSubstAmount
+          specification = someSvSpec
+        proposer = bob
+        amount = testLockAmount - testSubstAmount
+        inputHoldingCids = map downcast inputHoldingCids
+        extraArgs = emptyExtraArgs with context
+  errorIfLeft result
+
+  checkBalances (testSubstAmount, testLockAmount - testSubstAmount) (0.0, testLockAmount)
+
+  -- accept substitution
+  [(aliceLock, _ )] <- query @GovernanceLock alice
+  [(proposalCid, _)] <- query @SubstitutionProposal dso
+  result <- submitWithTransferContext registry (actAs [alice]) $ \context ->
+    exerciseCmd proposalCid SubstitutionProposal_Accept with
+      target = ST_GovernanceLock aliceLock
+      extraArgs = emptyExtraArgs with context
+  errorIfLeft result
+
+  checkBalances (testLockAmount, 0.0) (0.0, testLockAmount)
+
+  pure ()
+
+
+-- Utilities
+------------
+
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
 checkHolding' party holding amount = WalletClientV2.checkHolding party (toInterfaceContractId holding) amount
