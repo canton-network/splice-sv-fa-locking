@@ -148,6 +148,13 @@ template ExternalPartyAmuletRules
           governanceLock
           changeHolding
 
+    nonconsuming choice ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution : () -- FIXME
+      with
+        args : CreateSubstitutionProposalArgs
+      controller args.proposer
+      do
+        (_proposal, _changeHolding) <- createSubstitutionProposal args
+        pure ()
 
     interface instance Api.Token.TransferInstructionV1.TransferFactory for ExternalPartyAmuletRules where
       view = Api.Token.TransferInstructionV1.TransferFactoryView with

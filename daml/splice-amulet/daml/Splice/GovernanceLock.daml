@@ -207,6 +207,9 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
 governanceToVestingSpecification : GovernanceLockSpecification -> VestingLockSpecification
 governanceToVestingSpecification GovernanceLockSpecification {..} = VestingLockSpecification {..}
 
+vestingToGovernanceSpecification : VestingLockSpecification -> GovernanceLockSpecification
+vestingToGovernanceSpecification VestingLockSpecification {..} = GovernanceLockSpecification {..}
+
 describeGovernanceLockType : GovernanceLockType -> Text
 describeGovernanceLockType (GLS_FeaturedApp with provider) = "Featured App party " <> partyToText provider
 describeGovernanceLockType (GLS_SuperValidatorRightsOwner with svName) = "Super Validator rights for " <> svName
@@ -236,6 +239,136 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
           featuredAppRight = None
        , configState )
 
+
+-- Substitution
+-- ============
+
+-- DESIGN DECISION: should we use this type as the key instead of the stable identifiers?
+-- ==> go for contract keys, as that is compatible with the long-term goal of fetching reference data via remote contract key lookups
+-- FIXME: actually switch to keys
+data SubstitutedLock = SubstitutedLock with
+    owner : Party
+    amount : Decimal
+    specification : GovernanceLockSpecification
+  deriving (Eq, Show, Serializable)
+
+data SubstitutionTarget
+  = ST_GovernanceLock with
+      governanceLockCid : ContractId GovernanceLock
+  | ST_VestingLock with
+      vestingLockCid : ContractId VestingLock
+  deriving (Eq, Show, Serializable)
+
+template SubstitutionProposal with
+    dso : Party
+    substitutedLock : SubstitutedLock
+    proposer : Party -- ^ Party that proposed the substitution
+    amount : Decimal -- ^ Amount being substituted
+    lockedAmulet : ContractId LockedAmulet -- ^ Amulet providing the funds
+  where
+    signatory dso, proposer
+    observer substitutedLock.owner
+
+    choice SubstitutionProposal_Accept : ()
+      with
+        target : SubstitutionTarget
+        extraArgs : ExtraArgs
+        -- TODO: add actors as part of adding support for custom substitution controllers
+      controller substitutedLock.owner
+      do
+        -- fetch and archive the referenced lock
+        let substitutedLockOwner = ForOwner with dso; owner = substitutedLock.owner
+        (substitutedLockedAmulet, mkLock) <- case target of
+          ST_GovernanceLock lockCid -> do
+            lock <- fetchAndArchive substitutedLockOwner lockCid
+            -- check that it matches the lock that we expect to substitute
+            let actualLock = SubstitutedLock with
+                  owner = lock.owner
+                  amount = lock.amount
+                  specification = lock.specification
+            requireMatchExpected ("substituted lock", actualLock) substitutedLock
+            let mkLock lockOwner lockAmount lockedAmulet = do
+                  create GovernanceLock with
+                    dso
+                    owner = lockOwner
+                    amount = lockAmount
+                    lockedAmulet
+                    specification = substitutedLock.specification
+                  pure ()
+            pure (lock.lockedAmulet, mkLock)
+          ST_VestingLock lockCid -> do
+            lock <- fetchAndArchive substitutedLockOwner lockCid
+            -- check that it matches the lock that we expect to substitute
+            let actualLock = SubstitutedLock with
+                  owner = lock.owner
+                  amount = lock.vestingAmount
+                  specification = vestingToGovernanceSpecification lock.specification
+            requireMatchExpected ("substituted lock", actualLock) substitutedLock
+            let mkLock lockOwner lockAmount lockedAmulet = do
+                  create VestingLock with
+                    dso
+                    owner = lockOwner
+                    lockedAmulet
+                    vestingPeriod = lock.vestingPeriod
+                    endTime = lock.endTime
+                    vestingAmount = lockAmount
+                    specification = governanceToVestingSpecification substitutedLock.specification
+                  pure () -- FIXME: decide whether we want an interface for locks, or use AnyContractId
+            pure (lock.lockedAmulet, mkLock)
+
+        if amount == substitutedLock.amount
+          then do
+            -- liquidate the whole amount
+            -- FIXME: prudent engineering: check amount to be on the safe side
+            unlockAmulet substitutedLockOwner substitutedLockedAmulet
+            -- create new lock
+            mkLock proposer amount lockedAmulet
+          else do
+            -- liquidate part of the amount
+            context <- externalPartyTransferFromChoiceContext dso extraArgs.context
+            let remainingAmount = substitutedLock.amount - amount
+            (newLockedAmulet, _unlockedAmulet) <-
+              partialUnlock substitutedLockOwner substitutedLockedAmulet remainingAmount context
+            mkLock substitutedLock.owner remainingAmount newLockedAmulet
+            mkLock proposer amount lockedAmulet
+
+        pure ()
+
+    choice SubstitutionProposal_Withdraw : () -- FIXME: proper type, above as well
+      controller proposer
+      do
+        unlockAmulet (ForOwner with dso; owner = proposer) lockedAmulet
+        pure ()
+
+-- | Type to simplify passing in all the arguments required to create a substitution proposal.
+--
+-- TODO: move this to a separate utlity pacakge `splice-governance-lock-utils`, which then also contains the codecs to and from TSv2 choices
+data CreateSubstitutionProposalArgs = CreateSubstitutionProposalArgs with
+    dso : Party
+    substitutedLock : SubstitutedLock
+    proposer : Party -- ^ Party that proposed the substitution
+    amount : Decimal -- ^ Amount being substituted
+    inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
+    extraArgs : ExtraArgs
+  deriving (Eq, Show)
+
+
+createSubstitutionProposal : CreateSubstitutionProposalArgs -> Update (ContractId SubstitutionProposal, Optional (ContractId Amulet))
+createSubstitutionProposal CreateSubstitutionProposalArgs {..} = do
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+  requireMinimumLock state amount
+  let lockProperties = LockProperties with
+        -- FIXME: context decscription reads a bit strangely
+        context = "Substitution proposal for " <> describeGovernanceSpecification substitutedLock.specification
+        expiresAt = maxBound
+  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner = proposer) [(amount, lockProperties)] inputHoldingCids context
+  proposal <- create SubstitutionProposal with
+    dso
+    substitutedLock
+    proposer
+    amount
+    lockedAmulet
+  pure $ (proposal, changeHolding)
 
 
 -- Helpers for handling LockedAmulet
@@ -305,3 +438,17 @@ lockAmulet forOwner@ForOwner {..} amounts inputHoldingCids context = do
     , result.senderChangeAmulet
     )
 
+fetchAmount : ForOwner -> ContractId LockedAmulet -> Update Decimal
+fetchAmount forOwner holding = do
+  holdingView <- view . toInterface @Holding <$> fetchChecked forOwner holding
+  pure holdingView.amount
+
+
+-- Instances
+------------
+
+instance HasCheckedFetch GovernanceLock ForOwner where
+  contractGroupId GovernanceLock{..} = ForOwner with dso; owner = owner
+
+instance HasCheckedFetch VestingLock ForOwner where
+  contractGroupId VestingLock{..} = ForOwner with dso; owner = owner
