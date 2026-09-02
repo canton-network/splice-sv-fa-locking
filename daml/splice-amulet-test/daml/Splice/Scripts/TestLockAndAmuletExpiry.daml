@@ -36,7 +36,7 @@ scaleAmuletConfig amuletPrice config = AmuletConfig with
   externalPartyConfigStateTickDuration = config.externalPartyConfigStateTickDuration
   rewardConfig = config.rewardConfig
   transferPreapprovalBaseDuration = config.transferPreapprovalBaseDuration
-  minimumGovernanceLock = None
+  governanceLockConfig = None
 
 test : Script ()
 test = script do

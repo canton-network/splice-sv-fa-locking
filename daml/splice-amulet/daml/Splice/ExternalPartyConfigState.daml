@@ -27,7 +27,7 @@ template ExternalPartyConfigState
     transferConfig : TransferConfigV2 Unit.USD -- ^ Transfer config at the time the config state was created.
     targetArchiveAfter : Time -- ^ Lower bound on the time the contract gets archived, not enforced as a strict upper bound.
     rewardCalculationVersion : Optional RewardVersion -- ^ The reward calculation version to use for transactions relying on this config state.
-    minimumGovernanceLock : Optional Decimal -- ^ The minimum amount to enforce for a governance lock.
+    governanceLockConfig : Optional GovernanceLockConfig -- ^ Configuration for governance locks.
   where
     signatory dso
 
@@ -39,7 +39,6 @@ template ExternalPartyConfigState
         meta = emptyMetadata
 
       eventLog_holdingsChangeImpl = eventLog_holdingsChangeDefaultImpl dso
-
 
 instance HasCheckedFetch ExternalPartyConfigState ForDso where
   contractGroupId ExternalPartyConfigState {..} = ForDso with
