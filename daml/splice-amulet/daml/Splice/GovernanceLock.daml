@@ -196,8 +196,7 @@ calculateUnvestedAmount currentTime VestingLock{ .. }
     divRelTime : RelTime -> RelTime -> Numeric 37 -- Specifically valid and maximum cleanly represented range for 0 < a < b
     divRelTime = \a b -> (intToDecimal $ convertRelTimeToMicroseconds a) `div` (intToDecimal $ convertRelTimeToMicroseconds b)
 
--- Implementation for the LockForGovernance choice on ExternalPartyAmuletRules and core implementation of token standard v1 and v2 interfaces.
-
+-- | Implementation for the LockForGovernance choice on ExternalPartyAmuletRules and core implementation of token standard v1 and v2 interfaces.
 governanceLock_lockForGovernance_impl
   : Party
  -> Decimal
