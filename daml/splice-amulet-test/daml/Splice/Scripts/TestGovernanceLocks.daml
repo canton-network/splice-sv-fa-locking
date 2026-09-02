@@ -156,7 +156,7 @@ testTopUpNegativePath = do
     submitWithTransferContext env (actAs alice)
       $ \context -> exerciseCmd aliceLock GovernanceLock_TopUp with
         topupAmount = 5000.0
-        inputs = []
+        inputs = GovernanceLock_InputHolding []
         context
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
@@ -286,7 +286,7 @@ governanceLockTopUpRawChoice' env cid topupAmount owner = do
   inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
   result : Either SubmitError GovernanceLock_TopUpResult <- submitWithTransferContext env (actAs owner) $ \context -> exerciseCmd cid GovernanceLock_TopUp with
     topupAmount
-    inputs = downcast <$> inputs
+    inputs = GovernanceLock_InputHolding $ downcast <$> inputs
     context
   pure $ case result of
     Left e -> Left e

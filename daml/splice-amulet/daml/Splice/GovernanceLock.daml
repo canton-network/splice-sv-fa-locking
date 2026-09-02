@@ -95,7 +95,6 @@ template GovernanceLock
     choice GovernanceLock_TopUp : GovernanceLock_TopUpResult
       with
         topupAmount : Decimal -- ^ Amount by which the locked amount should be increased.
-        --inputs : [ContractId Holding]
         inputs : GovernanceLock_Inputs
         context : ExternalPartyTransferContext
       controller owner
@@ -143,6 +142,7 @@ data TopUpSvRewardCoupon
       rewardLockingPercentage : Decimal
       -- TODO: Make sure this is enforced
         -- ^ Percentage (specified as a number between 0.0 and 1.0) of the reward minting allowance to top up a governance lock with.
+  deriving (Eq, Show, Serializable)
 
 template VestingLock
   with
@@ -214,7 +214,7 @@ calculateUnvestedAmount currentTime VestingLock{ .. }
 governanceLock_lockForGovernance_impl
   : Party
  -> Decimal
- -> [ContractId Holding]
+ -> GovernanceLock_Inputs
  -> GovernanceLockSpecification
  -> ExternalPartyTransferContext
  -> Party
@@ -223,7 +223,7 @@ governanceLock_lockForGovernance_impl dso amount inputs specification context ow
   let lockProperties = LockProperties with
         context = describeGovernanceSpecification specification
         expiresAt = maxBound
-  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] inputs context
+  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] inputs None context
   governanceLock <- create GovernanceLock with
     dso
     owner
@@ -276,19 +276,19 @@ multiSplitLockedAmulet : ForOwner -> ContractId LockedAmulet -> [LockSpecificati
 multiSplitLockedAmulet forOwner lockedAmuletCid specs context = do
   (unlockedCid, (currentAmount, currentLockProps)) <- unlockAmulet forOwner lockedAmuletCid
   let finalAmount = currentAmount - sum (fst <$> specs)
-  (remainderLock::specifiedLocks, None) <- lockAmulet forOwner ((finalAmount, currentLockProps) :: specs) [toInterfaceContractId unlockedCid] context
+  (remainderLock::specifiedLocks, None) <- lockAmulet forOwner ((finalAmount, currentLockProps) :: specs) (GovernanceLock_InputHolding [toInterfaceContractId unlockedCid]) None context
   pure (specifiedLocks, remainderLock)
 
 partialUnlock : ForOwner -> ContractId LockedAmulet -> Decimal -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, ContractId Amulet)
 partialUnlock forOwner lockedAmuletCid stillLockedAmount context = do
   (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmuletCid
-  ([newLockedCid], Some unlockedAmulet) <- lockAmulet forOwner [(stillLockedAmount, lockProps)] [toInterfaceContractId $ unlockedAmuletCid] context
+  ([newLockedCid], Some unlockedAmulet) <- lockAmulet forOwner [(stillLockedAmount, lockProps)] (GovernanceLock_InputHolding [toInterfaceContractId $ unlockedAmuletCid]) None context
   pure (newLockedCid, unlockedAmulet)
 
 relockAmulet : ForOwner -> ContractId LockedAmulet -> LockProperties -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet)
 relockAmulet forOwner lockedAmuletCid newLockProperties context = do
   (amuletCid, (currentAmount, _)) <- unlockAmulet forOwner lockedAmuletCid
-  ([newLockedCid], None) <- lockAmulet forOwner [(currentAmount, newLockProperties)] [toInterfaceContractId $ amuletCid] context
+  ([newLockedCid], None) <- lockAmulet forOwner [(currentAmount, newLockProperties)] (GovernanceLock_InputHolding [toInterfaceContractId $ amuletCid]) None context
   pure newLockedCid
 
 unlockAmulet : ForOwner -> ContractId LockedAmulet -> Update (ContractId Amulet, LockSpecification)
@@ -297,11 +297,14 @@ unlockAmulet forOwner lockedAmuletCid = do
   unlockResult <- exercise lockedAmuletCid LockedAmulet_UnlockV2
   return (unlockResult.amuletCid, (lock.amulet.amount.initialAmount, LockProperties with context = fromOptional "governance" lock.lock.optContext; expiresAt = lock.lock.expiresAt))
 
-lockAmulet : ForOwner -> [LockSpecification] -> [ContractId Holding] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
-lockAmulet forOwner@ForOwner {..} amounts inputs context = do
+lockAmulet : ForOwner -> [LockSpecification] -> GovernanceLock_Inputs -> Optional (ContractId Amulet) -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
+lockAmulet forOwner@ForOwner {..} amounts inputs optUnlockedAmulet context = do
   -- lock the amulet
   -- TODO: Accept SVRewardCoupons as a transfer input
-  transferInputs <- holdingToTransferInputs forOwner inputs
+  transferInputs <- inputsToTransferInputs forOwner inputs
+  let transferInputs' : [TransferInput] = case optUnlockedAmulet of
+        Some unlockedAmuletCid -> InputAmulet unlockedAmuletCid :: transferInputs
+        None -> transferInputs
   let transfer = Splice.AmuletRules.Transfer with
         sender = owner
         provider = owner -- the sender is serving as its own "app provider"
@@ -315,7 +318,7 @@ lockAmulet forOwner@ForOwner {..} amounts inputs context = do
                 holders = [dso]
                 optContext = Some spec.context
               meta = Some (reasonToMeta ("lock for " <> spec.context) emptyMetadata)
-        inputs = transferInputs
+        inputs = transferInputs'
         beneficiaries = None
 
   result <- executeExternalPartyTransfer forOwner.dso context transfer
@@ -331,11 +334,12 @@ changeLockedAmuletAmount lockedAmulet forOwner context inputs amount = do
   lockAmulet
     forOwner
     [(amount, lockProps)]
-    (toInterfaceContractId unlockedAmuletCid :: inputs)
+    inputs
+    (Some unlockedAmuletCid)
     context
 
--- | Converting a set of top up inputs to inputs for an amulet transfer,
--- unlocking any expired LockedAmulet holdings on the fly.
-topUpInputsToTransferInputs : ForOwner -> GovernanceLock_Inputs -> Update [TransferInput]
-topUpInputsToTransferInputs forOwner (TopUpInputHolding holdingCids) = holdingToTransferInputs forOwner holdingCids
-topUpInputsToTransferInputs forOwner _ = undefined
+-- | Converting a set of inputs to inputs for an amulet transfer,
+inputsToTransferInputs : ForOwner -> GovernanceLock_Inputs -> Update [TransferInput]
+inputsToTransferInputs forOwner (GovernanceLock_InputHolding holdingCids) = holdingToTransferInputs forOwner holdingCids
+-- TODO
+inputsToTransferInputs _ _ = undefined
