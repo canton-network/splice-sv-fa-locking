@@ -248,7 +248,6 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
 -- FIXME: actually switch to keys
 data SubstitutedLock = SubstitutedLock with
     owner : Party
-    amount : Decimal
     specification : GovernanceLockSpecification
   deriving (Eq, Show, Serializable)
 
@@ -278,13 +277,12 @@ template SubstitutionProposal with
       do
         -- fetch and archive the referenced lock
         let substitutedLockOwner = ForOwner with dso; owner = substitutedLock.owner
-        (substitutedLockedAmulet, mkLock) <- case target of
+        (substitutedLockedAmulet, lockedAmount, mkLock) <- case target of
           ST_GovernanceLock lockCid -> do
             lock <- fetchAndArchive substitutedLockOwner lockCid
             -- check that it matches the lock that we expect to substitute
             let actualLock = SubstitutedLock with
                   owner = lock.owner
-                  amount = lock.amount
                   specification = lock.specification
             requireMatchExpected ("substituted lock", actualLock) substitutedLock
             let mkLock lockOwner lockAmount lockedAmulet = do
@@ -295,13 +293,12 @@ template SubstitutionProposal with
                     lockedAmulet
                     specification = substitutedLock.specification
                   pure ()
-            pure (lock.lockedAmulet, mkLock)
+            pure (lock.lockedAmulet, lock.amount, mkLock)
           ST_VestingLock lockCid -> do
             lock <- fetchAndArchive substitutedLockOwner lockCid
             -- check that it matches the lock that we expect to substitute
             let actualLock = SubstitutedLock with
                   owner = lock.owner
-                  amount = lock.vestingAmount
                   specification = vestingToGovernanceSpecification lock.specification
             requireMatchExpected ("substituted lock", actualLock) substitutedLock
             let mkLock lockOwner lockAmount lockedAmulet = do
@@ -314,24 +311,27 @@ template SubstitutionProposal with
                     vestingAmount = lockAmount
                     specification = governanceToVestingSpecification substitutedLock.specification
                   pure () -- FIXME: decide whether we want an interface for locks, or use AnyContractId
-            pure (lock.lockedAmulet, mkLock)
+            pure (lock.lockedAmulet, lock.vestingAmount, mkLock)
 
-        if amount == substitutedLock.amount
-          then do
-            -- liquidate the whole amount
-            -- FIXME: prudent engineering: check amount to be on the safe side
-            unlockAmulet substitutedLockOwner substitutedLockedAmulet
-            -- create new lock
-            mkLock proposer amount lockedAmulet
-          else do
+        case amount `compare` lockedAmount of
+          LT -> do
             -- liquidate part of the amount
-            context <- externalPartyTransferFromChoiceContext dso extraArgs.context
-            let remainingAmount = substitutedLock.amount - amount
+            (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+
+            let remainingAmount = lockedAmount - amount
+            requireMinimumLock state remainingAmount
+            requireMinimumLock state amount
+
             (newLockedAmulet, _unlockedAmulet) <-
               partialUnlock substitutedLockOwner substitutedLockedAmulet remainingAmount context
             mkLock substitutedLock.owner remainingAmount newLockedAmulet
             mkLock proposer amount lockedAmulet
-
+          EQ -> do
+            -- liquidate the whole amount
+            unlockAmulet substitutedLockOwner substitutedLockedAmulet
+            mkLock proposer amount lockedAmulet
+          GT ->
+            fail $ "substituted lock has less funds (" <> show lockedAmount <> ") than the amount proposed to be substituted (" <> show amount <> ")"
         pure ()
 
     choice SubstitutionProposal_Withdraw : () -- FIXME: proper type, above as well

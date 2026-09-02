@@ -159,7 +159,7 @@ testSubstitution_governanceLock = do
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice (testLockAmount - 1000.0) -- Env creates 1000.0 for alice, so we top up to 180k
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob testLockAmount
 
-  aliceLock <- governanceLockRawChoice env alice testLockAmount someSvSpec
+  governanceLockRawChoice env alice testLockAmount someSvSpec
 
   -- check balances
   let checkBalances (aliceUnlocked, aliceLocked) (bobUnlocked, bobLocked) = do
@@ -170,37 +170,44 @@ testSubstitution_governanceLock = do
 
   checkBalances (0.0, testLockAmount) (testLockAmount, 0.0)
 
-  -- propose partial subst
+  -- propose two partial substs
   let testSubstAmount = 50000.0
 
   -- FIXME: share that submission code with the other instances
   [(rulesCid, _)] <- query @ExternalPartyAmuletRules dso
   disc <- queryDisclosure' dso rulesCid
-  inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
-  result <- submitWithTransferContext env (actAs [bob] <> discloseMany' disc) $ \context ->
-    exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
-      args = CreateSubstitutionProposalArgs with
-        dso
-        substitutedLock = SubstitutedLock with
-          owner = alice
-          amount = testLockAmount
-          specification = someSvSpec
-        proposer = bob
-        amount = testSubstAmount
-        inputHoldingCids = map downcast inputHoldingCids
-        extraArgs = emptyExtraArgs with context
-  errorIfLeft result
+  let proposeSubstitution amount = do
+        inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
+        result <- submitWithTransferContext env (actAs [bob] <> discloseMany' disc) $ \context ->
+          exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
+            args = CreateSubstitutionProposalArgs with
+              dso
+              substitutedLock = SubstitutedLock with
+                owner = alice
+                specification = someSvSpec
+              proposer = bob
+              amount
+              inputHoldingCids = map downcast inputHoldingCids
+              extraArgs = emptyExtraArgs with context
+        errorIfLeft result
+
+  proposeSubstitution (testSubstAmount / 2.0)
+  proposeSubstitution (testSubstAmount / 2.0)
 
   checkBalances (0.0, testLockAmount) (testLockAmount - testSubstAmount, testSubstAmount)
 
   -- accept substitution
-  [(proposalCid, _)] <- query @SubstitutionProposal dso
-  result <- submitWithTransferContext env (actAs [alice]) $ \context ->
-    exerciseCmd proposalCid SubstitutionProposal_Accept with
-      target = ST_GovernanceLock aliceLock
-      extraArgs = emptyExtraArgs with context
-  errorIfLeft result
+  let acceptOneProposal = do
+        (proposalCid, _)::_ <- query @SubstitutionProposal dso
+        [(aliceLock, _ )] <- query @GovernanceLock alice
+        result <- submitWithTransferContext env (actAs [alice]) $ \context ->
+          exerciseCmd proposalCid SubstitutionProposal_Accept with
+            target = ST_GovernanceLock aliceLock
+            extraArgs = emptyExtraArgs with context
+        errorIfLeft result
 
+  acceptOneProposal
+  acceptOneProposal
   checkBalances (testSubstAmount, testLockAmount - testSubstAmount) (testLockAmount - testSubstAmount, testSubstAmount)
 
   -- propose full subst
@@ -213,7 +220,6 @@ testSubstitution_governanceLock = do
         dso
         substitutedLock = SubstitutedLock with
           owner = alice
-          amount = testLockAmount - testSubstAmount
           specification = someSvSpec
         proposer = bob
         amount = testLockAmount - testSubstAmount
@@ -224,6 +230,8 @@ testSubstitution_governanceLock = do
   checkBalances (testSubstAmount, testLockAmount - testSubstAmount) (0.0, testLockAmount)
 
   -- accept substitution
+  acceptOneProposal
+  {-
   [(aliceLock, _ )] <- query @GovernanceLock alice
   [(proposalCid, _)] <- query @SubstitutionProposal dso
   result <- submitWithTransferContext env (actAs [alice]) $ \context ->
@@ -231,6 +239,7 @@ testSubstitution_governanceLock = do
       target = ST_GovernanceLock aliceLock
       extraArgs = emptyExtraArgs with context
   errorIfLeft result
+  -}
 
   checkBalances (testLockAmount, 0.0) (0.0, testLockAmount)
 
