@@ -1,18 +1,13 @@
 module Splice.Scripts.TestGovernanceLocks where
 
 import DA.Action (unless)
-import DA.List.Total
-import DA.TextMap qualified as TextMap
 import DA.Time
 
 import Daml.Script
 import Splice.Amulet
-import Splice.Amulet.TokenApiUtils
-import Splice.AmuletRules
 import Splice.Api.Token.HoldingV2 qualified as V2
 import Splice.Api.Token.MetadataV1
 import Splice.ExternalPartyAmuletRules
-import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
@@ -147,6 +142,112 @@ testGovernanceLockMinimumLocksLockUnlockWithdraw = do
   (_, None) <- vestingWithdrawRawChoice env stillVestingCid now [alice]
 
   pure ()
+
+-- FIXME: test proposal withdrawal
+-- FIXME: test with vesting locks
+-- FIXME: test that the resulting locks are as expected wrt their properties
+
+testSubstitution_governanceLock : Script ()
+testSubstitution_governanceLock = do
+  env@TestEnv{..} <- setupTest
+
+  let dso = env.instrId.admin
+  let someSvSpec = GovernanceLockSpecification with
+        subject = GLS_SuperValidatorRightsOwner "TestSV"
+
+  let testLockAmount = 180000.0
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice (testLockAmount - 1000.0) -- Env creates 1000.0 for alice, so we top up to 180k
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob testLockAmount
+
+  governanceLockRawChoice env alice testLockAmount someSvSpec
+
+  -- check balances
+  let checkBalances (aliceUnlocked, aliceLocked) (bobUnlocked, bobLocked) = do
+        WalletClientV2.checkUnlockedBalance alice env.instrId aliceUnlocked
+        WalletClientV2.checkBalance alice env.instrId (aliceUnlocked + aliceLocked)
+        WalletClientV2.checkUnlockedBalance bob env.instrId bobUnlocked
+        WalletClientV2.checkBalance bob env.instrId (bobUnlocked + bobLocked)
+
+  checkBalances (0.0, testLockAmount) (testLockAmount, 0.0)
+
+  -- propose two partial substs
+  let testSubstAmount = 50000.0
+
+  -- FIXME: share that submission code with the other instances
+  [(rulesCid, _)] <- query @ExternalPartyAmuletRules dso
+  disc <- queryDisclosure' dso rulesCid
+  let proposeSubstitution amount = do
+        inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
+        result <- submitWithTransferContext env (actAs [bob] <> discloseMany' disc) $ \context ->
+          exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
+            args = CreateSubstitutionProposalArgs with
+              dso
+              substitutedLock = SubstitutedLock with
+                owner = alice
+                specification = someSvSpec
+              proposer = bob
+              amount
+              inputHoldingCids = map downcast inputHoldingCids
+              extraArgs = emptyExtraArgs with context
+        errorIfLeft result
+
+  proposeSubstitution (testSubstAmount / 2.0)
+  proposeSubstitution (testSubstAmount / 2.0)
+
+  checkBalances (0.0, testLockAmount) (testLockAmount - testSubstAmount, testSubstAmount)
+
+  -- accept substitution
+  let acceptOneProposal = do
+        (proposalCid, _)::_ <- query @SubstitutionProposal dso
+        [(aliceLock, _ )] <- query @GovernanceLock alice
+        result <- submitWithTransferContext env (actAs [alice]) $ \context ->
+          exerciseCmd proposalCid SubstitutionProposal_Accept with
+            target = ST_GovernanceLock aliceLock
+            extraArgs = emptyExtraArgs with context
+        errorIfLeft result
+
+  acceptOneProposal
+  acceptOneProposal
+  checkBalances (testSubstAmount, testLockAmount - testSubstAmount) (testLockAmount - testSubstAmount, testSubstAmount)
+
+  -- propose full subst
+  [(rulesCid, _)] <- query @ExternalPartyAmuletRules dso
+  disc <- queryDisclosure' dso rulesCid
+  inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
+  result <- submitWithTransferContext env (actAs [bob] <> discloseMany' disc) $ \context ->
+    exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
+      args = CreateSubstitutionProposalArgs with
+        dso
+        substitutedLock = SubstitutedLock with
+          owner = alice
+          specification = someSvSpec
+        proposer = bob
+        amount = testLockAmount - testSubstAmount
+        inputHoldingCids = map downcast inputHoldingCids
+        extraArgs = emptyExtraArgs with context
+  errorIfLeft result
+
+  checkBalances (testSubstAmount, testLockAmount - testSubstAmount) (0.0, testLockAmount)
+
+  -- accept substitution
+  acceptOneProposal
+  {-
+  [(aliceLock, _ )] <- query @GovernanceLock alice
+  [(proposalCid, _)] <- query @SubstitutionProposal dso
+  result <- submitWithTransferContext env (actAs [alice]) $ \context ->
+    exerciseCmd proposalCid SubstitutionProposal_Accept with
+      target = ST_GovernanceLock aliceLock
+      extraArgs = emptyExtraArgs with context
+  errorIfLeft result
+  -}
+
+  checkBalances (testLockAmount, 0.0) (0.0, testLockAmount)
+
+  pure ()
+
+
+-- Utilities
+------------
 
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
