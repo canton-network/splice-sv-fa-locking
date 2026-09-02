@@ -989,7 +989,7 @@ template AmuletRules
           amuletPrice = validatedRounds.latestUsableRound.amuletPrice
           transferConfig = transferConfigToTransferConfigV2 validatedRounds.latestUsableRound.transferConfigUsd
           rewardCalculationVersion = (.mintingVersion) <$> validatedRounds.latestUsableRound.rewardConfig
-          minimumGovernanceLock = config.minimumGovernanceLock
+          governanceLockConfig = config.governanceLockConfig
         pure AmuletRules_UpdateExternalPartyConfigStatesResult with ..
 
 
@@ -2343,7 +2343,7 @@ bootstrapExternalPartyConfigState AmuletRules{..} openMiningRoundTriple = do
         amuletPrice = validatedRounds.latestUsableRound.amuletPrice
         transferConfig = transferConfig
         rewardCalculationVersion = (.mintingVersion) <$> validatedRounds.latestUsableRound.rewardConfig
-        minimumGovernanceLock = config.minimumGovernanceLock
+        governanceLockConfig = config.governanceLockConfig
       configState1 = configState0 with
         targetArchiveAfter = configState0.targetArchiveAfter `addRelTime` getExternalPartyConfigStateTickDuration config
   create configState0

@@ -8,6 +8,7 @@ import DA.Time
 
 import Splice.Amulet
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
+import Splice.AmuletConfig (getGovernanceLockConfig)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
@@ -225,7 +226,7 @@ vestingDurationFor (GLS_SuperValidatorRightsOwner _) _ = days 365 + hours 6
 
 requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
 requireMinimumLock context amount = do
-  require' ("locked amount", amount) isGreaterOrEqualR ("minimum governance lock amount", fromOptional 10000.0 context.minimumGovernanceLock)
+  require' ("locked amount", amount) isGreaterOrEqualR ("minimum governance lock amount", (getGovernanceLockConfig context.governanceLockConfig).minimumGovernanceLock)
 
 unfeaturedPaymentContextAndConfigFromChoiceContext : Party -> ChoiceContext -> Update (ExternalPartyTransferContext, ExternalPartyConfigState)
 unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do

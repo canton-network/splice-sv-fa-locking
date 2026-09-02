@@ -112,7 +112,7 @@ data AmuletConfig unit = AmuletConfig with
     rewardConfig : Optional RewardConfig
       -- ^ Configuration for the reward accounting and calculation. If None, then on-ledger reward tracking is used.
     transferPreapprovalBaseDuration : Optional RelTime -- ^ Base duration of a transfer pre-approval granted for free on creation and renewal. Default: 90 days.
-    minimumGovernanceLock : Optional Decimal -- ^ The minimum amount to enforce for a governance lock. Default: 10k Amulet.
+    governanceLockConfig : Optional GovernanceLockConfig -- ^ The governance lock configuration
   deriving (Eq, Show)
 
 getExternalPartyConfigStateTickDuration : AmuletConfig a -> RelTime
@@ -194,6 +194,17 @@ data PackageConfig = PackageConfig
 validPackageConfig : PackageConfig -> Bool
 validPackageConfig _ = True
 
+-- | Governance lock configuration.
+data GovernanceLockConfig = GovernanceLockConfig with
+    minimumGovernanceLock : Decimal
+    -- ^ The minimum amount to enforce for a governance lock. Default: 10k Amulet.
+  deriving (Eq, Show)
+
+-- | Unwrap Optional GovernanceLockConfig, using the defaults if None.
+getGovernanceLockConfig : Optional GovernanceLockConfig -> GovernanceLockConfig
+getGovernanceLockConfig cfg = flip fromOptional cfg $ GovernanceLockConfig with
+  minimumGovernanceLock = 10000.0
+
 instance Patchable RewardVersion where
   patch = patchScalar
 
@@ -210,7 +221,7 @@ instance Patchable (AmuletConfig USD) where
     externalPartyConfigStateTickDuration = patch new.externalPartyConfigStateTickDuration base.externalPartyConfigStateTickDuration current.externalPartyConfigStateTickDuration
     rewardConfig = patch new.rewardConfig base.rewardConfig current.rewardConfig
     transferPreapprovalBaseDuration = patch new.transferPreapprovalBaseDuration base.transferPreapprovalBaseDuration current.transferPreapprovalBaseDuration
-    minimumGovernanceLock = patch new.minimumGovernanceLock base.minimumGovernanceLock current.minimumGovernanceLock
+    governanceLockConfig = patch new.governanceLockConfig base.governanceLockConfig current.governanceLockConfig
 
 instance Patchable RewardConfig where
   patch new base current = RewardConfig with
@@ -240,3 +251,7 @@ instance Patchable PackageConfig where
     validatorLifecycle = patch new.validatorLifecycle base.validatorLifecycle current.validatorLifecycle
     wallet = patch new.wallet base.wallet current.wallet
     walletPayments = patch new.walletPayments base.walletPayments current.walletPayments
+
+instance Patchable GovernanceLockConfig where
+  patch new base current = GovernanceLockConfig with
+    minimumGovernanceLock = patch new.minimumGovernanceLock base.minimumGovernanceLock current.minimumGovernanceLock
