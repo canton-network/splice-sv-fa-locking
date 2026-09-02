@@ -173,24 +173,11 @@ checkLockedHolding p lockCid amount = do
   Some lock <- queryContractId p lockCid
   checkHolding' p lock.lockedAmulet amount
 
-getExternalPartyConfigStateContext : Party -> Script OpenApiChoiceContext
-getExternalPartyConfigStateContext dso = do
-  extPartyConfigs <- query @ExternalPartyConfigState dso
-  let (newestConfigCid, _) = case maximumOn (\(_, c) -> c.targetArchiveAfter) extPartyConfigs of
-        None -> error "No ExternalPartyConfigState found: have you initialized the Amulet registry?"
-        Some c -> c
-  extConfigDD <- queryDisclosure' @ExternalPartyConfigState dso newestConfigCid
-  pure OpenApiChoiceContext with
-    choiceContext = ChoiceContext $ TextMap.fromList
-        [(externalPartyConfigStateContextKey, AV_ContractId $ coerceContractId newestConfigCid)]
-    disclosures = extConfigDD
-
 
 -- | a couple helpers to make the raw choice implementations easier to write
 submitWithTransferContext : TestEnv -> SubmitOptions -> (ChoiceContext -> Commands a) -> Script (Either SubmitError a)
 submitWithTransferContext env options commands = do
-  let dso = env.instrId.admin
-  context <- getExternalPartyConfigStateContext dso
+  context <- AmuletRegistryV2.getExternalPartyConfigStateContext env.registriesEnv.amuletV2
   trySubmit (options <> discloseMany' context.disclosures) $ commands context.choiceContext
 
 errorIfLeft : (Show e, CanAssert m) => Either e a -> m a
