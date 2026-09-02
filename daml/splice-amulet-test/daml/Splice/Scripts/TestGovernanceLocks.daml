@@ -291,3 +291,8 @@ governanceLockTopUpRawChoice' env cid topupAmount owner = do
   pure $ case result of
     Left e -> Left e
     Right (GovernanceLock_TopUpResult governanceLock changeHolding) -> Right (governanceLock, changeHolding)
+
+
+-- TODO: Have a helper function to simulate what we are expecting the automation to output when doing top ups from unminted sv rewards.
+-- If we specify a certain top up amount, make sure it lines up with the percentage that we would expect
+-- (like 0.7 of the amount and .3 as change in the examples).

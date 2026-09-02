@@ -13,6 +13,7 @@ module Splice.Amulet.TwoStepTransfer (
 
   -- * Shared support code
   holdingToTransferInputs,
+  holdingToTransferInput,
 ) where
 
 import DA.Assert
@@ -49,15 +50,18 @@ data TwoStepTransfer = TwoStepTransfer with
 -- unlocking any expired LockedAmulet holdings on the fly.
 holdingToTransferInputs : ForOwner -> [ContractId Holding] -> Update [TransferInput]
 holdingToTransferInputs forOwner inputHoldingCids =
-  forA inputHoldingCids $ \holdingCid -> do
-    holding <- fetchCheckedInterface @Holding forOwner holdingCid
-    case fromInterface holding of
-      Some (LockedAmulet {}) -> do
-        let lockedAmuletCid : ContractId LockedAmulet = fromInterfaceContractId holdingCid
-        -- We assume the lock is expired, and if not then we rely `LockedAmulet_OwnerExpireLockV2` to fail
-        result <- exercise lockedAmuletCid LockedAmulet_OwnerExpireLockV2
-        pure $ InputAmulet result.amuletCid
-      None -> pure $ InputAmulet $ coerceContractId holdingCid
+  forA inputHoldingCids $ \holdingCid -> holdingToTransferInput forOwner holdingCid
+
+holdingToTransferInput : ForOwner -> ContractId Holding -> Update TransferInput
+holdingToTransferInput forOwner holdingCid = do
+  holding <- fetchCheckedInterface @Holding forOwner holdingCid
+  case fromInterface holding of
+    Some (LockedAmulet {}) -> do
+      let lockedAmuletCid : ContractId LockedAmulet = fromInterfaceContractId holdingCid
+      -- We assume the lock is expired, and if not then we rely `LockedAmulet_OwnerExpireLockV2` to fail
+      result <- exercise lockedAmuletCid LockedAmulet_OwnerExpireLockV2
+      pure $ InputAmulet result.amuletCid
+    None -> pure $ InputAmulet $ coerceContractId holdingCid
 
 -- | Prepare a two-step transfer of amulet by locking the funds.
 prepareTwoStepTransfer : TwoStepTransfer -> Time -> [ContractId Holding] -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, [ContractId Holding], Metadata)
