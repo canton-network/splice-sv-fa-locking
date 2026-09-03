@@ -211,5 +211,5 @@ vestingWithdrawRawChoice' env cid requestedAt actors = do
     context
     requestedAt
     actors
-  pure $ ((,) <$> upcast . (.unlocked) <*> (.vestingLock)) <$> result
+  pure $ ((,) <$> upcast . (.vested) <*> (.vestingLock)) <$> result
 
