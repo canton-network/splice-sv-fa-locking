@@ -133,7 +133,7 @@ template VestingLock
           None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
             pure VestingLock_WithdrawResult with
               vestingLock = None
-              unlocked = toInterfaceContractId lockedAmulet
+              vested = toInterfaceContractId lockedAmulet
           Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
             require' ("withdraw amount", vestingAmount - stillLockedAmount) isGreaterR ("zero", 0.0)
             (locked, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet stillLockedAmount context
