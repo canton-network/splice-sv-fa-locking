@@ -190,6 +190,7 @@ class UnsupportedPackageVettingIntegrationTest
           currentConfig.externalPartyConfigStateTickDuration,
           currentConfig.rewardConfig,
           currentConfig.transferPreapprovalBaseDuration,
+          currentConfig.governanceLockConfig,
         )
         setAmuletConfig(Seq((None, newAmuletConfig, currentConfig)))
       }

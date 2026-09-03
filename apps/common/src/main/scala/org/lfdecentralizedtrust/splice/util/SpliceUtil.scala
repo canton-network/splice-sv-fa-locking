@@ -368,6 +368,7 @@ object SpliceUtil {
       initialExternalPartyConfigStateTickDuration: Option[NonNegativeFiniteDuration] = None,
       optValidatorFaucetCap: Option[BigDecimal] = None,
       initialRewardConfig: Option[splice.amuletconfig.RewardConfig] = None,
+      governanceLockConfig: Option[splice.amuletconfig.GovernanceLockConfig] = None,
   ): splice.amuletconfig.AmuletConfig[splice.amuletconfig.USD] =
     new splice.amuletconfig.AmuletConfig(
       // transferConfig
@@ -399,6 +400,7 @@ object SpliceUtil {
       initialRewardConfig.toJava,
       // transferPreapprovalBaseDuration
       Optional.empty(),
+      governanceLockConfig.toJava,
     )
 
   def defaultAnsConfig(
