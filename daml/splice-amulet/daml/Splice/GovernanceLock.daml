@@ -56,7 +56,7 @@ template GovernanceLock
         actors : [Party]
       controller actors
       do
-        checkActors actors [[owner]] -- ^ TODO: custom controllers
+        checkActors actors [[owner]] -- TODO: custom controllers
         assertWithinDeadline "unlockAt" unlockAt
 
         let vestingPeriod = vestingDurationFor specification.subject context
@@ -116,16 +116,16 @@ template VestingLock
     signatory dso, owner
     ensure vestingAmount > 0.0 && vestingPeriod >= aunit
 
-    -- | Withdraw all funds that have vested since the last withdrawal
-    -- and the time of this request.
     choice VestingLock_Withdraw : VestingLock_WithdrawResult
+      -- ^ Withdraw all funds that have vested since the last withdrawal
+      -- and the time of this request.
       with
         requestedAt : Time -- ^ Time to use for determining the funds that have vested. Must be in the past.
         context : ExternalPartyTransferContext
         actors : [Party]
       controller actors
       do
-        checkActors actors [[owner]] -- ^ TODO: custom controllers
+        checkActors actors [[owner]] -- TODO: custom controllers
         assertDeadlineExceeded "requestedAt" requestedAt
 
         let unvestedAmount = calculateUnvestedAmount requestedAt this
@@ -153,9 +153,9 @@ template VestingLock
 data VestingLock_WithdrawResult
   = VestingLock_WithdrawResult with
       vestingLock : Optional (ContractId VestingLock)
-      -- ^ Contract ID of the continuing vesting lock with remaining funds.
+        -- ^ Contract ID of the continuing vesting lock with remaining funds.
       vested : ContractId Holding
-      -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
+        -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
   deriving (Eq, Show, Serializable)
 
 -- | Uses `None` to represent that no amount remains.
