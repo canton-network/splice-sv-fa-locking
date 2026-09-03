@@ -97,13 +97,36 @@ template GovernanceLock
         topupAmount : Decimal -- ^ Amount by which the locked amount should be increased.
         holdingInputs : [ContractId Holding]
         svRewardCouponInputs : [ContractId SvRewardCoupon]
+        svRewardCouponPercentage : Optional Decimal
+          -- ^ Percentage (specified as a number between 0.0 and 1.0) of the sv reward coupons
+          -- minting allowance to top up a governance lock with. This amount will be added ontop of
+          -- the topupAmount and.
         context : ExternalPartyTransferContext
       controller owner
       do
         require "Top up amount should be positive" $ topupAmount > 0.0
 
         let newAmount = amount + topupAmount
-        ([newHolding], changeHolding) <- changeLockedAmuletAmount lockedAmulet (ForOwner with dso; owner) context holdingInputs svRewardCouponInputs newAmount
+
+        -- TODO: ensure svRewardCouponInputs is not null when Percentage is provided and vice versa.
+        -- TODO: transferConfigSummary has getIssuingMiningRound
+        case svRewardCouponPercentage of
+          Some pct -> do
+            svRewardCouponsAmount : _ <- forA svRewardCouponInputs $ \svRewardCouponCid -> do
+              svRewardCoupon <- fetchChecked @SvRewardCoupon (ForOwner with dso; owner) svRewardCouponCid
+              let round = svRewardCoupon.round
+              currentIssuingMiningRound <- fetchReferenceData (ForDso with dso)
+              svRewardCoupon.weight * currentIssuingMiningRound.issuancePerSvRewardCoupon * pct
+            svRewardCouponsAmount
+          None -> pure ()
+        ([newHolding], changeHolding) <- changeLockedAmuletAmount
+          lockedAmulet
+          (ForOwner with dso; owner)
+          context
+          holdingInputs
+          svRewardCouponInputs
+          newAmount
+
         newGovernanceLock <- create GovernanceLock with
           dso
           owner
