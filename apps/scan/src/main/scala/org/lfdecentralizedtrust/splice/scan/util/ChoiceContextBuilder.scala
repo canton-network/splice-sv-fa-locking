@@ -211,4 +211,37 @@ object ChoiceContextBuilder {
     }
   }
 
+  def getGovernanceLockContext[DisclosedContract, ChoiceContext, Builder <: ChoiceContextBuilder[
+    DisclosedContract,
+    ChoiceContext,
+    Builder,
+  ]](
+      description: String,
+      lockedAmuletId: amulet.LockedAmulet.ContractId,
+      store: ScanStore,
+      fetcher: ChoiceContextContractFetcher,
+      clock: Clock,
+      newBuilder: String => Builder,
+  )(implicit
+      ec: ExecutionContext,
+      tc: TraceContext,
+  ): Future[ChoiceContext] = {
+    for {
+      lockedAmulet <- fetcher
+        .lookupContractById(amulet.LockedAmulet.COMPANION)(lockedAmuletId)
+        .map(
+          _.getOrElse(
+            throw io.grpc.Status.NOT_FOUND
+              .withDescription(s"LockedAmulet '$lockedAmuletId' not found for $description")
+              .asRuntimeException()
+          )
+        )
+      (choiceContextBuilder, _) <- getAmuletRulesTransferContext[
+        DisclosedContract,
+        ChoiceContext,
+        Builder,
+      ](store, clock, newBuilder)
+    } yield choiceContextBuilder.disclose(lockedAmulet).build()
+  }
+
 }

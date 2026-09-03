@@ -3,6 +3,7 @@
 
 package org.lfdecentralizedtrust.splice.scan.admin.http
 
+import cats.data.OptionT
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.logging.{ErrorLoggingContext, NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.time.Clock
@@ -392,24 +393,51 @@ class HttpTokenStandardTransferInstructionHandler(
   )(implicit
       tc: TraceContext
   ): Future[v1.definitions.ChoiceContext] = {
-    for {
-      amuletInstr <- getAmuletTransferInstruction(transferInstructionId)
-      context <- util.ChoiceContextBuilder.getTwoStepTransferContext[
+    val newBuilder = new V1ChoiceContextBuilder(_, excludeDebugFields)
+
+    def description(tpe: String): String = s"$tpe '$transferInstructionId'"
+
+    def getGovernanceLockContext(
+        tpe: String,
+        lockedAmuletId: splice.amulet.LockedAmulet.ContractId,
+    ) =
+      util.ChoiceContextBuilder.getGovernanceLockContext[
         v1.definitions.DisclosedContract,
         v1.definitions.ChoiceContext,
         V1ChoiceContextBuilder,
-      ](
-        s"AmuletTransferInstruction '$transferInstructionId'",
-        Some(amuletInstr.payload.lockedAmulet),
-        Some(amuletInstr.payload.transfer.executeBefore),
-        requireLockedAmulet,
-        None,
-        store,
-        contractFetcher,
-        clock,
-        new V1ChoiceContextBuilder(_, excludeDebugFields),
-      )
-    } yield context
+      ](description(tpe), lockedAmuletId, store, contractFetcher, clock, newBuilder)
+
+    extractTransferInstruction(
+      transferInstructionId,
+      getAmuletTransferInstruction(transferInstructionId)
+        .semiflatMap(amuletInstr =>
+          util.ChoiceContextBuilder.getTwoStepTransferContext[
+            v1.definitions.DisclosedContract,
+            v1.definitions.ChoiceContext,
+            V1ChoiceContextBuilder,
+          ](
+            description("AmuletTransferInstruction"),
+            Some(amuletInstr.payload.lockedAmulet),
+            Some(amuletInstr.payload.transfer.executeBefore),
+            requireLockedAmulet,
+            None,
+            store,
+            contractFetcher,
+            clock,
+            newBuilder,
+          )
+        )
+        .orElse(
+          getGovernanceLock(transferInstructionId).semiflatMap(governanceLock =>
+            getGovernanceLockContext("GovernanceLock", governanceLock.payload.lockedAmulet)
+          )
+        )
+        .orElse(
+          getVestingLock(transferInstructionId).semiflatMap(vestingLock =>
+            getGovernanceLockContext("VestingLock", vestingLock.payload.lockedAmulet)
+          )
+        ),
+    )
   }
 
   private def getTransferInstructionChoiceContextV2(
@@ -420,7 +448,10 @@ class HttpTokenStandardTransferInstructionHandler(
       tc: TraceContext
   ): Future[v2.definitions.ChoiceContext] = {
     for {
-      amuletInstr <- getAmuletTransferInstruction(transferInstructionId)
+      amuletInstr <- extractTransferInstruction(
+        transferInstructionId,
+        getAmuletTransferInstruction(transferInstructionId),
+      )
       context <- util.ChoiceContextBuilder.getTwoStepTransferContext[
         v2.definitions.DisclosedContract,
         v2.definitions.ChoiceContext,
@@ -441,24 +472,53 @@ class HttpTokenStandardTransferInstructionHandler(
 
   private def getAmuletTransferInstruction(
       transferInstructionId: String
-  )(implicit tc: TraceContext) = {
-    contractFetcher
-      .lookupContractById(
+  )(implicit tc: TraceContext): OptionT[Future, Contract[
+    splice.amulettransferinstruction.AmuletTransferInstruction.ContractId,
+    splice.amulettransferinstruction.AmuletTransferInstruction,
+  ]] =
+    OptionT(
+      contractFetcher.lookupContractById(
         splice.amulettransferinstruction.AmuletTransferInstruction.COMPANION
       )(
         new splice.amulettransferinstruction.AmuletTransferInstruction.ContractId(
           transferInstructionId
         )
       )
-      .map(
-        _.getOrElse(
-          throw io.grpc.Status.NOT_FOUND
-            .withDescription(s"AmuletTransferInstruction '$transferInstructionId' not found.")
-            .asRuntimeException()
-        )
-      )
-  }
+    )
 
+  private def getGovernanceLock(
+      transferInstructionId: String
+  )(implicit tc: TraceContext): OptionT[
+    Future,
+    Contract[splice.governancelock.GovernanceLock.ContractId, splice.governancelock.GovernanceLock],
+  ] =
+    OptionT(
+      contractFetcher.lookupContractById(splice.governancelock.GovernanceLock.COMPANION)(
+        new splice.governancelock.GovernanceLock.ContractId(transferInstructionId)
+      )
+    )
+
+  private def getVestingLock(
+      transferInstructionId: String
+  )(implicit tc: TraceContext): OptionT[
+    Future,
+    Contract[splice.governancelock.VestingLock.ContractId, splice.governancelock.VestingLock],
+  ] =
+    OptionT(
+      contractFetcher.lookupContractById(splice.governancelock.VestingLock.COMPANION)(
+        new splice.governancelock.VestingLock.ContractId(transferInstructionId)
+      )
+    )
+
+  private def extractTransferInstruction[A](
+      transferInstructionId: String,
+      opt: OptionT[Future, A],
+  ): Future[A] =
+    opt.getOrElse(
+      throw io.grpc.Status.NOT_FOUND
+        .withDescription(s"TransferInstruction '$transferInstructionId' not found.")
+        .asRuntimeException()
+    )
 }
 
 object HttpTokenStandardTransferInstructionHandler {
