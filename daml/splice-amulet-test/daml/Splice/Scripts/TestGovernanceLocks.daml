@@ -156,7 +156,8 @@ testTopUpNegativePath = do
     submitWithTransferContext env (actAs alice)
       $ \context -> exerciseCmd aliceLock GovernanceLock_TopUp with
         topupAmount = 5000.0
-        inputs = []
+        holdingInputs = []
+        svRewardCouponInputs = []
         context
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
@@ -217,7 +218,8 @@ governanceLockRawChoice' env owner amount specification = do
   result <- submitWithTransferContext env (actAs [owner] <> discloseMany' disc) $
     \context -> exerciseCmd eparCid ExternalPartyAmuletRules_LockForGovernance with
       amount
-      inputs = coerceContractId <$> inputs -- These are Amulet and LockedAmulet, but we don't have convenient constraints to show that.
+      holdingInputs = coerceContractId <$> inputs -- These are Amulet and LockedAmulet, but we don't have convenient constraints to show that.
+      svRewardCouponInputs = []
       specification
       context
       owner
@@ -285,8 +287,14 @@ governanceLockTopUpRawChoice' env cid topupAmount owner = do
   inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
   result : Either SubmitError GovernanceLock_TopUpResult <- submitWithTransferContext env (actAs owner) $ \context -> exerciseCmd cid GovernanceLock_TopUp with
     topupAmount
-    inputs = downcast <$> inputs
+    holdingInputs = downcast <$> inputs
+    svRewardCouponInputs = []
     context
   pure $ case result of
     Left e -> Left e
     Right (GovernanceLock_TopUpResult governanceLock changeHolding) -> Right (governanceLock, changeHolding)
+
+
+-- TODO: Have a helper function to simulate what we are expecting the automation to output when doing top ups from unminted sv rewards.
+-- If we specify a certain top up amount, make sure it lines up with the percentage that we would expect
+-- (like 0.7 of the amount and .3 as change in the examples).
