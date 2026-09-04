@@ -756,6 +756,7 @@ class TrafficBasedRewardsSvAppTimeBasedIntegrationTest
       existing.externalPartyConfigStateTickDuration,
       Optional.of(newRc),
       existing.transferPreapprovalBaseDuration,
+      existing.governanceLockConfig,
     )
     setAmuletConfig(Seq((None, newConfig, existing)))
     eventually() {

@@ -6,11 +6,13 @@ import DA.Time
 
 import Splice.Amulet
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
+import Splice.AmuletConfig (getGovernanceLockConfig)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
 import Splice.Expiry
 import Splice.Fees (relTimeToSeconds)
+import Splice.ExternalPartyConfigState
 import Splice.TokenStandard.Utils hiding (require)
 import Splice.Types
 import Splice.Util
@@ -34,8 +36,7 @@ data VestingLockSpecification
       subject : GovernanceLockType
   deriving (Eq, Show, Serializable)
 
--- | A lock created to satisfy governance requirements, e.g., locking CC
--- to retain SV weight or FA rights.
+
 template GovernanceLock
   with
     dso : Party
@@ -52,12 +53,14 @@ template GovernanceLock
       with
         unlockAmount : Optional Decimal -- ^ Amount to unlock. Defaults to the full amount if not set.
         unlockAt : Time  -- ^ Time as of which the unlock is to be registered and vesting starts. Must be in the future.
-        context : ExternalPartyTransferContext
+        extraArgs : ExtraArgs
         actors : [Party]
       controller actors
       do
         checkActors actors [[owner]] -- TODO: custom controllers
         assertWithinDeadline "unlockAt" unlockAt
+
+        (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
         let vestingPeriod = vestingDurationFor specification.subject context
         let endTime = unlockAt `addRelTime` vestingPeriod
@@ -73,7 +76,9 @@ template GovernanceLock
           Some unlockAmount -> do -- Splitting.
             require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
             require' ("unlockAmount", unlockAmount) isLessR ("amount", amount)
-            (vesting, stillLockedHolding) <- splitLockedAmulet (ForOwner with dso; owner) lockedAmulet (unlockAmount, vestingLockProperties) context
+            requireMinimumLock state unlockAmount
+            (vesting, stillLockedHolding, stillLockedAmount) <- splitLockedAmulet (ForOwner with dso; owner) lockedAmulet (unlockAmount, vestingLockProperties) context
+            requireMinimumLock state stillLockedAmount
             governanceLock <- create
               this with
                 lockedAmulet = stillLockedHolding
@@ -121,12 +126,13 @@ template VestingLock
       -- and the time of this request.
       with
         requestedAt : Time -- ^ Time to use for determining the funds that have vested. Must be in the past.
-        context : ExternalPartyTransferContext
+        extraArgs : ExtraArgs
         actors : [Party]
       controller actors
       do
         checkActors actors [[owner]] -- TODO: custom controllers
         assertDeadlineExceeded "requestedAt" requestedAt
+        context <- externalPartyTransferFromChoiceContext dso extraArgs.context
 
         let unvestedAmount = calculateUnvestedAmount requestedAt this
 
@@ -171,10 +177,12 @@ governanceLock_lockForGovernance_impl
  -> Decimal
  -> [ContractId Holding]
  -> GovernanceLockSpecification
- -> ExternalPartyTransferContext
+ -> ExtraArgs
  -> Party
  -> Update (ContractId GovernanceLock, Optional (ContractId Amulet))
-governanceLock_lockForGovernance_impl dso amount inputs specification context owner = do
+governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner = do
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+  requireMinimumLock state amount
   let lockProperties = LockProperties with
         context = describeGovernanceSpecification specification
         expiresAt = maxBound
@@ -216,6 +224,20 @@ vestingDurationFor : GovernanceLockType -> ExternalPartyTransferContext -> RelTi
 vestingDurationFor (GLS_FeaturedApp _) _ = days 60
 vestingDurationFor (GLS_SuperValidatorRightsOwner _) _ = days 365 + hours 6
 
+requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
+requireMinimumLock context amount = do
+  require' ("locked amount", amount) isGreaterOrEqualR ("minimum governance lock amount", (getGovernanceLockConfig context.governanceLockConfig).minimumGovernanceLock)
+
+unfeaturedPaymentContextAndConfigFromChoiceContext : Party -> ChoiceContext -> Update (ExternalPartyTransferContext, ExternalPartyConfigState)
+unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
+  (configStateCid, configState) <- getExternalPartyConfigStateFromChoiceContext dso choiceContext
+  pure (ExternalPartyTransferContext with
+          externalPartyConfigState = configStateCid
+          featuredAppRight = None
+       , configState )
+
+
+
 -- Helpers for handling LockedAmulet
 -- =================================
 
@@ -226,17 +248,17 @@ data LockProperties = LockProperties with
   context : Text
   expiresAt : Time
 
-splitLockedAmulet : ForOwner -> ContractId LockedAmulet -> LockSpecification -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, ContractId LockedAmulet)
+splitLockedAmulet : ForOwner -> ContractId LockedAmulet -> LockSpecification -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, ContractId LockedAmulet, Decimal)
 splitLockedAmulet forOwner lockedAmuletCid amount context = do
-  ([splitLock], remainder) <- multiSplitLockedAmulet forOwner lockedAmuletCid [amount] context
-  pure (splitLock, remainder)
+  ([splitLock], remainder, remainderAmount) <- multiSplitLockedAmulet forOwner lockedAmuletCid [amount] context
+  pure (splitLock, remainder, remainderAmount)
 
-multiSplitLockedAmulet : ForOwner -> ContractId LockedAmulet -> [LockSpecification] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], ContractId LockedAmulet)
+multiSplitLockedAmulet : ForOwner -> ContractId LockedAmulet -> [LockSpecification] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], ContractId LockedAmulet, Decimal)
 multiSplitLockedAmulet forOwner lockedAmuletCid specs context = do
   (unlockedCid, (currentAmount, currentLockProps)) <- unlockAmulet forOwner lockedAmuletCid
-  let finalAmount = currentAmount - sum (fst <$> specs)
-  (remainderLock::specifiedLocks, None) <- lockAmulet forOwner ((finalAmount, currentLockProps) :: specs) [toInterfaceContractId unlockedCid] context
-  pure (specifiedLocks, remainderLock)
+  let remainderAmount = currentAmount - sum (fst <$> specs)
+  (remainderLock::specifiedLocks, None) <- lockAmulet forOwner ((remainderAmount, currentLockProps) :: specs) [toInterfaceContractId unlockedCid] context
+  pure (specifiedLocks, remainderLock, remainderAmount)
 
 partialUnlock : ForOwner -> ContractId LockedAmulet -> Decimal -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, ContractId Amulet)
 partialUnlock forOwner lockedAmuletCid stillLockedAmount context = do

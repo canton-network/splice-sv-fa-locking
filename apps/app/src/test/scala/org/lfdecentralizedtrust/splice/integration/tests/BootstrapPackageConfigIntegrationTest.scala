@@ -241,6 +241,7 @@ class BootstrapPackageConfigIntegrationTest
         amuletConfig.externalPartyConfigStateTickDuration,
         amuletConfig.rewardConfig,
         amuletConfig.transferPreapprovalBaseDuration,
+        amuletConfig.governanceLockConfig,
       )
 
       val upgradeAction = new ARC_AmuletRules(
@@ -391,6 +392,7 @@ class BootstrapPackageConfigIntegrationTest
         amuletConfig.externalPartyConfigStateTickDuration,
         amuletConfig.rewardConfig,
         amuletConfig.transferPreapprovalBaseDuration,
+        amuletConfig.governanceLockConfig,
       )
 
       val upgradeAction = new ARC_AmuletRules(
