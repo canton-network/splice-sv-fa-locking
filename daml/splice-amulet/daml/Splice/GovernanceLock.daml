@@ -93,6 +93,28 @@ template GovernanceLock
           vestingLock
           governanceLock
 
+    choice GovernanceLock_TopUp : GovernanceLock_TopUpResult
+      with
+        topupAmount : Decimal -- ^ Amount by which the locked amount should be increased.
+        inputs : [ContractId Holding]
+        context : ExternalPartyTransferContext
+      controller owner
+      do
+        require "Top up amount should be positive" $ topupAmount > 0.0
+
+        let newAmount = amount + topupAmount
+        ([newHolding], changeHolding) <- changeLockedAmuletAmount lockedAmulet (ForOwner with dso; owner) context inputs newAmount
+        newGovernanceLock <- create GovernanceLock with
+          dso
+          owner
+          amount = newAmount
+          lockedAmulet = newHolding
+          specification
+
+        pure $ GovernanceLock_TopUpResult with
+          governanceLock = newGovernanceLock
+          changeHolding
+
   -- TODO: implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO: implement pending V1 transfer for the above, for backwards compatibility.
   -- TODO: substitution, probably with a loose function for implementation sharing.
@@ -101,6 +123,12 @@ data GovernanceLock_UnlockResult
   = GovernanceLock_UnlockResult with
       vestingLock : ContractId VestingLock
       governanceLock : Optional (ContractId GovernanceLock)
+  deriving (Eq, Show, Serializable)
+
+data GovernanceLock_TopUpResult
+  = GovernanceLock_TopUpResult with
+      governanceLock : ContractId GovernanceLock
+      changeHolding : Optional (ContractId Amulet)
   deriving (Eq, Show, Serializable)
 
 template VestingLock
@@ -282,3 +310,11 @@ lockAmulet forOwner@ForOwner {..} specs inputHoldingCids context = do
     , result.senderChangeAmulet
     )
 
+changeLockedAmuletAmount : ContractId LockedAmulet -> ForOwner -> ExternalPartyTransferContext -> [ContractId Holding] -> Decimal -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
+changeLockedAmuletAmount lockedAmulet forOwner context inputHoldingCids amount = do
+  (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmulet
+  lockAmulet
+    forOwner
+    [(amount, lockProps)]
+    (toInterfaceContractId unlockedAmuletCid :: inputHoldingCids)
+    context
