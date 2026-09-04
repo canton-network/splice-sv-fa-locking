@@ -23,7 +23,7 @@ testGovernanceLockHappyPath = do
   env@TestEnv{..} <- setupTest
 
   let someSvSpec = GovernanceLockSpecification with
-        subject = GLS_SuperValidatorRightsOwner "TestSV"
+        kind = GLK_SuperValidatorRightsOwner "TestSV"
 
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 180000.0
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob 10000.0

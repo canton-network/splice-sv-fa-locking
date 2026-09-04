@@ -16,22 +16,22 @@ import Splice.Types
 import Splice.Util
 
 
-data GovernanceLockType
-  = GLS_FeaturedApp with
+data GovernanceLockKind
+  = GLK_FeaturedApp with
       provider : Party -- ^ Featured app provider party.
-  | GLS_SuperValidatorRightsOwner with
+  | GLK_SuperValidatorRightsOwner with
       svName : Text  -- ^ Name of the SV rights owner for whom the funds are locked.
   deriving (Eq, Show, Serializable)
 
--- FIXME: add controllers specifications
+-- TODO: add controllers specifications
 data GovernanceLockSpecification
   = GovernanceLockSpecification with
-      subject : GovernanceLockType
+      kind : GovernanceLockKind
   deriving (Eq, Show, Serializable)
 
 data VestingLockSpecification
   = VestingLockSpecification with
-      subject : GovernanceLockType
+      kind : GovernanceLockKind
   deriving (Eq, Show, Serializable)
 
 -- | A lock created to satisfy governance requirements, e.g., locking CC
@@ -45,7 +45,7 @@ template GovernanceLock
     specification : GovernanceLockSpecification
   where
     signatory dso, owner
-    observer typeExtraObservers specification.subject
+    observer typeExtraObservers specification.kind
     ensure amount > 0.0
 
     choice GovernanceLock_Unlock : GovernanceLock_UnlockResult
@@ -59,7 +59,7 @@ template GovernanceLock
         checkActors actors [[owner]] -- TODO: custom controllers
         assertWithinDeadline "unlockAt" unlockAt
 
-        let vestingPeriod = vestingDurationFor specification.subject context
+        let vestingPeriod = vestingDurationFor specification.kind context
         let endTime = unlockAt `addRelTime` vestingPeriod
         let specification = governanceToVestingSpecification this.specification
         let vestingLockProperties = LockProperties with
@@ -190,31 +190,29 @@ governanceLock_lockForGovernance_impl dso amount inputs specification context ow
   -- TODO: implement V2 AllocationFactory in terms of above.
   -- TODO: find and use binding point for "magic address" V1 token standard to above.
 
--- Helpers for
-
-typeExtraObservers : GovernanceLockType -> [Party]
-typeExtraObservers (GLS_FeaturedApp party) = [party]
+typeExtraObservers : GovernanceLockKind -> [Party]
+typeExtraObservers (GLK_FeaturedApp party) = [party]
 typeExtraObservers _ = []
 
 governanceToVestingSpecification : GovernanceLockSpecification -> VestingLockSpecification
 governanceToVestingSpecification GovernanceLockSpecification {..} = VestingLockSpecification {..}
 
-describeGovernanceLockType : GovernanceLockType -> Text
-describeGovernanceLockType (GLS_FeaturedApp with provider) = "Featured App party " <> partyToText provider
-describeGovernanceLockType (GLS_SuperValidatorRightsOwner with svName) = "SV rights for " <> svName
+describeGovernanceLockKind : GovernanceLockKind -> Text
+describeGovernanceLockKind (GLK_FeaturedApp with provider) = "Featured App party " <> partyToText provider
+describeGovernanceLockKind (GLK_SuperValidatorRightsOwner with svName) = "SV rights for " <> svName
 
 describeGovernanceSpecification : GovernanceLockSpecification -> Text
-describeGovernanceSpecification lock = "Locked to support " <> describeGovernanceLockType lock.subject
+describeGovernanceSpecification lock = "Locked to support " <> describeGovernanceLockKind lock.kind
 
 describeVestingSpecification : VestingLockSpecification -> Text
-describeVestingSpecification lock = "Unlocking from supporting " <> describeGovernanceLockType lock.subject
+describeVestingSpecification lock = "Unlocking from supporting " <> describeGovernanceLockKind lock.kind
 
 -- Lock properties for LockSubject types
 
 -- TODO: make configurable
-vestingDurationFor : GovernanceLockType -> ExternalPartyTransferContext -> RelTime
-vestingDurationFor (GLS_FeaturedApp _) _ = days 60
-vestingDurationFor (GLS_SuperValidatorRightsOwner _) _ = days 365 + hours 6
+vestingDurationFor : GovernanceLockKind -> ExternalPartyTransferContext -> RelTime
+vestingDurationFor (GLK_FeaturedApp _) _ = days 60
+vestingDurationFor (GLK_SuperValidatorRightsOwner _) _ = days 365 + hours 6
 
 -- Helpers for handling LockedAmulet
 -- =================================
