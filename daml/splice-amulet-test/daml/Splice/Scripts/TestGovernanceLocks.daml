@@ -23,7 +23,7 @@ testGovernanceLockHappyPath = do
   env@TestEnv{..} <- setupTest
 
   let someSvSpec = GovernanceLockSpecification with
-        subject = GLS_SuperValidatorRightsOwner "TestSV"
+        kind = GLK_SuperValidatorRightsOwner "TestSV"
 
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 180000.0
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob 10000.0
@@ -107,7 +107,7 @@ testTopUp_with_amulet_happypath : Script ()
 testTopUp_with_amulet_happypath = do
   env@TestEnv{..} <- setupTest
   let someSvSpec = GovernanceLockSpecification with
-        subject = GLS_SuperValidatorRightsOwner "SomeApp"
+        kind = GLK_SuperValidatorRightsOwner "TestSV"
 
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 280000.0
 
@@ -136,7 +136,7 @@ testTopUpNegativePath : Script ()
 testTopUpNegativePath = do
   env@TestEnv{..} <- setupTest
   let someSvSpec = GovernanceLockSpecification with
-        subject = GLS_SuperValidatorRightsOwner "SomeApp"
+        kind = GLK_SuperValidatorRightsOwner "TestSV"
 
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 280000.0
 
@@ -268,8 +268,7 @@ vestingWithdrawRawChoice' env cid requestedAt actors = do
     context
     requestedAt
     actors
-  pure $ ((,) <$> upcast . (.unlocked) <*> (.vestingLock)) <$> result
-
+  pure $ ((,) <$> upcast . (.vested) <*> (.vestingLock)) <$> result
 governanceLockTopUpRawChoice
   : TestEnv
   -> ContractId GovernanceLock

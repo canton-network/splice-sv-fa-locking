@@ -1,8 +1,6 @@
 module Splice.GovernanceLock where
 
 import DA.Assert
-import DA.Functor
-import DA.Numeric
 import DA.Optional
 import DA.Time
 
@@ -12,27 +10,28 @@ import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
 import Splice.Expiry
+import Splice.Fees (relTimeToSeconds)
 import Splice.TokenStandard.Utils hiding (require)
 import Splice.Types
 import Splice.Util
 
 
-data GovernanceLockType
-  = GLS_FeaturedApp with
+data GovernanceLockKind
+  = GLK_FeaturedApp with
       provider : Party -- ^ Featured app provider party.
-  | GLS_SuperValidatorRightsOwner with
+  | GLK_SuperValidatorRightsOwner with
       svName : Text  -- ^ Name of the SV rights owner for whom the funds are locked.
   deriving (Eq, Show, Serializable)
 
--- FIXME: add controllers specifications
+-- TODO: add controllers specifications
 data GovernanceLockSpecification
   = GovernanceLockSpecification with
-      subject : GovernanceLockType
+      kind : GovernanceLockKind
   deriving (Eq, Show, Serializable)
 
 data VestingLockSpecification
   = VestingLockSpecification with
-      subject : GovernanceLockType
+      kind : GovernanceLockKind
   deriving (Eq, Show, Serializable)
 
 -- | A lock created to satisfy governance requirements, e.g., locking CC
@@ -46,6 +45,7 @@ template GovernanceLock
     specification : GovernanceLockSpecification
   where
     signatory dso, owner
+    observer typeExtraObservers specification.kind
     ensure amount > 0.0
 
     choice GovernanceLock_Unlock : GovernanceLock_UnlockResult
@@ -56,10 +56,10 @@ template GovernanceLock
         actors : [Party]
       controller actors
       do
-        checkActors actors [[owner]] -- ^ TODO: custom controllers
+        checkActors actors [[owner]] -- TODO: custom controllers
         assertWithinDeadline "unlockAt" unlockAt
 
-        let vestingPeriod = vestingDurationFor specification.subject context
+        let vestingPeriod = vestingDurationFor specification.kind context
         let endTime = unlockAt `addRelTime` vestingPeriod
         let specification = governanceToVestingSpecification this.specification
         let vestingLockProperties = LockProperties with
@@ -72,6 +72,7 @@ template GovernanceLock
             pure (newLockedAmulet, None, amount)
           Some unlockAmount -> do -- Splitting.
             require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
+            require' ("unlockAmount", unlockAmount) isLessR ("amount", amount)
             (vesting, stillLockedHolding) <- splitLockedAmulet (ForOwner with dso; owner) lockedAmulet (unlockAmount, vestingLockProperties) context
             governanceLock <- create
               this with
@@ -173,25 +174,25 @@ template VestingLock
     signatory dso, owner
     ensure vestingAmount > 0.0 && vestingPeriod >= aunit
 
-    -- | Withdraw all funds that have vested since the last withdrawal
-    -- and the time of this request.
     choice VestingLock_Withdraw : VestingLock_WithdrawResult
+      -- ^ Withdraw all funds that have vested since the last withdrawal
+      -- and the time of this request.
       with
         requestedAt : Time -- ^ Time to use for determining the funds that have vested. Must be in the past.
         context : ExternalPartyTransferContext
         actors : [Party]
       controller actors
       do
-        checkActors actors [[owner]] -- ^ TODO: custom controllers
+        checkActors actors [[owner]] -- TODO: custom controllers
         assertDeadlineExceeded "requestedAt" requestedAt
 
-        let retainedAmount = calculateUnvestedAmount requestedAt this
+        let unvestedAmount = calculateUnvestedAmount requestedAt this
 
-        case retainedAmount of
+        case unvestedAmount of
           None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
             pure VestingLock_WithdrawResult with
               vestingLock = None
-              unlocked = toInterfaceContractId lockedAmulet
+              vested = toInterfaceContractId lockedAmulet
           Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
             require' ("withdraw amount", vestingAmount - stillLockedAmount) isGreaterR ("zero", 0.0)
             (locked, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet stillLockedAmount context
@@ -201,7 +202,7 @@ template VestingLock
               vestingAmount = stillLockedAmount
             pure VestingLock_WithdrawResult with
               vestingLock
-              unlocked = toInterfaceContractId unlocked
+              vested = toInterfaceContractId unlocked
 
   -- TODO: implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO: implement pending V1 transaction for the above, for backwards compatibility.
@@ -210,9 +211,9 @@ template VestingLock
 data VestingLock_WithdrawResult
   = VestingLock_WithdrawResult with
       vestingLock : Optional (ContractId VestingLock)
-      -- ^ Contract ID of the continuing vesting lock with remaining funds.
-      unlocked : ContractId Holding
-      -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
+        -- ^ Contract ID of the continuing vesting lock with remaining funds.
+      vested : ContractId Holding
+        -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
   deriving (Eq, Show, Serializable)
 
 -- | Uses `None` to represent that no amount remains.
@@ -220,11 +221,7 @@ calculateUnvestedAmount : Time -> VestingLock -> Optional Decimal
 calculateUnvestedAmount currentTime VestingLock{ .. }
     | currentTime <= (endTime `addRelTime` (- vestingPeriod)) = Some vestingAmount
     | currentTime >= endTime = None
-    | otherwise = Some $ vestingAmount `mul` fractionRemaining
-  where
-    fractionRemaining = (endTime `subTime` currentTime) `divRelTime` vestingPeriod
-    divRelTime : RelTime -> RelTime -> Numeric 37 -- Specifically valid and maximum cleanly represented range for 0 < a < b
-    divRelTime = \a b -> (intToDecimal $ convertRelTimeToMicroseconds a) `div` (intToDecimal $ convertRelTimeToMicroseconds b)
+    | otherwise = Some $ (vestingAmount * relTimeToSeconds (endTime `subTime` currentTime)) / relTimeToSeconds vestingPeriod
 
 -- | Implementation for the LockForGovernance choice on ExternalPartyAmuletRules and core implementation of token standard v1 and v2 interfaces.
 governanceLock_lockForGovernance_impl
@@ -252,27 +249,29 @@ governanceLock_lockForGovernance_impl dso amount holdingInputs svRewardCouponInp
   -- TODO: implement V2 AllocationFactory in terms of above.
   -- TODO: find and use binding point for "magic address" V1 token standard to above.
 
--- Helpers for
+typeExtraObservers : GovernanceLockKind -> [Party]
+typeExtraObservers (GLK_FeaturedApp party) = [party]
+typeExtraObservers _ = []
 
 governanceToVestingSpecification : GovernanceLockSpecification -> VestingLockSpecification
 governanceToVestingSpecification GovernanceLockSpecification {..} = VestingLockSpecification {..}
 
-describeGovernanceLockType : GovernanceLockType -> Text
-describeGovernanceLockType (GLS_FeaturedApp with provider) = "Featured App party " <> partyToText provider
-describeGovernanceLockType (GLS_SuperValidatorRightsOwner with svName) = "Super Validator rights for " <> svName
+describeGovernanceLockKind : GovernanceLockKind -> Text
+describeGovernanceLockKind (GLK_FeaturedApp with provider) = "Featured App party " <> partyToText provider
+describeGovernanceLockKind (GLK_SuperValidatorRightsOwner with svName) = "SV rights for " <> svName
 
 describeGovernanceSpecification : GovernanceLockSpecification -> Text
-describeGovernanceSpecification lock = "Locked to support " <> describeGovernanceLockType lock.subject
+describeGovernanceSpecification lock = "Locked to support " <> describeGovernanceLockKind lock.kind
 
 describeVestingSpecification : VestingLockSpecification -> Text
-describeVestingSpecification lock = "Unlocking from supporting " <> describeGovernanceLockType lock.subject
+describeVestingSpecification lock = "Unlocking from supporting " <> describeGovernanceLockKind lock.kind
 
 -- Lock properties for LockSubject types
 
 -- TODO: make configurable
-vestingDurationFor : GovernanceLockType -> ExternalPartyTransferContext -> RelTime
-vestingDurationFor (GLS_FeaturedApp _) _ = days 60
-vestingDurationFor (GLS_SuperValidatorRightsOwner _) _ = days 365 + hours 6
+vestingDurationFor : GovernanceLockKind -> ExternalPartyTransferContext -> RelTime
+vestingDurationFor (GLK_FeaturedApp _) _ = days 60
+vestingDurationFor (GLK_SuperValidatorRightsOwner _) _ = days 365 + hours 6
 
 -- Helpers for handling LockedAmulet
 -- =================================
@@ -315,14 +314,11 @@ unlockAmulet forOwner lockedAmuletCid = do
   return (unlockResult.amuletCid, (lock.amulet.amount.initialAmount, LockProperties with context = fromOptional "governance" lock.lock.optContext; expiresAt = lock.lock.expiresAt))
 
 lockAmulet : ForOwner -> [LockSpecification] -> [ContractId Holding] -> [ContractId SvRewardCoupon] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
-lockAmulet forOwner@ForOwner {..} amounts holdingInputs svRewardCouponInputs context = do
+lockAmulet forOwner@ForOwner {..} specs holdingInputs svRewardCouponInputs context = do
   -- lock the amulet
   transferInputsFromHoldings <- holdingToTransferInputs forOwner holdingInputs
   let transferInputsFromSvRewardCoupons = fmap InputSvRewardCoupon svRewardCouponInputs
-  let transfer = Splice.AmuletRules.Transfer with
-        sender = owner
-        provider = owner -- the sender is serving as its own "app provider"
-        outputs = amounts <&> \(amount, spec) ->
+  let mkOutput (amount, spec) =
             TransferOutput with
               receiver = owner
               amount = amount
@@ -332,6 +328,10 @@ lockAmulet forOwner@ForOwner {..} amounts holdingInputs svRewardCouponInputs con
                 holders = [dso]
                 optContext = Some spec.context
               meta = Some (reasonToMeta ("lock for " <> spec.context) emptyMetadata)
+  let transfer = Splice.AmuletRules.Transfer with
+        sender = owner
+        provider = owner -- the sender is serving as its own "app provider"
+        outputs = map mkOutput specs
         inputs = transferInputsFromHoldings <> transferInputsFromSvRewardCoupons
         beneficiaries = None
 

@@ -9,6 +9,7 @@ import com.daml.ledger.api.v2.TraceContextOuterClass
 import com.daml.ledger.javaapi.data.codegen.{ContractId, DamlRecord}
 import com.daml.ledger.javaapi.data.{CreatedEvent, Event, ExercisedEvent, Identifier, Transaction}
 import com.daml.metrics.api.MetricsContext
+import com.daml.nonempty.NonEmpty
 import com.google.protobuf.ByteString
 import com.digitalasset.canton.util.HexString
 import org.lfdecentralizedtrust.splice.environment.ledger.api.ReassignmentEvent.{Assign, Unassign}
@@ -40,6 +41,8 @@ import com.digitalasset.canton.config.CantonRequireTypes.String256M
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.lifecycle.CloseContext
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
+import com.digitalasset.canton.logging.pretty.Pretty
+import com.digitalasset.canton.logging.pretty.Pretty.{param, prettyOfClass}
 import com.digitalasset.canton.resource.DbStorage
 import com.digitalasset.canton.topology.{ParticipantId, PartyId, SynchronizerId}
 import com.digitalasset.canton.tracing.TraceContext
@@ -906,14 +909,14 @@ class UpdateHistory(
   }
 
   private def afterFilters(
-      afterO: Option[(Long, CantonTimestamp)],
+      afterO: Option[TimestampWithMigrationId],
       includeImportUpdates: Boolean,
   ): NonEmptyList[SQLActionBuilder] = {
     val gtMin = if (includeImportUpdates) ">=" else ">"
     afterO match {
       case None =>
         NonEmptyList.of(sql"migration_id >= 0 and record_time #$gtMin ${CantonTimestamp.MinValue}")
-      case Some((afterMigrationId, afterRecordTime)) =>
+      case Some(TimestampWithMigrationId(afterRecordTime, afterMigrationId)) =>
         // This makes it so that the two queries use updt_hist_tran_hi_mi_rt_di,
         NonEmptyList.of(
           sql"migration_id = ${afterMigrationId} and record_time > ${afterRecordTime} ",
@@ -1101,7 +1104,7 @@ class UpdateHistory(
   }
 
   def getUpdatesWithoutImportUpdates(
-      afterO: Option[(Long, CantonTimestamp)],
+      afterO: Option[TimestampWithMigrationId],
       limit: Limit,
   )(implicit tc: TraceContext): Future[Seq[TreeUpdateWithMigrationId]] = {
     val filters = afterFilters(afterO, includeImportUpdates = false)
@@ -1132,7 +1135,7 @@ class UpdateHistory(
   }
 
   def getAllUpdates(
-      afterO: Option[(Long, CantonTimestamp)],
+      afterO: Option[TimestampWithMigrationId],
       limit: PageLimit,
   )(implicit tc: TraceContext): Future[Seq[TreeUpdateWithMigrationId]] = {
     val filters = afterFilters(afterO, includeImportUpdates = true)
@@ -1337,33 +1340,33 @@ class UpdateHistory(
   private def queryCreateEvents(
       transactionRowIds: Seq[Long]
   )(implicit tc: TraceContext): Future[Map[Long, Seq[SelectFromCreateEvents]]] = {
-    if (transactionRowIds.isEmpty) {
-      Future.successful(Map.empty)
-    } else {
-      storage
-        .query(
-          (sql"""
-      select
-        update_row_id,
-        event_id,
-        contract_id,
-        created_at,
-        template_id_package_id,
-        template_id_module_name,
-        template_id_entity_name,
-        package_name,
-        create_arguments,
-        signatories,
-        observers,
-        contract_key,
-        record_time
+    NonEmpty.from(transactionRowIds) match {
+      case None => Future.successful(Map.empty)
+      case Some(transactionRowIds) =>
+        storage
+          .query(
+            (sql"""
+        select
+          update_row_id,
+          event_id,
+          contract_id,
+          created_at,
+          template_id_package_id,
+          template_id_module_name,
+          template_id_entity_name,
+          package_name,
+          create_arguments,
+          signatories,
+          observers,
+          contract_key,
+          record_time
 
-      from update_history_creates
-      where """ ++ inClause("update_row_id", transactionRowIds)).toActionBuilder
-            .as[SelectFromCreateEvents],
-          "queryCreateEvents",
-        )
-        .map(_.groupBy(_.updateRowId))
+        from update_history_creates
+        where """ ++ DbStorage.toInClause("update_row_id", transactionRowIds)).toActionBuilder
+              .as[SelectFromCreateEvents],
+            "queryCreateEvents",
+          )
+          .map(_.groupBy(_.updateRowId))
     }
   }
 
@@ -1408,35 +1411,35 @@ class UpdateHistory(
   private def queryExerciseEvents(
       transactionRowIds: Seq[Long]
   )(implicit tc: TraceContext): Future[Map[Long, Seq[SelectFromExerciseEvents]]] = {
-    if (transactionRowIds.isEmpty) {
-      Future.successful(Map.empty)
-    } else {
-      storage
-        .query(
-          (sql"""
-      select
-        update_row_id,
-        event_id,
-        child_event_ids,
-        choice,
-        template_id_package_id,
-        template_id_module_name,
-        template_id_entity_name,
-        contract_id,
-        consuming,
-        package_name,
-        argument,
-        result,
-        acting_parties,
-        interface_id_package_id,
-        interface_id_module_name,
-        interface_id_entity_name
-      from update_history_exercises
-      where """ ++ inClause("update_row_id", transactionRowIds)).toActionBuilder
-            .as[SelectFromExerciseEvents],
-          "queryExerciseEvents",
-        )
-        .map(_.groupBy(_.updateRowId))
+    NonEmpty.from(transactionRowIds) match {
+      case None => Future.successful(Map.empty)
+      case Some(transactionRowIds) =>
+        storage
+          .query(
+            (sql"""
+        select
+          update_row_id,
+          event_id,
+          child_event_ids,
+          choice,
+          template_id_package_id,
+          template_id_module_name,
+          template_id_entity_name,
+          contract_id,
+          consuming,
+          package_name,
+          argument,
+          result,
+          acting_parties,
+          interface_id_package_id,
+          interface_id_module_name,
+          interface_id_entity_name
+        from update_history_exercises
+        where """ ++ DbStorage.toInClause("update_row_id", transactionRowIds)).toActionBuilder
+              .as[SelectFromExerciseEvents],
+            "queryExerciseEvents",
+          )
+          .map(_.groupBy(_.updateRowId))
     }
   }
 
@@ -2595,6 +2598,12 @@ final case class TimestampWithMigrationId(
 object TimestampWithMigrationId {
   implicit val ordering: Ordering[TimestampWithMigrationId] =
     Ordering.by(x => (x.migrationId, x.timestamp))
+
+  implicit val prettyTimestampWithMigrationId: Pretty[TimestampWithMigrationId] =
+    prettyOfClass(
+      param("timestamp", _.timestamp),
+      param("migrationId", _.migrationId),
+    )
 }
 
 final case class TreeUpdateWithMigrationId(
