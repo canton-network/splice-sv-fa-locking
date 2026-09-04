@@ -1,0 +1,215 @@
+module Splice.Scripts.TestGovernanceLocks where
+
+import DA.Action (unless)
+import DA.List.Total
+import DA.Time
+
+import Daml.Script
+import Splice.Amulet
+import Splice.AmuletRules
+import Splice.Api.Token.HoldingV2 qualified as V2
+import Splice.ExternalPartyAmuletRules
+import Splice.ExternalPartyConfigState
+import Splice.GovernanceLock
+import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
+import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
+import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
+import Splice.Testing.Utils
+import Splice.TokenStandard.Utils
+
+
+testGovernanceLockHappyPath : Script ()
+testGovernanceLockHappyPath = do
+  env@TestEnv{..} <- setupTest
+
+  let someSvSpec = GovernanceLockSpecification with
+        kind = GLK_SuperValidatorRightsOwner "TestSV"
+
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 180000.0
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob 10000.0
+
+  aliceLock <- governanceLockRawChoice env alice 180000.0 someSvSpec
+
+  _bobLock <- governanceLockRawChoice env bob 10000.0 someSvSpec
+
+  now <- getTime
+
+  -- Check that negative allocations are impossible
+  actionMustFail (expectMessageContains "The requirement 'Amount is positive' was not met.") $
+    governanceLockRawChoice' env bob (-10000.0) someSvSpec
+
+  -- Check that we can't unlock with a time in the past
+  actionMustFail (expectMessageContains "Ledger time is at or past deadline 'unlockAt' at") $
+    governanceUnlockRawChoice' env aliceLock (Some 80000.0) (now `addRelTime` days (-60)) [alice]
+
+  -- Check that bob can't unlock for alice - TODO: disclose to bob with explicit disclosure for this.
+  -- actionMustFail (expectMessageContains "noodle") $ governanceUnlockRawChoice' env aliceLock (Some 80000.0) now [bob]
+
+  let unlockTime = now `addRelTime` days 1
+
+  -- Unlock 80k Amulet such that 1/8th should result in 10k Amulet withdrawable after 1/8th year.
+  (aliceVesting, Some aliceLock) <- governanceUnlockRawChoice env aliceLock (Some 80000.0) (unlockTime) [alice]
+
+  actionMustFail (expectMessageContains "'unlockAmount' is not greater than 'zero'") $
+    governanceUnlockRawChoice' env aliceLock (Some $ -80000.0) (unlockTime) [alice]
+
+  -- Assert that we have a lock remaining of 100k Amulet.
+  checkLockedHolding alice aliceLock 100000.0
+
+  -- Check that we can't withdraw immediately, before unlockTime has arrived on-ledger
+  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'requestedAt' at") $
+    vestingWithdrawRawChoice' env aliceVesting unlockTime [alice]
+
+  passTime (hours 12)
+  now <- getTime
+
+  -- Check that we can't withdraw between now and the unlockTime
+  actionMustFail (expectMessageContains "'withdraw amount' is not greater than 'zero'") $
+    vestingWithdrawRawChoice' env aliceVesting now [alice]
+
+  passTime (days 1)
+
+  -- Check that we can't withdraw exactly at the unlock time (nothing is vested yet).
+  actionMustFail (expectMessageContains "'withdraw amount' is not greater than 'zero'") $
+    vestingWithdrawRawChoice' env aliceVesting (unlockTime) [alice]
+
+  passTime (days 47)
+
+  -- Chosen to be exactly 1/8th of the specified 365.25 year.
+  -- 1/8th and 80k are reliably exactly representible in fixed-point binary
+  -- with at least three fractional places, so the arithmetic is exact and we can
+  -- comfortably use equality.
+
+  let withdrawTime = unlockTime `addRelTime` (days 45 + hours 15 + minutes 45)
+
+  (unlocked, Some newVestingLock) <- vestingWithdrawRawChoice env aliceVesting withdrawTime [alice]
+
+  actionMustFail (expectMessageContains "'withdraw amount' is not greater than 'zero'") $
+    vestingWithdrawRawChoice' env newVestingLock withdrawTime [alice]
+
+  -- Check that we did indeed unlock 10k amulet as expected - 1/8th of the total vesting amount of 80k.
+  checkHolding' alice unlocked 10000.0
+
+  -- And check that we remain with 7/8ths of the vesting amount - 70k.
+  checkLockedHolding alice newVestingLock 70000.0
+
+  passTime (days 365)
+
+  let fullWithdrawTime = unlockTime `addRelTime` days 366
+
+  (unlockedHolding2, None) <- vestingWithdrawRawChoice env newVestingLock fullWithdrawTime [alice]
+
+  -- Check that we withdrew all and exactly the 70k _remaining_ after the above withdrawal.
+  checkHolding' alice unlockedHolding2 70000.0
+  checkIsUnlocked alice unlockedHolding2
+
+
+-- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
+checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
+checkHolding' party holding amount = WalletClientV2.checkHolding party (toInterfaceContractId holding) amount
+
+checkIsUnlocked : (Implements a V2.Holding) => Party -> ContractId a -> Script ()
+checkIsUnlocked p holdingCid = do
+  holdingO <- queryInterfaceContractId p $ toInterfaceContractId @V2.Holding holdingCid
+  now <- getTime
+  let holding = case holdingO of
+        None -> error $ "Holding " <> show holdingCid <> " was not found"
+        Some holding -> holding
+  unless (WalletClientV2.isUnlocked now holding.lock) $ fail $ "Holding " <> show holding <> " is not unlocked"
+
+-- | Find the holding for a GovernanceLock or VestingLock, and check that it has the correct amount.
+checkLockedHolding
+  :  (Template t, HasEnsure t, HasField "lockedAmulet" t (ContractId LockedAmulet))
+  => Party
+  -> ContractId t
+  -> Decimal
+  -> Script ()
+checkLockedHolding p lockCid amount = do
+  Some lock <- queryContractId p lockCid
+  checkHolding' p lock.lockedAmulet amount
+
+getExternalPartyTransferContext : Party -> Script (ExternalPartyTransferContext, Disclosures')
+getExternalPartyTransferContext dso = do
+  extPartyConfigs <- query @ExternalPartyConfigState dso
+  let (externalPartyConfigState, _) = case maximumOn (\(_, c) -> c.targetArchiveAfter) extPartyConfigs of
+        None -> error "No ExternalPartyConfigState found: have you initialized the Amulet registry?"
+        Some c -> c
+  ecDD <- queryDisclosure' @ExternalPartyConfigState dso externalPartyConfigState
+  let eptc = ExternalPartyTransferContext with externalPartyConfigState; featuredAppRight = None
+  pure (eptc, ecDD)
+
+
+-- | a couple helpers to make the raw choice implementations easier to write
+submitWithTransferContext : TestEnv -> SubmitOptions -> (ExternalPartyTransferContext -> Commands a) -> Script (Either SubmitError a)
+submitWithTransferContext env options commands = do
+  let dso = env.instrId.admin
+  (context, disclosures) <- getExternalPartyTransferContext dso
+  trySubmit (options <> discloseMany' disclosures) $ commands context
+
+errorIfLeft : (Show e, CanAssert m) => Either e a -> m a
+errorIfLeft (Left e) = assertFail (show e)
+errorIfLeft (Right e) = pure e
+
+governanceLockRawChoice : TestEnv -> Party -> Decimal -> GovernanceLockSpecification -> Script (ContractId GovernanceLock)
+governanceLockRawChoice env owner amount specification = errorIfLeft =<< governanceLockRawChoice' env owner amount specification
+
+governanceLockRawChoice' : TestEnv -> Party -> Decimal -> GovernanceLockSpecification -> Script (Either SubmitError (ContractId GovernanceLock))
+governanceLockRawChoice' env owner amount specification = do
+  let dso = env.instrId.admin
+  [(eparCid, _)] <- query @ExternalPartyAmuletRules dso -- TODO: low priority: determine if there's already a way to call choices on this in the test env.
+  disc <- queryDisclosure' dso eparCid
+  inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
+  result <- submitWithTransferContext env (actAs [owner] <> discloseMany' disc) $
+    \context -> exerciseCmd eparCid ExternalPartyAmuletRules_LockForGovernance with
+      amount
+      inputs = coerceContractId <$> inputs -- These are Amulet and LockedAmulet, but we don't have convenient constraints to show that.
+      specification
+      context
+      owner
+  pure $ (.governanceLock) <$> result
+
+governanceUnlockRawChoice
+  :  TestEnv
+  -> ContractId GovernanceLock
+  -> Optional Decimal
+  -> Time
+  -> [Party]
+  -> Script (ContractId VestingLock, Optional (ContractId GovernanceLock))
+governanceUnlockRawChoice env cid unlockAmount unlockAt actors = errorIfLeft =<< governanceUnlockRawChoice' env cid unlockAmount unlockAt actors
+
+governanceUnlockRawChoice'
+  :  TestEnv
+  -> ContractId GovernanceLock
+  -> Optional Decimal
+  -> Time
+  -> [Party]
+  -> Script (Either SubmitError (ContractId VestingLock, Optional (ContractId GovernanceLock)))
+governanceUnlockRawChoice' env cid unlockAmount unlockAt actors = do
+  result <- submitWithTransferContext env (actAs actors) $ \context -> exerciseCmd cid GovernanceLock_Unlock with
+    unlockAmount
+    context
+    unlockAt
+    actors
+  pure $ ((,) <$> (.vestingLock) <*> (.governanceLock)) <$> result
+
+vestingWithdrawRawChoice
+  :  TestEnv
+  -> ContractId VestingLock
+  -> Time
+  -> [Party]
+  -> Script (ContractId V2.Holding, Optional (ContractId VestingLock))
+vestingWithdrawRawChoice env cid requestedAt actors = errorIfLeft =<< vestingWithdrawRawChoice' env cid requestedAt actors
+
+vestingWithdrawRawChoice'
+  :  TestEnv
+  -> ContractId VestingLock
+  -> Time
+  -> [Party]
+  -> Script (Either SubmitError (ContractId V2.Holding, Optional (ContractId VestingLock)))
+vestingWithdrawRawChoice' env cid requestedAt actors = do
+  result <- submitWithTransferContext env (actAs actors) $ \context -> exerciseCmd cid VestingLock_Withdraw with
+    context
+    requestedAt
+    actors
+  pure $ ((,) <$> upcast . (.vested) <*> (.vestingLock)) <$> result
+
