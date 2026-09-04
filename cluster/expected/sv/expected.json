@@ -1522,232 +1522,18 @@
       "appLabel": "scan-app",
       "globalLimits": {
         "fillInterval": "60s",
-        "maxTokens": 2147483647,
-        "tokensPerFill": 2147483647
+        "maxTokens": 10000,
+        "tokensPerFill": 10000
+      },
+      "globalPerIpLimits": {
+        "fillInterval": "60s",
+        "maxTokens": 1000,
+        "tokensPerFill": 1000
       },
       "inboundPort": 5012,
       "namespace": "sv-1",
+      "protocol": "http",
       "rateLimits": {
-        "/api/scan/livez": {
-          "name": "livez",
-          "type": "unlimited"
-        },
-        "/api/scan/readyz": {
-          "name": "readyz",
-          "type": "unlimited"
-        },
-        "/api/scan/status": {
-          "name": "status",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/acs": {
-          "fillInterval": "60s",
-          "maxTokens": 500,
-          "name": "acs",
-          "perIpLimits": {
-            "fillInterval": "60s",
-            "maxTokens": 10,
-            "tokensPerFill": 5
-          },
-          "tokensPerFill": 500,
-          "type": "limited"
-        },
-        "/api/scan/v0/active-synchronizer-serial": {
-          "name": "activeSynchronizerSerial",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/admin/sv/previous-sv-reward-weight": {
-          "name": "sv-previous-sv-reward-weight",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/admin/sv/voterequests": {
-          "name": "sv-voterequests",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/admin/sv/voteresults": {
-          "name": "sv-voteresults",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/admin/validator": {
-          "name": "validator-licenses",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/amulet-config-for-round": {
-          "name": "amulet-config-for-round",
-          "type": "banned"
-        },
-        "/api/scan/v0/amulet-price": {
-          "name": "amulet-price-votes",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/amulet-rules": {
-          "name": "amulet-rules",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/ans-entries": {
-          "name": "ans-entries",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/ans-rules": {
-          "name": "ans-rules",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/backfilling": {
-          "name": "backfilling",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/closed-rounds": {
-          "name": "closed-rounds",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/domains": {
-          "name": "domains",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/dso": {
-          "name": "dso-info",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/dso-party-id": {
-          "name": "dso-party-id",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/dso-sequencers": {
-          "name": "dso-sequencers",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/events": {
-          "name": "events",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/external-party-amulet-rules": {
-          "name": "external-party-amulet-rules",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/feature-support": {
-          "name": "feature-support",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/featured-apps": {
-          "name": "featured-apps",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/history/bulk/acs": {
-          "name": "listBulkAcsSnapshotObjects",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/history/bulk/checksums": {
-          "name": "getBulkHistoryChecksums",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/history/bulk/updates": {
-          "name": "listBulkUpdateHistoryObjects",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/holdings": {
-          "name": "holdings",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/internal/reward-accounting-process": {
-          "name": "reward-accounting-process",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/lsu": {
-          "name": "lsu",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/migrations": {
-          "name": "migrations-schedule",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/open-and-issuing-mining-rounds": {
-          "name": "open-and-issuing-mining-rounds",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/roll-forward-lsu": {
-          "name": "rollForwardLsu",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/scans": {
-          "name": "scans",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/splice-instance-names": {
-          "name": "splice-instance-names",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/state": {
-          "name": "state",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/sv-bft-sequencers": {
-          "name": "bft-sequencers",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/synchronizer-bootstrapping-transactions": {
-          "name": "synchronizer-bootstrapping-transactions",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/synchronizer-identities": {
-          "name": "synchronizer-identities",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/transfer-command": {
-          "name": "transfer-command-status",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/transfer-command-counter": {
-          "name": "transfer-command-counter",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/transfer-preapprovals": {
-          "name": "transfer-preapprovals",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/unclaimed-development-fund-coupons": {
-          "name": "unclaimed-development-fund-coupons",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/updates": {
-          "name": "v0-updates",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/validators": {
-          "name": "validators",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/voterequest": {
-          "name": "voterequest",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/voterequests": {
-          "name": "voterequests",
-          "type": "unlimited"
-        },
-        "/api/scan/v1/domains": {
-          "name": "domains-v1",
-          "type": "unlimited"
-        },
-        "/api/scan/v1/holdings": {
-          "name": "holdings",
-          "type": "unlimited"
-        },
-        "/api/scan/v1/state": {
-          "name": "state",
-          "type": "unlimited"
-        },
-        "/api/scan/v1/updates": {
-          "name": "v1-updates",
-          "type": "banned"
-        },
-        "/api/scan/v2/updates": {
-          "name": "v2-updates",
-          "type": "unlimited"
-        },
-        "/api/scan/version": {
-          "name": "version",
-          "type": "unlimited"
-        },
         "/registry/allocation-instruction/v1/allocation-factory": {
           "fillInterval": "60s",
           "maxTokens": 720,
@@ -1915,232 +1701,18 @@
       "appLabel": "scan-app",
       "globalLimits": {
         "fillInterval": "60s",
-        "maxTokens": 2147483647,
-        "tokensPerFill": 2147483647
+        "maxTokens": 10000,
+        "tokensPerFill": 10000
+      },
+      "globalPerIpLimits": {
+        "fillInterval": "60s",
+        "maxTokens": 1000,
+        "tokensPerFill": 1000
       },
       "inboundPort": 5012,
       "namespace": "sv-da-1",
+      "protocol": "http",
       "rateLimits": {
-        "/api/scan/livez": {
-          "name": "livez",
-          "type": "unlimited"
-        },
-        "/api/scan/readyz": {
-          "name": "readyz",
-          "type": "unlimited"
-        },
-        "/api/scan/status": {
-          "name": "status",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/acs": {
-          "fillInterval": "60s",
-          "maxTokens": 500,
-          "name": "acs",
-          "perIpLimits": {
-            "fillInterval": "60s",
-            "maxTokens": 10,
-            "tokensPerFill": 5
-          },
-          "tokensPerFill": 500,
-          "type": "limited"
-        },
-        "/api/scan/v0/active-synchronizer-serial": {
-          "name": "activeSynchronizerSerial",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/admin/sv/previous-sv-reward-weight": {
-          "name": "sv-previous-sv-reward-weight",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/admin/sv/voterequests": {
-          "name": "sv-voterequests",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/admin/sv/voteresults": {
-          "name": "sv-voteresults",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/admin/validator": {
-          "name": "validator-licenses",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/amulet-config-for-round": {
-          "name": "amulet-config-for-round",
-          "type": "banned"
-        },
-        "/api/scan/v0/amulet-price": {
-          "name": "amulet-price-votes",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/amulet-rules": {
-          "name": "amulet-rules",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/ans-entries": {
-          "name": "ans-entries",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/ans-rules": {
-          "name": "ans-rules",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/backfilling": {
-          "name": "backfilling",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/closed-rounds": {
-          "name": "closed-rounds",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/domains": {
-          "name": "domains",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/dso": {
-          "name": "dso-info",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/dso-party-id": {
-          "name": "dso-party-id",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/dso-sequencers": {
-          "name": "dso-sequencers",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/events": {
-          "name": "events",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/external-party-amulet-rules": {
-          "name": "external-party-amulet-rules",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/feature-support": {
-          "name": "feature-support",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/featured-apps": {
-          "name": "featured-apps",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/history/bulk/acs": {
-          "name": "listBulkAcsSnapshotObjects",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/history/bulk/checksums": {
-          "name": "getBulkHistoryChecksums",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/history/bulk/updates": {
-          "name": "listBulkUpdateHistoryObjects",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/holdings": {
-          "name": "holdings",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/internal/reward-accounting-process": {
-          "name": "reward-accounting-process",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/lsu": {
-          "name": "lsu",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/migrations": {
-          "name": "migrations-schedule",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/open-and-issuing-mining-rounds": {
-          "name": "open-and-issuing-mining-rounds",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/roll-forward-lsu": {
-          "name": "rollForwardLsu",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/scans": {
-          "name": "scans",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/splice-instance-names": {
-          "name": "splice-instance-names",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/state": {
-          "name": "state",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/sv-bft-sequencers": {
-          "name": "bft-sequencers",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/synchronizer-bootstrapping-transactions": {
-          "name": "synchronizer-bootstrapping-transactions",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/synchronizer-identities": {
-          "name": "synchronizer-identities",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/transfer-command": {
-          "name": "transfer-command-status",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/transfer-command-counter": {
-          "name": "transfer-command-counter",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/transfer-preapprovals": {
-          "name": "transfer-preapprovals",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/unclaimed-development-fund-coupons": {
-          "name": "unclaimed-development-fund-coupons",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/updates": {
-          "name": "v0-updates",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/validators": {
-          "name": "validators",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/voterequest": {
-          "name": "voterequest",
-          "type": "unlimited"
-        },
-        "/api/scan/v0/voterequests": {
-          "name": "voterequests",
-          "type": "unlimited"
-        },
-        "/api/scan/v1/domains": {
-          "name": "domains-v1",
-          "type": "unlimited"
-        },
-        "/api/scan/v1/holdings": {
-          "name": "holdings",
-          "type": "unlimited"
-        },
-        "/api/scan/v1/state": {
-          "name": "state",
-          "type": "unlimited"
-        },
-        "/api/scan/v1/updates": {
-          "name": "v1-updates",
-          "type": "banned"
-        },
-        "/api/scan/v2/updates": {
-          "name": "v2-updates",
-          "type": "unlimited"
-        },
-        "/api/scan/version": {
-          "name": "version",
-          "type": "unlimited"
-        },
         "/registry/allocation-instruction/v1/allocation-factory": {
           "fillInterval": "60s",
           "maxTokens": 720,
@@ -2433,6 +2005,7 @@
         "deletionProtectionEnabled": true,
         "edition": "ENTERPRISE",
         "insightsConfig": {
+          "enhancedQueryInsightsEnabled": false,
           "queryInsightsEnabled": true
         },
         "ipConfiguration": {
@@ -2800,6 +2373,7 @@
         "deletionProtectionEnabled": true,
         "edition": "ENTERPRISE",
         "insightsConfig": {
+          "enhancedQueryInsightsEnabled": false,
           "queryInsightsEnabled": true
         },
         "ipConfiguration": {
@@ -2978,9 +2552,103 @@
               "listener": {
                 "filterChain": {
                   "filter": {
-                    "name": "envoy.filters.network.http_connection_manager"
+                    "name": "envoy.filters.network.http_connection_manager",
+                    "subFilter": {
+                      "name": "envoy.filters.http.router"
+                    }
+                  }
+                },
+                "portNumber": 5012
+              }
+            },
+            "patch": {
+              "operation": "INSERT_BEFORE",
+              "value": {
+                "name": "envoy.filters.http.local_ratelimit.endpoint_per_ip",
+                "typed_config": {
+                  "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                  "type_url": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                  "value": {
+                    "stat_prefix": "http_local_rate_limiter_endpoint_per_ip"
                   }
                 }
+              }
+            }
+          },
+          {
+            "applyTo": "HTTP_FILTER",
+            "match": {
+              "context": "SIDECAR_INBOUND",
+              "listener": {
+                "filterChain": {
+                  "filter": {
+                    "name": "envoy.filters.network.http_connection_manager",
+                    "subFilter": {
+                      "name": "envoy.filters.http.router"
+                    }
+                  }
+                },
+                "portNumber": 5012
+              }
+            },
+            "patch": {
+              "operation": "INSERT_BEFORE",
+              "value": {
+                "name": "envoy.filters.http.local_ratelimit.endpoint",
+                "typed_config": {
+                  "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                  "type_url": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                  "value": {
+                    "stat_prefix": "http_local_rate_limiter_endpoint"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "applyTo": "HTTP_FILTER",
+            "match": {
+              "context": "SIDECAR_INBOUND",
+              "listener": {
+                "filterChain": {
+                  "filter": {
+                    "name": "envoy.filters.network.http_connection_manager",
+                    "subFilter": {
+                      "name": "envoy.filters.http.router"
+                    }
+                  }
+                },
+                "portNumber": 5012
+              }
+            },
+            "patch": {
+              "operation": "INSERT_BEFORE",
+              "value": {
+                "name": "envoy.filters.http.local_ratelimit.per_ip",
+                "typed_config": {
+                  "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                  "type_url": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                  "value": {
+                    "stat_prefix": "http_local_rate_limiter_per_ip"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "applyTo": "HTTP_FILTER",
+            "match": {
+              "context": "SIDECAR_INBOUND",
+              "listener": {
+                "filterChain": {
+                  "filter": {
+                    "name": "envoy.filters.network.http_connection_manager",
+                    "subFilter": {
+                      "name": "envoy.filters.http.router"
+                    }
+                  }
+                },
+                "portNumber": 5012
               }
             },
             "patch": {
@@ -2991,7 +2659,7 @@
                   "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
                   "type_url": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
                   "value": {
-                    "stat_prefix": "http_local_rate_limiter"
+                    "stat_prefix": "http_local_rate_limiter_global"
                   }
                 }
               }
@@ -3019,50 +2687,6 @@
                       "actions": [
                         {
                           "header_value_match": {
-                            "descriptor_value": "acs",
-                            "expect_match": true,
-                            "headers": [
-                              {
-                                "name": ":path",
-                                "string_match": {
-                                  "ignore_case": true,
-                                  "prefix": "/api/scan/v0/acs"
-                                }
-                              }
-                            ]
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "actions": [
-                        {
-                          "header_value_match": {
-                            "descriptor_value": "acs",
-                            "expect_match": true,
-                            "headers": [
-                              {
-                                "name": ":path",
-                                "string_match": {
-                                  "ignore_case": true,
-                                  "prefix": "/api/scan/v0/acs"
-                                }
-                              }
-                            ]
-                          }
-                        },
-                        {
-                          "masked_remote_address": {
-                            "v4_prefix_mask_len": 32,
-                            "v6_prefix_mask_len": 128
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "actions": [
-                        {
-                          "header_value_match": {
                             "descriptor_value": "registry-allocations",
                             "expect_match": true,
                             "headers": [
@@ -3248,6 +2872,14 @@
                                   "ignore_case": true,
                                   "prefix": "/registry/transfer-instruction/v1"
                                 }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/transfer-instruction/v1/transfer-factory"
+                                }
                               }
                             ]
                           }
@@ -3266,6 +2898,14 @@
                                 "string_match": {
                                   "ignore_case": true,
                                   "prefix": "/registry/transfer-instruction/v1"
+                                }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/transfer-instruction/v1/transfer-factory"
                                 }
                               }
                             ]
@@ -3468,6 +3108,14 @@
                                   "ignore_case": true,
                                   "prefix": "/registry/allocation-instruction/v2"
                                 }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/allocation-instruction/v2/allocation-factory"
+                                }
                               }
                             ]
                           }
@@ -3487,6 +3135,14 @@
                                   "ignore_case": true,
                                   "prefix": "/registry/allocation-instruction/v2"
                                 }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/allocation-instruction/v2/allocation-factory"
+                                }
                               }
                             ]
                           }
@@ -3556,6 +3212,14 @@
                                   "ignore_case": true,
                                   "prefix": "/registry/transfer-instruction/v2"
                                 }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/transfer-instruction/v2/transfer-factory"
+                                }
                               }
                             ]
                           }
@@ -3575,10 +3239,28 @@
                                   "ignore_case": true,
                                   "prefix": "/registry/transfer-instruction/v2"
                                 }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/transfer-instruction/v2/transfer-factory"
+                                }
                               }
                             ]
                           }
                         },
+                        {
+                          "masked_remote_address": {
+                            "v4_prefix_mask_len": 32,
+                            "v6_prefix_mask_len": 128
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "actions": [
                         {
                           "masked_remote_address": {
                             "v4_prefix_mask_len": 32,
@@ -3592,36 +3274,45 @@
                 "typed_per_filter_config": {
                   "envoy.filters.http.local_ratelimit": {
                     "@type": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                    "always_consume_default_token_bucket": true,
+                    "descriptors": [],
+                    "enable_x_ratelimit_headers": "DRAFT_VERSION_03",
+                    "filter_enabled": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enabled"
+                    },
+                    "filter_enforced": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enforced"
+                    },
+                    "max_dynamic_descriptors": 10000,
+                    "rate_limited_as_resource_exhausted": false,
+                    "response_headers_to_add": [
+                      {
+                        "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
+                        "header": {
+                          "key": "x-local-rate-limit",
+                          "value": "global"
+                        }
+                      }
+                    ],
+                    "stat_prefix": "http_local_rate_limiter_global",
+                    "token_bucket": {
+                      "fill_interval": "60s",
+                      "max_tokens": 10000,
+                      "tokens_per_fill": 10000
+                    }
+                  },
+                  "envoy.filters.http.local_ratelimit.endpoint": {
+                    "@type": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                    "always_consume_default_token_bucket": false,
                     "descriptors": [
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "acs"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 500,
-                          "tokens_per_fill": 500
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "acs"
-                          },
-                          {
-                            "key": "masked_remote_address"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 10,
-                          "tokens_per_fill": 5
-                        }
-                      },
                       {
                         "entries": [
                           {
@@ -3635,6 +3326,187 @@
                           "tokens_per_fill": 720
                         }
                       },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-metadata-info"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-metadata-instruments"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-allocation-factory"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-transfer-instruction"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-transfer-factory"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 1440,
+                          "tokens_per_fill": 1440
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-settlement-factory-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-allocations-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-allocation-factory-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-allocation-instruction-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-transfer-factory-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-transfer-instruction-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      }
+                    ],
+                    "enable_x_ratelimit_headers": "DRAFT_VERSION_03",
+                    "filter_enabled": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enabled"
+                    },
+                    "filter_enforced": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enforced"
+                    },
+                    "max_dynamic_descriptors": 10000,
+                    "rate_limited_as_resource_exhausted": false,
+                    "response_headers_to_add": [
+                      {
+                        "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
+                        "header": {
+                          "key": "x-local-rate-limit",
+                          "value": "endpoint"
+                        }
+                      }
+                    ],
+                    "stat_prefix": "http_local_rate_limiter_endpoint",
+                    "token_bucket": {
+                      "fill_interval": "60s",
+                      "max_tokens": 4294967295,
+                      "tokens_per_fill": 4294967295
+                    }
+                  },
+                  "envoy.filters.http.local_ratelimit.endpoint_per_ip": {
+                    "@type": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                    "always_consume_default_token_bucket": false,
+                    "descriptors": [
                       {
                         "entries": [
                           {
@@ -3649,19 +3521,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-metadata-info"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
                         }
                       },
                       {
@@ -3702,19 +3561,6 @@
                           {
                             "key": "header_match",
                             "value": "registry-metadata-instruments"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-metadata-instruments"
                           },
                           {
                             "key": "masked_remote_address"
@@ -3724,19 +3570,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-allocation-factory"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
                         }
                       },
                       {
@@ -3760,19 +3593,6 @@
                           {
                             "key": "header_match",
                             "value": "registry-transfer-instruction"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-transfer-instruction"
                           },
                           {
                             "key": "masked_remote_address"
@@ -3782,19 +3602,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-transfer-factory"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 1440,
-                          "tokens_per_fill": 1440
                         }
                       },
                       {
@@ -3818,19 +3625,6 @@
                           {
                             "key": "header_match",
                             "value": "registry-settlement-factory-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-settlement-factory-v2"
                           },
                           {
                             "key": "masked_remote_address"
@@ -3840,19 +3634,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-allocations-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
                         }
                       },
                       {
@@ -3876,19 +3657,6 @@
                           {
                             "key": "header_match",
                             "value": "registry-allocation-factory-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-allocation-factory-v2"
                           },
                           {
                             "key": "masked_remote_address"
@@ -3898,19 +3666,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-allocation-instruction-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
                         }
                       },
                       {
@@ -3934,19 +3689,6 @@
                           {
                             "key": "header_match",
                             "value": "registry-transfer-factory-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-transfer-factory-v2"
                           },
                           {
                             "key": "masked_remote_address"
@@ -3956,19 +3698,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-transfer-instruction-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
                         }
                       },
                       {
@@ -4004,20 +3733,71 @@
                       "runtime_key": "local_rate_limit_enforced"
                     },
                     "max_dynamic_descriptors": 10000,
+                    "rate_limited_as_resource_exhausted": false,
                     "response_headers_to_add": [
                       {
                         "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
                         "header": {
                           "key": "x-local-rate-limit",
-                          "value": "true"
+                          "value": "endpoint_per_ip"
                         }
                       }
                     ],
-                    "stat_prefix": "http_local_rate_limiter",
+                    "stat_prefix": "http_local_rate_limiter_endpoint_per_ip",
                     "token_bucket": {
                       "fill_interval": "60s",
-                      "max_tokens": 2147483647,
-                      "tokens_per_fill": 2147483647
+                      "max_tokens": 4294967295,
+                      "tokens_per_fill": 4294967295
+                    }
+                  },
+                  "envoy.filters.http.local_ratelimit.per_ip": {
+                    "@type": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                    "always_consume_default_token_bucket": false,
+                    "descriptors": [
+                      {
+                        "entries": [
+                          {
+                            "key": "masked_remote_address"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 1000,
+                          "tokens_per_fill": 1000
+                        }
+                      }
+                    ],
+                    "enable_x_ratelimit_headers": "DRAFT_VERSION_03",
+                    "filter_enabled": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enabled"
+                    },
+                    "filter_enforced": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enforced"
+                    },
+                    "max_dynamic_descriptors": 10000,
+                    "rate_limited_as_resource_exhausted": false,
+                    "response_headers_to_add": [
+                      {
+                        "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
+                        "header": {
+                          "key": "x-local-rate-limit",
+                          "value": "per_ip"
+                        }
+                      }
+                    ],
+                    "stat_prefix": "http_local_rate_limiter_per_ip",
+                    "token_bucket": {
+                      "fill_interval": "60s",
+                      "max_tokens": 4294967295,
+                      "tokens_per_fill": 4294967295
                     }
                   }
                 }
@@ -4051,6 +3831,10 @@
           {
             "name": "CUSTOM_MOCK_ENV_VAR_NAME",
             "value": "CUSTOM_MOCK_ENV_VAR_VALUE"
+          },
+          {
+            "name": "ADDITIONAL_CONFIG_CLIENT_IP_HEADERS",
+            "value": "canton.scan-apps.scan-app.parameters.rate-limiting.client-ip-headers = [\"x-envoy-external-address\"]\n"
           }
         ],
         "additionalJvmOptions": "-Dcom.sun.management.jmxremote=true -Dcom.sun.management.jmxremote.port=9010 -Dcom.sun.management.jmxremote.rmi.port=9010 -Dcom.sun.management.jmxremote.local.only=false -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=127.0.0.1 -DcustomScanAppJvmFlag",
@@ -4197,6 +3981,10 @@
             {
               "name": "ADDITIONAL_CONFIG_ADDITIONAL_PACKAGES_TO_UNVET",
               "value": "canton.sv-apps.sv.additional-packages-to-unvet.\"splice-wallet-payments\" = [\"0.1.15\", \"0.1.16\"]\ncanton.sv-apps.sv.additional-packages-to-unvet.\"splice-amulet\" = [\"0.1.15\"]"
+            },
+            {
+              "name": "ADDITIONAL_CONFIG_CLIENT_IP_HEADERS",
+              "value": "canton.sv-apps.sv.parameters.rate-limiting.client-ip-headers = [\"x-envoy-external-address\"]\n"
             }
           ],
           "additionalJvmOptions": "-Dcom.sun.management.jmxremote=true -Dcom.sun.management.jmxremote.port=9010 -Dcom.sun.management.jmxremote.rmi.port=9010 -Dcom.sun.management.jmxremote.local.only=false -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=127.0.0.1 -DcustomSvAppJvmFlag",
@@ -4774,6 +4562,7 @@
         "deletionProtectionEnabled": true,
         "edition": "ENTERPRISE",
         "insightsConfig": {
+          "enhancedQueryInsightsEnabled": false,
           "queryInsightsEnabled": true
         },
         "ipConfiguration": {
@@ -5141,6 +4930,7 @@
         "deletionProtectionEnabled": true,
         "edition": "ENTERPRISE",
         "insightsConfig": {
+          "enhancedQueryInsightsEnabled": false,
           "queryInsightsEnabled": true
         },
         "ipConfiguration": {
@@ -5348,9 +5138,103 @@
               "listener": {
                 "filterChain": {
                   "filter": {
-                    "name": "envoy.filters.network.http_connection_manager"
+                    "name": "envoy.filters.network.http_connection_manager",
+                    "subFilter": {
+                      "name": "envoy.filters.http.router"
+                    }
+                  }
+                },
+                "portNumber": 5012
+              }
+            },
+            "patch": {
+              "operation": "INSERT_BEFORE",
+              "value": {
+                "name": "envoy.filters.http.local_ratelimit.endpoint_per_ip",
+                "typed_config": {
+                  "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                  "type_url": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                  "value": {
+                    "stat_prefix": "http_local_rate_limiter_endpoint_per_ip"
                   }
                 }
+              }
+            }
+          },
+          {
+            "applyTo": "HTTP_FILTER",
+            "match": {
+              "context": "SIDECAR_INBOUND",
+              "listener": {
+                "filterChain": {
+                  "filter": {
+                    "name": "envoy.filters.network.http_connection_manager",
+                    "subFilter": {
+                      "name": "envoy.filters.http.router"
+                    }
+                  }
+                },
+                "portNumber": 5012
+              }
+            },
+            "patch": {
+              "operation": "INSERT_BEFORE",
+              "value": {
+                "name": "envoy.filters.http.local_ratelimit.endpoint",
+                "typed_config": {
+                  "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                  "type_url": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                  "value": {
+                    "stat_prefix": "http_local_rate_limiter_endpoint"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "applyTo": "HTTP_FILTER",
+            "match": {
+              "context": "SIDECAR_INBOUND",
+              "listener": {
+                "filterChain": {
+                  "filter": {
+                    "name": "envoy.filters.network.http_connection_manager",
+                    "subFilter": {
+                      "name": "envoy.filters.http.router"
+                    }
+                  }
+                },
+                "portNumber": 5012
+              }
+            },
+            "patch": {
+              "operation": "INSERT_BEFORE",
+              "value": {
+                "name": "envoy.filters.http.local_ratelimit.per_ip",
+                "typed_config": {
+                  "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                  "type_url": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                  "value": {
+                    "stat_prefix": "http_local_rate_limiter_per_ip"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "applyTo": "HTTP_FILTER",
+            "match": {
+              "context": "SIDECAR_INBOUND",
+              "listener": {
+                "filterChain": {
+                  "filter": {
+                    "name": "envoy.filters.network.http_connection_manager",
+                    "subFilter": {
+                      "name": "envoy.filters.http.router"
+                    }
+                  }
+                },
+                "portNumber": 5012
               }
             },
             "patch": {
@@ -5361,7 +5245,7 @@
                   "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
                   "type_url": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
                   "value": {
-                    "stat_prefix": "http_local_rate_limiter"
+                    "stat_prefix": "http_local_rate_limiter_global"
                   }
                 }
               }
@@ -5389,50 +5273,6 @@
                       "actions": [
                         {
                           "header_value_match": {
-                            "descriptor_value": "acs",
-                            "expect_match": true,
-                            "headers": [
-                              {
-                                "name": ":path",
-                                "string_match": {
-                                  "ignore_case": true,
-                                  "prefix": "/api/scan/v0/acs"
-                                }
-                              }
-                            ]
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "actions": [
-                        {
-                          "header_value_match": {
-                            "descriptor_value": "acs",
-                            "expect_match": true,
-                            "headers": [
-                              {
-                                "name": ":path",
-                                "string_match": {
-                                  "ignore_case": true,
-                                  "prefix": "/api/scan/v0/acs"
-                                }
-                              }
-                            ]
-                          }
-                        },
-                        {
-                          "masked_remote_address": {
-                            "v4_prefix_mask_len": 32,
-                            "v6_prefix_mask_len": 128
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "actions": [
-                        {
-                          "header_value_match": {
                             "descriptor_value": "registry-allocations",
                             "expect_match": true,
                             "headers": [
@@ -5618,6 +5458,14 @@
                                   "ignore_case": true,
                                   "prefix": "/registry/transfer-instruction/v1"
                                 }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/transfer-instruction/v1/transfer-factory"
+                                }
                               }
                             ]
                           }
@@ -5636,6 +5484,14 @@
                                 "string_match": {
                                   "ignore_case": true,
                                   "prefix": "/registry/transfer-instruction/v1"
+                                }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/transfer-instruction/v1/transfer-factory"
                                 }
                               }
                             ]
@@ -5838,6 +5694,14 @@
                                   "ignore_case": true,
                                   "prefix": "/registry/allocation-instruction/v2"
                                 }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/allocation-instruction/v2/allocation-factory"
+                                }
                               }
                             ]
                           }
@@ -5857,6 +5721,14 @@
                                   "ignore_case": true,
                                   "prefix": "/registry/allocation-instruction/v2"
                                 }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/allocation-instruction/v2/allocation-factory"
+                                }
                               }
                             ]
                           }
@@ -5926,6 +5798,14 @@
                                   "ignore_case": true,
                                   "prefix": "/registry/transfer-instruction/v2"
                                 }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/transfer-instruction/v2/transfer-factory"
+                                }
                               }
                             ]
                           }
@@ -5945,10 +5825,28 @@
                                   "ignore_case": true,
                                   "prefix": "/registry/transfer-instruction/v2"
                                 }
+                              },
+                              {
+                                "invert_match": true,
+                                "name": ":path",
+                                "string_match": {
+                                  "ignore_case": true,
+                                  "prefix": "/registry/transfer-instruction/v2/transfer-factory"
+                                }
                               }
                             ]
                           }
                         },
+                        {
+                          "masked_remote_address": {
+                            "v4_prefix_mask_len": 32,
+                            "v6_prefix_mask_len": 128
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "actions": [
                         {
                           "masked_remote_address": {
                             "v4_prefix_mask_len": 32,
@@ -5962,36 +5860,45 @@
                 "typed_per_filter_config": {
                   "envoy.filters.http.local_ratelimit": {
                     "@type": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                    "always_consume_default_token_bucket": true,
+                    "descriptors": [],
+                    "enable_x_ratelimit_headers": "DRAFT_VERSION_03",
+                    "filter_enabled": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enabled"
+                    },
+                    "filter_enforced": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enforced"
+                    },
+                    "max_dynamic_descriptors": 10000,
+                    "rate_limited_as_resource_exhausted": false,
+                    "response_headers_to_add": [
+                      {
+                        "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
+                        "header": {
+                          "key": "x-local-rate-limit",
+                          "value": "global"
+                        }
+                      }
+                    ],
+                    "stat_prefix": "http_local_rate_limiter_global",
+                    "token_bucket": {
+                      "fill_interval": "60s",
+                      "max_tokens": 10000,
+                      "tokens_per_fill": 10000
+                    }
+                  },
+                  "envoy.filters.http.local_ratelimit.endpoint": {
+                    "@type": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                    "always_consume_default_token_bucket": false,
                     "descriptors": [
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "acs"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 500,
-                          "tokens_per_fill": 500
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "acs"
-                          },
-                          {
-                            "key": "masked_remote_address"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 10,
-                          "tokens_per_fill": 5
-                        }
-                      },
                       {
                         "entries": [
                           {
@@ -6005,6 +5912,187 @@
                           "tokens_per_fill": 720
                         }
                       },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-metadata-info"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-metadata-instruments"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-allocation-factory"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-transfer-instruction"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-transfer-factory"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 1440,
+                          "tokens_per_fill": 1440
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-settlement-factory-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-allocations-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-allocation-factory-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-allocation-instruction-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-transfer-factory-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      },
+                      {
+                        "entries": [
+                          {
+                            "key": "header_match",
+                            "value": "registry-transfer-instruction-v2"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 720,
+                          "tokens_per_fill": 720
+                        }
+                      }
+                    ],
+                    "enable_x_ratelimit_headers": "DRAFT_VERSION_03",
+                    "filter_enabled": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enabled"
+                    },
+                    "filter_enforced": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enforced"
+                    },
+                    "max_dynamic_descriptors": 10000,
+                    "rate_limited_as_resource_exhausted": false,
+                    "response_headers_to_add": [
+                      {
+                        "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
+                        "header": {
+                          "key": "x-local-rate-limit",
+                          "value": "endpoint"
+                        }
+                      }
+                    ],
+                    "stat_prefix": "http_local_rate_limiter_endpoint",
+                    "token_bucket": {
+                      "fill_interval": "60s",
+                      "max_tokens": 4294967295,
+                      "tokens_per_fill": 4294967295
+                    }
+                  },
+                  "envoy.filters.http.local_ratelimit.endpoint_per_ip": {
+                    "@type": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                    "always_consume_default_token_bucket": false,
+                    "descriptors": [
                       {
                         "entries": [
                           {
@@ -6019,19 +6107,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-metadata-info"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
                         }
                       },
                       {
@@ -6072,19 +6147,6 @@
                           {
                             "key": "header_match",
                             "value": "registry-metadata-instruments"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-metadata-instruments"
                           },
                           {
                             "key": "masked_remote_address"
@@ -6094,19 +6156,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-allocation-factory"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
                         }
                       },
                       {
@@ -6130,19 +6179,6 @@
                           {
                             "key": "header_match",
                             "value": "registry-transfer-instruction"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-transfer-instruction"
                           },
                           {
                             "key": "masked_remote_address"
@@ -6152,19 +6188,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-transfer-factory"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 1440,
-                          "tokens_per_fill": 1440
                         }
                       },
                       {
@@ -6188,19 +6211,6 @@
                           {
                             "key": "header_match",
                             "value": "registry-settlement-factory-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-settlement-factory-v2"
                           },
                           {
                             "key": "masked_remote_address"
@@ -6210,19 +6220,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-allocations-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
                         }
                       },
                       {
@@ -6246,19 +6243,6 @@
                           {
                             "key": "header_match",
                             "value": "registry-allocation-factory-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-allocation-factory-v2"
                           },
                           {
                             "key": "masked_remote_address"
@@ -6268,19 +6252,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-allocation-instruction-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
                         }
                       },
                       {
@@ -6304,19 +6275,6 @@
                           {
                             "key": "header_match",
                             "value": "registry-transfer-factory-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-transfer-factory-v2"
                           },
                           {
                             "key": "masked_remote_address"
@@ -6326,19 +6284,6 @@
                           "fill_interval": "60s",
                           "max_tokens": 120,
                           "tokens_per_fill": 120
-                        }
-                      },
-                      {
-                        "entries": [
-                          {
-                            "key": "header_match",
-                            "value": "registry-transfer-instruction-v2"
-                          }
-                        ],
-                        "token_bucket": {
-                          "fill_interval": "60s",
-                          "max_tokens": 720,
-                          "tokens_per_fill": 720
                         }
                       },
                       {
@@ -6374,20 +6319,71 @@
                       "runtime_key": "local_rate_limit_enforced"
                     },
                     "max_dynamic_descriptors": 10000,
+                    "rate_limited_as_resource_exhausted": false,
                     "response_headers_to_add": [
                       {
                         "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
                         "header": {
                           "key": "x-local-rate-limit",
-                          "value": "true"
+                          "value": "endpoint_per_ip"
                         }
                       }
                     ],
-                    "stat_prefix": "http_local_rate_limiter",
+                    "stat_prefix": "http_local_rate_limiter_endpoint_per_ip",
                     "token_bucket": {
                       "fill_interval": "60s",
-                      "max_tokens": 2147483647,
-                      "tokens_per_fill": 2147483647
+                      "max_tokens": 4294967295,
+                      "tokens_per_fill": 4294967295
+                    }
+                  },
+                  "envoy.filters.http.local_ratelimit.per_ip": {
+                    "@type": "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+                    "always_consume_default_token_bucket": false,
+                    "descriptors": [
+                      {
+                        "entries": [
+                          {
+                            "key": "masked_remote_address"
+                          }
+                        ],
+                        "token_bucket": {
+                          "fill_interval": "60s",
+                          "max_tokens": 1000,
+                          "tokens_per_fill": 1000
+                        }
+                      }
+                    ],
+                    "enable_x_ratelimit_headers": "DRAFT_VERSION_03",
+                    "filter_enabled": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enabled"
+                    },
+                    "filter_enforced": {
+                      "default_value": {
+                        "denominator": "HUNDRED",
+                        "numerator": 100
+                      },
+                      "runtime_key": "local_rate_limit_enforced"
+                    },
+                    "max_dynamic_descriptors": 10000,
+                    "rate_limited_as_resource_exhausted": false,
+                    "response_headers_to_add": [
+                      {
+                        "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
+                        "header": {
+                          "key": "x-local-rate-limit",
+                          "value": "per_ip"
+                        }
+                      }
+                    ],
+                    "stat_prefix": "http_local_rate_limiter_per_ip",
+                    "token_bucket": {
+                      "fill_interval": "60s",
+                      "max_tokens": 4294967295,
+                      "tokens_per_fill": 4294967295
                     }
                   }
                 }
@@ -6421,6 +6417,10 @@
           {
             "name": "CUSTOM_MOCK_ENV_VAR_NAME",
             "value": "CUSTOM_MOCK_ENV_VAR_VALUE"
+          },
+          {
+            "name": "ADDITIONAL_CONFIG_CLIENT_IP_HEADERS",
+            "value": "canton.scan-apps.scan-app.parameters.rate-limiting.client-ip-headers = [\"x-envoy-external-address\"]\n"
           }
         ],
         "additionalJvmOptions": "-Dcom.sun.management.jmxremote=true -Dcom.sun.management.jmxremote.port=9010 -Dcom.sun.management.jmxremote.rmi.port=9010 -Dcom.sun.management.jmxremote.local.only=false -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=127.0.0.1 -DcustomScanAppJvmFlag",
@@ -6572,6 +6572,10 @@
             {
               "name": "ADDITIONAL_CONFIG_ADDITIONAL_PACKAGES_TO_UNVET",
               "value": "canton.sv-apps.sv.additional-packages-to-unvet.\"splice-wallet-payments\" = [\"0.1.15\", \"0.1.16\"]\ncanton.sv-apps.sv.additional-packages-to-unvet.\"splice-amulet\" = [\"0.1.15\"]"
+            },
+            {
+              "name": "ADDITIONAL_CONFIG_CLIENT_IP_HEADERS",
+              "value": "canton.sv-apps.sv.parameters.rate-limiting.client-ip-headers = [\"x-envoy-external-address\"]\n"
             }
           ],
           "additionalJvmOptions": "-Dcom.sun.management.jmxremote=true -Dcom.sun.management.jmxremote.port=9010 -Dcom.sun.management.jmxremote.rmi.port=9010 -Dcom.sun.management.jmxremote.local.only=false -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=127.0.0.1 -DcustomSvAppJvmFlag",
@@ -6658,7 +6662,8 @@
           "initialAmuletPrice": "0.0517",
           "isDevNet": false,
           "joinWithKeyOnboarding": {
-            "sponsorApiUrl": "http://sv-app.sv-1:5014"
+            "sponsorApiUrl": "http://sv-app.sv-1:5014",
+            "sponsorScanUrl": "http://scan-app.sv-1:5012"
           },
           "logAsyncFlush": false,
           "logLevel": "INFO",
@@ -7119,6 +7124,7 @@
         "deletionProtectionEnabled": false,
         "edition": "ENTERPRISE",
         "insightsConfig": {
+          "enhancedQueryInsightsEnabled": false,
           "queryInsightsEnabled": true
         },
         "ipConfiguration": {

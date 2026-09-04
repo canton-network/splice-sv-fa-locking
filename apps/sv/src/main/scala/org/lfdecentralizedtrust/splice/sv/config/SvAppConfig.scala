@@ -21,6 +21,7 @@ import com.digitalasset.canton.config.RequireTypes.{
   PositiveLong,
   PositiveNumeric,
 }
+import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.synchronizer.mediator.RemoteMediatorConfig
 import com.digitalasset.canton.synchronizer.sequencer.config.RemoteSequencerConfig
 import com.digitalasset.canton.topology.PartyId
@@ -49,9 +50,10 @@ import org.lfdecentralizedtrust.splice.environment.{
   PackageVettingLookupService,
 }
 import org.lfdecentralizedtrust.splice.lsu.LsuRollForwardTimestamp
+import org.lfdecentralizedtrust.splice.scan.config.ScanAppClientConfig
 import org.lfdecentralizedtrust.splice.sv.SvAppClientConfig
 import org.lfdecentralizedtrust.splice.sv.util.SvUtil
-import org.lfdecentralizedtrust.splice.util.SpliceUtil
+import org.lfdecentralizedtrust.splice.util.{SpliceUtil, SwitchOverTimes}
 
 import java.nio.file.Path
 
@@ -120,7 +122,15 @@ object SvOnboardingConfig {
       developmentFundManager: Option[PartyId] = None,
       initialExternalPartyConfigStateTickDuration: Option[NonNegativeFiniteDuration] = None,
       optValidatorFaucetCap: Option[BigDecimal] = None,
-      initialRewardConfig: Option[InitialRewardConfig] = None,
+      // Networks default to FeaturedAppMarkers minting with TrafficBasedAppRewards
+      // dry-run alongside. Tests default to TrafficBasedAppRewards minting (no
+      // dry-run) via a config transform in ConfigTransforms.defaults().
+      initialRewardConfig: Option[InitialRewardConfig] = Some(InitialRewardConfig()),
+      initialSvOperationsSwitchOverTimes: Option[Map[String, CantonTimestamp]] = Some(
+        Map(
+          SwitchOverTimes.NoFeaturedAppChoiceContext -> CantonTimestamp.MinValue
+        )
+      ),
   ) extends SvOnboardingConfig
 
   case class JoinWithKey(
@@ -128,6 +138,8 @@ object SvOnboardingConfig {
       svClient: SvAppClientConfig, // an SV that we'll contact to start our onboarding
       publicKey: String, // the key that identifies us together with our name
       privateKey: String, // the private key we use for authenticating ourselves
+      // A scan instance (typically the sponsor's) used to fetch DSO info during onboarding
+      scanClient: ScanAppClientConfig,
   ) extends SvOnboardingConfig
 
   object JoinWithKey
@@ -220,8 +232,8 @@ object SvOnboardingConfig {
   def hideConfidential(config: SvOnboardingConfig): SvOnboardingConfig = {
     val hidden = "****"
     config match {
-      case JoinWithKey(name, svClient, publicKey, _) =>
-        JoinWithKey(name, svClient, publicKey, hidden)
+      case JoinWithKey(name, svClient, publicKey, _, scanClient) =>
+        JoinWithKey(name, svClient, publicKey, hidden, scanClient)
       case other => other
     }
   }
@@ -246,7 +258,7 @@ object SvOnboardingConfig {
 
 final case class InitialRewardConfig(
     mintingVersion: String = "RewardVersion_FeaturedAppMarkers",
-    dryRunVersion: Option[String] = None,
+    dryRunVersion: Option[String] = Some("RewardVersion_TrafficBasedAppRewards"),
     batchSize: Long = 100,
     rewardCouponTimeToLiveMicros: Long = 36L * 60 * 60 * 1000000, // 36 hours
     appRewardCouponThreshold: BigDecimal = BigDecimal("0.5"),
