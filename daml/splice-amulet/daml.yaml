@@ -3,6 +3,8 @@
 # classes. You should either use `daml build` or `sbt ~compile`, but NOT both
 # at the same time (see #179 for more context).
 
+# FIXME: I expect this to fail
+
 sdk-version: 3.5.2
 name: splice-amulet
 source: daml
