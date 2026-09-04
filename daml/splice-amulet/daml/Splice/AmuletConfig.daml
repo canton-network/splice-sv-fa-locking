@@ -197,7 +197,7 @@ validPackageConfig _ = True
 -- | Governance lock configuration.
 data GovernanceLockConfig = GovernanceLockConfig with
     minimumGovernanceLock : Decimal
-    -- ^ The minimum amount for a governance lock. Default: 10k Amulet.
+      -- ^ The minimum amount for a governance lock. Default: 10k Amulet.
   deriving (Eq, Show)
 
 -- | Unwrap Optional GovernanceLockConfig, using the defaults if None.

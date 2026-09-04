@@ -1,18 +1,13 @@
 module Splice.Scripts.TestGovernanceLocks where
 
 import DA.Action (unless)
-import DA.List.Total
-import DA.TextMap qualified as TextMap
 import DA.Time
 
 import Daml.Script
 import Splice.Amulet
-import Splice.Amulet.TokenApiUtils
-import Splice.AmuletRules
 import Splice.Api.Token.HoldingV2 qualified as V2
 import Splice.Api.Token.MetadataV1
 import Splice.ExternalPartyAmuletRules
-import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
