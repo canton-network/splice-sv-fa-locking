@@ -115,6 +115,39 @@ template GovernanceLock
           governanceLock = newGovernanceLock
           changeHolding
 
+    choice GovernanceLock_TopUp_MergeLocks : GovernanceLock_TopUpResult
+      with
+        inputLocks : [ContractId GovernanceLock]
+        context : ExternalPartyTransferContext
+      controller owner
+      do
+        let forOwner = ForOwner with dso; owner
+        (targetUnlockedAmulet, (targetUnlockedAmount, lockProps)) <- unlockAmulet forOwner lockedAmulet
+
+        unlockedAmuletsAndHoldings : [(Decimal, ContractId Holding)] <- forA inputLocks $ \governanceLockCid -> do
+          governanceLock <- fetchChecked @GovernanceLock forOwner governanceLockCid
+          require "DSO must be the same as the targeted GovernanceLock" $ governanceLock.dso == dso
+          require "Owner must be the same as the targeted GovernanceLock" $ governanceLock.owner == owner
+          require "GovernanceLockSpecification must be the same as the targeted GovernanceLock"
+            $ governanceLock.specification == specification
+
+          (amuletCid, (unlockedAmount, _)) <- unlockAmulet forOwner governanceLock.lockedAmulet
+          pure (unlockedAmount, toInterfaceContractId amuletCid)
+
+        let newAmount : Decimal = (+) targetUnlockedAmount $ sum [amt | (amt, _) <- unlockedAmuletsAndHoldings]
+            newHoldings : [ContractId Holding] = (toInterfaceContractId targetUnlockedAmulet)
+              :: [holding | (_, holding) <- unlockedAmuletsAndHoldings]
+        ([newLockedAmulet], None) <- lockAmulet forOwner [(newAmount, lockProps)] newHoldings context
+
+        newGovernanceLock <- create
+          this with
+            amount = newAmount
+            lockedAmulet = newLockedAmulet
+
+        pure $ GovernanceLock_TopUpResult with
+          governanceLock = newGovernanceLock
+          changeHolding = None
+
   -- TODO: implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO: implement pending V1 transfer for the above, for backwards compatibility.
   -- TODO: substitution, probably with a loose function for implementation sharing.
@@ -273,7 +306,7 @@ partialUnlock forOwner lockedAmuletCid stillLockedAmount context = do
 relockAmulet : ForOwner -> ContractId LockedAmulet -> LockProperties -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet)
 relockAmulet forOwner lockedAmuletCid newLockProperties context = do
   (amuletCid, (currentAmount, _)) <- unlockAmulet forOwner lockedAmuletCid
-  ([newLockedCid], None) <- lockAmulet forOwner [(currentAmount, newLockProperties)] [toInterfaceContractId $ amuletCid] context
+  ([newLockedCid], None) <- lockAmulet forOwner [(currentAmount, newLockProperties)] [toInterfaceContractId amuletCid] context
   pure newLockedCid
 
 unlockAmulet : ForOwner -> ContractId LockedAmulet -> Update (ContractId Amulet, LockSpecification)
@@ -318,3 +351,9 @@ changeLockedAmuletAmount lockedAmulet forOwner context inputHoldingCids amount =
     [(amount, lockProps)]
     (toInterfaceContractId unlockedAmuletCid :: inputHoldingCids)
     context
+
+instance HasCheckedFetch GovernanceLock ForDso where
+  contractGroupId GovernanceLock {..} = ForDso with dso
+
+instance HasCheckedFetch GovernanceLock ForOwner where
+  contractGroupId GovernanceLock {..} = ForOwner with dso; owner
