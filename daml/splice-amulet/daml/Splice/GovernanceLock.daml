@@ -15,7 +15,7 @@ import Splice.TokenStandard.Utils hiding (require)
 import Splice.Types
 import Splice.Util
 
-
+-- CI TEST
 data GovernanceLockKind
   = GLK_FeaturedApp with
       provider : Party -- ^ Featured app provider party.
