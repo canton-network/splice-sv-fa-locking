@@ -510,6 +510,7 @@ class SvStateManagementIntegrationTest extends SvIntegrationTestBase with Trigge
       initialConfig.developmentFundManagerBlacklist,
       initialConfig.minDevelopmentFundMintingDelay,
       initialConfig.amuletSwitchOverTimes,
+      initialConfig.governanceLockConfig,
     )
 
     val (_, voteRequestCid) = actAndCheck(
