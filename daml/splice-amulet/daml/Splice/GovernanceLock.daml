@@ -101,6 +101,7 @@ template GovernanceLock
         context : ExternalPartyTransferContext
       controller owner
       do
+        -- TODO Require presence of arguments for either top up via liquid or merge locks
         let forOwner = ForOwner with dso; owner
             holdingInputsPresence : Bool = length holdingInputs > 0
 
