@@ -524,6 +524,9 @@ abstract class StoreTestBase
         new governancelockCodegen.GovernanceLockSpecification(
           new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner(svName)
         ),
+        Optional.empty(),
+        Instant.now().truncatedTo(ChronoUnit.MICROS),
+        new Metadata(java.util.Collections.emptyMap()),
       ),
     )
 
@@ -548,6 +551,8 @@ abstract class StoreTestBase
         new governancelockCodegen.VestingLockSpecification(
           new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner(svName)
         ),
+        Optional.empty(),
+        new Metadata(java.util.Collections.emptyMap()),
       ),
     )
 
