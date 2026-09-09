@@ -1669,12 +1669,16 @@ object SvDsoStore {
           contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.expiresAt)),
         )
       },
-      mkFilter(splice.governancelock.VestingLock.COMPANION)(co => co.payload.dso == dso) {
-        contract =>
-          DsoAcsStoreRowData(
-            contract,
-            contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.endTime)),
-          )
+      mkFilter(splice.governancelock.VestingLock.COMPANION)(
+        co => co.payload.dso == dso,
+        versionGuard = { case (pkgVersionSupport, now) =>
+          (tc) => pkgVersionSupport.supportsGovernanceLock(Seq(dsoParty), now)(tc)
+        },
+      ) { contract =>
+        DsoAcsStoreRowData(
+          contract,
+          contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.endTime)),
+        )
       },
     )
 
