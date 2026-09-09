@@ -103,58 +103,62 @@ template GovernanceLock
 
     choice GovernanceLock_TopUp : GovernanceLock_TopUpResult
       with
-        topupAmount : Decimal -- ^ Amount by which the locked amount should be increased.
-        inputs : [ContractId Holding]
-        context : ExternalPartyTransferContext
-      controller owner
-      do
-        require "Top up amount should be positive" $ topupAmount > 0.0
-
-        let newAmount = amount + topupAmount
-        ([newHolding], changeHolding) <- changeLockedAmuletAmount lockedAmulet (ForOwner with dso; owner) context inputs newAmount
-        newGovernanceLock <- create GovernanceLock with
-          dso
-          owner
-          amount = newAmount
-          lockedAmulet = newHolding
-          specification
-
-        pure $ GovernanceLock_TopUpResult with
-          governanceLock = newGovernanceLock
-          changeHolding
-
-    choice GovernanceLock_TopUp_MergeLocks : GovernanceLock_TopUpResult
-      with
-        inputLocks : [ContractId GovernanceLock]
+        optTopUpAmount : Optional Decimal -- ^ Amount by which the locked amount should be increased.
+        holdingInputs : [ContractId Holding]
+        lockInputs : [ContractId GovernanceLock]
         context : ExternalPartyTransferContext
       controller owner
       do
         let forOwner = ForOwner with dso; owner
-        (targetUnlockedAmulet, (targetUnlockedAmount, lockProps)) <- unlockAmulet forOwner lockedAmulet
+            holdingInputsPresence : Bool = length holdingInputs > 0
 
-        unlockedAmuletsAndHoldings : [(Decimal, ContractId Holding)] <- forA inputLocks $ \governanceLockCid -> do
-          governanceLock <- fetchChecked @GovernanceLock forOwner governanceLockCid
-          require "DSO must be the same as the targeted GovernanceLock" $ governanceLock.dso == dso
-          require "Owner must be the same as the targeted GovernanceLock" $ governanceLock.owner == owner
-          require "GovernanceLockSpecification must be the same as the targeted GovernanceLock"
-            $ governanceLock.specification == specification
+        -- topUp from Liquid Amulet logic
+        (newLockedAmuletFromLiquid, changeHoldingFromLiquid, newTopUpAmountFromLiquid) <- case optTopUpAmount of
+          Some topUpAmount -> do
+            require "Top up amount should be positive" $ topUpAmount > 0.0
+            require "holdingInputs should not be an empty list" holdingInputsPresence
+            let newTopUpAmount = amount + topUpAmount
+            ([newLockedAmulet], changeHolding) <- changeLockedAmuletAmount
+              lockedAmulet forOwner context holdingInputs newTopUpAmount
+            pure $ (newLockedAmulet, changeHolding, Some newTopUpAmount)
+          None -> if holdingInputsPresence
+            -- Default to original lockedAmulet
+            then pure (lockedAmulet, None, None)
+            else abort "A topUpAmount should be specified and not None"
 
-          (amuletCid, (unlockedAmount, _)) <- unlockAmulet forOwner governanceLock.lockedAmulet
-          pure (unlockedAmount, toInterfaceContractId amuletCid)
+        -- topUp from Merging other GovernanceLocks logic
+        (newLockedAmuletFromMerge, Some newTopUpAmountFromMerge) <- case length lockInputs > 0 of
+          -- Default from previous
+          False -> pure (newLockedAmuletFromLiquid, newTopUpAmountFromLiquid)
+          True -> do
+            (targetUnlockedAmulet, (targetUnlockedAmount, lockProps)) <- unlockAmulet forOwner newLockedAmuletFromLiquid
 
-        let newAmount : Decimal = (+) targetUnlockedAmount $ sum [amt | (amt, _) <- unlockedAmuletsAndHoldings]
-            newHoldings : [ContractId Holding] = (toInterfaceContractId targetUnlockedAmulet)
-              :: [holding | (_, holding) <- unlockedAmuletsAndHoldings]
-        ([newLockedAmulet], None) <- lockAmulet forOwner [(newAmount, lockProps)] newHoldings context
+            unlockedAmuletsAndHoldings : [(Decimal, ContractId Holding)] <- forA lockInputs $ \governanceLockCid -> do
+              governanceLock <- fetchChecked @GovernanceLock forOwner governanceLockCid
+              requireMatchExpected ("governanceLock.dso", governanceLock.dso) dso
+              requireMatchExpected ("governanceLock.owner", governanceLock.owner) owner
+              requireMatchExpected ("governanceLock.specification", governanceLock.specification) specification
 
-        newGovernanceLock <- create
-          this with
-            amount = newAmount
-            lockedAmulet = newLockedAmulet
+              (amuletCid, (unlockedAmount, _)) <- unlockAmulet forOwner governanceLock.lockedAmulet
+              pure (unlockedAmount, toInterfaceContractId amuletCid)
+
+            let newAmount : Decimal = targetUnlockedAmount + sum [amt | (amt, _) <- unlockedAmuletsAndHoldings]
+                newHoldings : [ContractId Holding] = (toInterfaceContractId targetUnlockedAmulet)
+                  :: [holding | (_, holding) <- unlockedAmuletsAndHoldings]
+            ([newLockedAmulet], None) <- lockAmulet forOwner [(newAmount, lockProps)] newHoldings context
+            pure (newLockedAmulet, Some newAmount)
+
+        newGovernanceLock <- create GovernanceLock with
+          dso
+          owner
+          amount = newTopUpAmountFromMerge
+          lockedAmulet = newLockedAmuletFromMerge
+          specification
 
         pure $ GovernanceLock_TopUpResult with
           governanceLock = newGovernanceLock
-          changeHolding = None
+          -- MergeLocks should not produce change
+          changeHolding = changeHoldingFromLiquid
 
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO(canton-network/splice-sv-fa-locking#39): implement pending V1 transfer for the above, for backwards compatibility.

@@ -195,11 +195,12 @@ testTopUpNegativePath = do
     governanceLockTopUpRawChoice' env aliceLock (300000.0) alice
 
   -- Test top up when the input holdings aren't enough (the original input holding amount is taken into account)
-  actionMustFail (expectMessageContains "Insufficient funds: you are missing 5000.0 to complete this transfer.") $
+  actionMustFail (expectMessageContains "The requirement 'holdingInputs should not be an empty list' was not met.") $
     submitWithTransferContext env (actAs alice)
       $ \context -> exerciseCmd aliceLock GovernanceLock_TopUp with
-        topupAmount = 5000.0
-        inputs = []
+        optTopUpAmount = Some 5000.0
+        holdingInputs = []
+        lockInputs = []
         context
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
@@ -317,8 +318,9 @@ governanceLockTopUpRawChoice'
 governanceLockTopUpRawChoice' env cid topupAmount owner = do
   inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
   result : Either SubmitError GovernanceLock_TopUpResult <- submitWithTransferContext env (actAs owner) $ \context -> exerciseCmd cid GovernanceLock_TopUp with
-    topupAmount
-    inputs = downcast <$> inputs
+    optTopUpAmount = Some topupAmount
+    holdingInputs = downcast <$> inputs
+    lockInputs = []
     context
   pure $ case result of
     Left e -> Left e
