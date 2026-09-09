@@ -842,6 +842,7 @@ class TrafficBasedRewardsSvAppTimeBasedIntegrationTest
       existing.developmentFundManagerBlacklist,
       existing.minDevelopmentFundMintingDelay,
       existing.amuletSwitchOverTimes,
+      existing.governanceLockConfig,
     )
     setAmuletConfig(Seq((None, newConfig, existing)))
     eventually() {
