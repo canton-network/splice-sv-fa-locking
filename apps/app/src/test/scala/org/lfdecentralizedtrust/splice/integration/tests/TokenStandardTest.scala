@@ -212,6 +212,36 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
     })
   }
 
+  private def makeLockMagicParty(kind: String): PartyId =
+    PartyId.tryFromProtoPrimitive(
+      s"cip-0105_$kind::1220000000000000000000000000000000000000000000000000000000000000abcd"
+    )
+
+  val superValidatorLockMagicParty = makeLockMagicParty("sv-lock")
+  val featuredAppLockMagicParty = makeLockMagicParty("fa-lock")
+
+  def createGovernanceLockViaTokenStandard(
+      participant: ParticipantClientReference,
+      owner: RichPartyId,
+      lockParty: PartyId,
+      lockSubject: String,
+      amount: BigDecimal,
+  )(implicit
+      env: SpliceTestConsoleEnvironment
+  ): transferinstructionv1.TransferInstruction.ContractId = {
+    executeTransferViaTokenStandard(
+      participant,
+      owner,
+      lockParty,
+      amount,
+      transferinstruction.v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer,
+      description = Some(s"lock-subject=$lockSubject"),
+    )
+    listTransferInstructions(participant, owner.partyId).collect {
+      case (cid, view) if view.transfer.receiver == lockParty.toProtoPrimitive => cid
+    }.loneElement
+  }
+
   def acceptTransferInstruction(
       participant: ParticipantClientReference,
       receiver: RichPartyId,
