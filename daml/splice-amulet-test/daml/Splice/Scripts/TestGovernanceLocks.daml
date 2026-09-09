@@ -40,7 +40,7 @@ testGovernanceLockHappyPath = do
   actionMustFail (expectMessageContains "Ledger time is at or past deadline 'unlockAt' at") $
     governanceUnlockRawChoice' env aliceLock (Some 80000.0) (now `addRelTime` days (-60)) [alice]
 
-  -- Check that bob can't unlock for alice - TODO: disclose to bob with explicit disclosure for this.
+  -- Check that bob can't unlock for alice - TODO(canton-network/splice-sv-fa-locking#39): disclose to bob with explicit disclosure for this.
   -- actionMustFail (expectMessageContains "noodle") $ governanceUnlockRawChoice' env aliceLock (Some 80000.0) now [bob]
 
   let unlockTime = now `addRelTime` days 1
@@ -185,7 +185,7 @@ governanceLockRawChoice env owner amount specification = errorIfLeft =<< governa
 governanceLockRawChoice' : TestEnv -> Party -> Decimal -> GovernanceLockSpecification -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockRawChoice' env owner amount specification = do
   let dso = env.instrId.admin
-  [(eparCid, _)] <- query @ExternalPartyAmuletRules dso -- TODO: low priority: determine if there's already a way to call choices on this in the test env.
+  [(eparCid, _)] <- query @ExternalPartyAmuletRules dso -- TODO(canton-network/splice-sv-fa-locking#39): low priority: determine if there's already a way to call choices on this in the test env.
   disc <- queryDisclosure' dso eparCid
   inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
   result <- submitWithTransferContext env (actAs [owner] <> discloseMany' disc) $
