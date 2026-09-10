@@ -104,6 +104,10 @@ export function buildAmuletRulesConfigFromChanges(
       : null;
   const minDevelopmentFundMintingDelay = getValue('minDevelopmentFundMintingDelay', true);
   const rewardConfigMintingVersion = getValue('rewardConfigMintingVersion', true);
+  const governanceLockConfigMinimumGovernanceLockAmount = getValue(
+    'governanceLockConfigMinimumGovernanceLockAmount',
+    true
+  );
   const amuletConfig: AmuletConfig<'USD'> = {
     tickDuration: { microseconds: getValue('tickDuration', false) },
     transferPreapprovalFee: getValue('transferPreapprovalFee', true),
@@ -203,6 +207,13 @@ export function buildAmuletRulesConfigFromChanges(
               microseconds: getValue('rewardConfigRewardCouponTimeToLive', false),
             },
             appRewardCouponThreshold: getValue('rewardConfigAppRewardCouponThreshold', false),
+          },
+
+    governanceLockConfig:
+      governanceLockConfigMinimumGovernanceLockAmount === null
+        ? null
+        : {
+            minimumGovernanceLockAmount: governanceLockConfigMinimumGovernanceLockAmount,
           },
   };
 

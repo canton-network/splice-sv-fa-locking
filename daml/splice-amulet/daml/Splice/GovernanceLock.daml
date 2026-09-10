@@ -1,3 +1,6 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
 module Splice.GovernanceLock where
 
 import DA.Assert
@@ -25,7 +28,7 @@ data GovernanceLockKind
       svName : Text  -- ^ Name of the SV rights owner for whom the funds are locked.
   deriving (Eq, Show, Serializable)
 
--- TODO: add controllers specifications
+-- TODO(canton-network/splice-sv-fa-locking#39): add controllers specifications
 data GovernanceLockSpecification
   = GovernanceLockSpecification with
       kind : GovernanceLockKind
@@ -57,7 +60,7 @@ template GovernanceLock
         actors : [Party]
       controller actors
       do
-        checkActors actors [[owner]] -- TODO: custom controllers
+        checkActors actors [[owner]] -- TODO(canton-network/splice-sv-fa-locking#39): custom controllers
         assertWithinDeadline "unlockAt" unlockAt
 
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
@@ -98,9 +101,9 @@ template GovernanceLock
           vestingLock
           governanceLock
 
-  -- TODO: implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
-  -- TODO: implement pending V1 transfer for the above, for backwards compatibility.
-  -- TODO: substitution, probably with a loose function for implementation sharing.
+  -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
+  -- TODO(canton-network/splice-sv-fa-locking#39): implement pending V1 transfer for the above, for backwards compatibility.
+  -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
 data GovernanceLock_UnlockResult
   = GovernanceLock_UnlockResult with
@@ -130,7 +133,7 @@ template VestingLock
         actors : [Party]
       controller actors
       do
-        checkActors actors [[owner]] -- TODO: custom controllers
+        checkActors actors [[owner]] -- TODO(canton-network/splice-sv-fa-locking#39): custom controllers
         assertDeadlineExceeded "requestedAt" requestedAt
         context <- externalPartyTransferFromChoiceContext dso extraArgs.context
 
@@ -152,9 +155,9 @@ template VestingLock
               vestingLock
               vested = toInterfaceContractId unlocked
 
-  -- TODO: implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
-  -- TODO: implement pending V1 transaction for the above, for backwards compatibility.
-  -- TODO: substitution, probably with a loose function for implementation sharing.
+  -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
+  -- TODO(canton-network/splice-sv-fa-locking#39): implement pending V1 transaction for the above, for backwards compatibility.
+  -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
 data VestingLock_WithdrawResult
   = VestingLock_WithdrawResult with
@@ -195,8 +198,8 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
     specification
   pure $ (governanceLock, changeHolding)
 
-  -- TODO: implement V2 AllocationFactory in terms of above.
-  -- TODO: find and use binding point for "magic address" V1 token standard to above.
+  -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 AllocationFactory in terms of above.
+  -- TODO(canton-network/splice-sv-fa-locking#39): find and use binding point for "magic address" V1 token standard to above.
 
 typeExtraObservers : GovernanceLockKind -> [Party]
 typeExtraObservers (GLK_FeaturedApp party) = [party]
@@ -217,7 +220,7 @@ describeVestingSpecification lock = "Unlocking from supporting " <> describeGove
 
 -- Lock properties for LockSubject types
 
--- TODO: make configurable
+-- TODO(canton-network/splice-sv-fa-locking#39): make configurable
 vestingDurationFor : GovernanceLockKind -> ExternalPartyTransferContext -> RelTime
 vestingDurationFor (GLK_FeaturedApp _) _ = days 60
 vestingDurationFor (GLK_SuperValidatorRightsOwner _) _ = days 365 + hours 6
