@@ -248,6 +248,12 @@ describe('buildAmuletRulesConfigFromChanges', () => {
         currentValue: '0.5',
         newValue: '1.0',
       },
+      {
+        fieldName: 'governanceLockConfigMinimumGovernanceLockAmount',
+        label: 'Governance lock config: Minimum governance lock amount in Amulet',
+        currentValue: '',
+        newValue: '20000',
+      },
     ];
 
     const result = buildAmuletRulesConfigFromChanges(changes);
@@ -302,6 +308,8 @@ describe('buildAmuletRulesConfigFromChanges', () => {
       rewardCouponTimeToLive: { microseconds: '259200000000' },
       appRewardCouponThreshold: '1.0',
     });
+
+    expect(result.governanceLockConfig).toEqual({ minimumGovernanceLockAmount: '20000' });
   });
 
   test('should handle multiple transfer fee steps', () => {
@@ -479,5 +487,20 @@ describe('buildAmuletRulesConfigFromChanges', () => {
         optDevelopmentFundPercentage: '0.06',
       },
     });
+  });
+
+  test('should map an empty minimum governance lock amount to null', () => {
+    const changes: ConfigChange[] = [
+      {
+        fieldName: 'governanceLockConfigMinimumGovernanceLockAmount',
+        label: 'Governance lock config: Minimum governance lock amount in Amulet',
+        currentValue: '20000',
+        newValue: '',
+      },
+    ];
+
+    const result = buildAmuletRulesConfigFromChanges(changes);
+
+    expect(result.governanceLockConfig).toBeNull();
   });
 });
