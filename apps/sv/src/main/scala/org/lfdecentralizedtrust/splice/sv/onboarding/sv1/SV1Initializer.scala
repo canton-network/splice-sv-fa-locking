@@ -684,7 +684,7 @@ class SV1Initializer(
                   optValidatorFaucetCap = sv1Config.optValidatorFaucetCap,
                   initialRewardConfig = sv1Config.initialRewardConfig.map(_.toRewardConfig),
                   governanceLockConfig =
-                    None, // TODO(canton-network/splice-sv-fa-locking#28) - add actual config
+                    sv1Config.initialGovernanceLockConfig.map(_.toGovernanceLockConfig),
                 )
                 for {
                   sv1SynchronizerNodes <- SvUtil.getSV1SynchronizerNodeConfig(
