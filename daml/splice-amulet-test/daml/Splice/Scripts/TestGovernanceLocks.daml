@@ -196,7 +196,7 @@ testTopUpWithMergingLocks = do
   checkLockedHolding alice aliceLock' 70000.0
   when (isSome aliceLockChange) $ fail "None is expected when no topUpAmount and only locks are provided for 'GovernanceLock_MergeAndTopUp'"
 
-  -- Now let's test with topAmount in addition to Merging Locks
+  -- Now let's test with topUpAmount in addition to Merging Locks
   aliceLock4 <- governanceLockRawChoice env alice 25000.0 someSvSpec
   aliceLock5 <- governanceLockRawChoice env alice 25000.0 someSvSpec
 
@@ -216,7 +216,7 @@ testTopUpNegativePath = do
   checkLockedHolding alice aliceLock 10000.0
 
   -- Test negative top up amount
-  actionMustFail (expectMessageContains "The requirement 'Top up amount should be positive or 0.0 in the case top up is not required' was not met.") $
+  actionMustFail (expectMessageContains "'topUpAmount' is less than 'zero'") $
     governanceLockTopUpRawChoice' env aliceLock [] None (-5000.0) alice
 
   -- Test top up amount when we don't have enough funds
@@ -372,7 +372,7 @@ governanceLockTopUpRawChoice' env cid lockInputs optHoldingInputs topUpAmount ow
   holdingInputs <- case optHoldingInputs of
     -- None should just grab all from wallet for user
     None -> WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
-    Some holdingIns -> pure holdingIns
+    Some holdingInputs -> pure holdingInputs
   result : Either SubmitError GovernanceLock_MergeAndTopUpResult <- submitWithTransferContext env (actAs owner) $ \context -> exerciseCmd cid GovernanceLock_MergeAndTopUp with
     topUpAmount
     lockInputs = lockInputs
