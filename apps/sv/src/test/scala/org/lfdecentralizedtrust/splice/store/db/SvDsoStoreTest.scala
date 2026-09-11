@@ -205,15 +205,11 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
           _ <- MonadUtil.sequentialTraverse(Seq(dsoLock, otherDsoLock))(
             dummyDomain.create(_)(store.multiDomainAcsStore)
           )
-          dsoLockResult <- store.multiDomainAcsStore.lookupContractById(
+          result <- store.multiDomainAcsStore.listContracts(
             splice.governancelock.GovernanceLock.COMPANION
-          )(dsoLock.contractId)
-          otherDsoLockResult <- store.multiDomainAcsStore.lookupContractById(
-            splice.governancelock.GovernanceLock.COMPANION
-          )(otherDsoLock.contractId)
+          )
         } yield {
-          dsoLockResult should not be empty
-          otherDsoLockResult should be(empty)
+          result.map(_.contractId) should contain theSameElementsAs Seq(dsoLock.contractId)
         }
       }
 
