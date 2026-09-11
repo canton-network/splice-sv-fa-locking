@@ -89,10 +89,12 @@ validator1:
   participant:
     additionalEnvVars:
       - !include(./participant_pruning.yaml)
+  walletGateway: !include(./wallet_gateway.yaml) {}
 splitwell:
   participant:
     additionalEnvVars:
       - !include(./participant_pruning.yaml)
+  walletGateway: !include(./wallet_gateway.yaml) {}
 # initial round used only on fresh initialization or resets
 # first SV bootstraps the network with it, other SVs learn it via their sponsors
 initialRound: 0
@@ -190,6 +192,10 @@ monitoring:
         # Fire when TPS (approved confirmation requests per second) over the last
         # 30m drops below this fraction of the previous 30m.
         tpsDropThreshold: 0.5
+      cloudArmor:
+        # Number of requests denied by Cloud Armor within a 5 minute window above which
+        # the alert fires. Only used if cloudArmor.enabled is true.
+        deniedRequestsThreshold: 0
       gcpQuotas:
         # Quota metric names to exclude from all GCP quota alerts.
         # Each entry is matched exactly for quota exceeded.
@@ -246,10 +252,7 @@ cloudArmor:
       pathPrefix: /api/scan
       throttleAcrossAllEndpointsPerIp:
         withinIntervalSeconds: 60
-        # above the envoy per-IP scan limit (see sv.scan.externalRateLimits.globalPerIpLimits),
-        # so that envoy stays the primary limiter and this is only a backstop that drops
-        # abusive sources at the GCP edge
-        maxRequestsBeforeHttp429: 2000
+        maxRequestsBeforeHttp429: 10000
     tokenRegistry:
       # the token registry is served off the scan hosts
       hostPrefixRegex: scan
@@ -258,7 +261,7 @@ cloudArmor:
         withinIntervalSeconds: 60
         # above the largest per-endpoint envoy perIpLimits under /registry, with room for
         # a client legitimately using several registry endpoints at once
-        maxRequestsBeforeHttp429: 1000
+        maxRequestsBeforeHttp429: 10000
     sequencer:
       hostPrefixRegex: sequencer-[0-9]+
       pathPrefix: /
@@ -266,6 +269,8 @@ cloudArmor:
       throttleAcrossAllEndpointsPerIp:
         withinIntervalSeconds: 60
         maxRequestsBeforeHttp429: 20000
+  wafRules:
+    groups: !include(./cloud-armor-waf-rules.yaml)
 multiValidator:
   postgresPvcSize: '100Gi'
   resources:
@@ -289,15 +294,14 @@ multiValidator:
 sv:
   scan:
     externalRateLimits:
-      !include(./rate-limits/token-registry.yaml)
       globalLimits:
-        maxTokens: 10000
+        maxTokens: 60000
         tokensPerFill: 10000
-        fillInterval: 60s
+        fillInterval: 10s
       globalPerIpLimits:
-        maxTokens: 1000
+        maxTokens: 6000
         tokensPerFill: 1000
-        fillInterval: 60s
+        fillInterval: 10s
   synchronizer:
     sequencer:
       externalRateLimits:
@@ -308,3 +312,4 @@ validators:
     nodeIdentifier: 'validator-runbook'
     partyHint: 'digitalasset-testValidator-1'
     onboardingSecret: 'validatorsecret'
+    walletGateway: !include(./wallet_gateway.yaml) {}

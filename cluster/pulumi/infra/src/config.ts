@@ -6,6 +6,8 @@ import { clusterYamlConfig } from '@canton-network/splice-pulumi-common/src/conf
 import util from 'node:util';
 import { z } from 'zod';
 
+import { WafRuleGroupsSchema } from './cloudArmorRules';
+
 export const clusterBasename = pulumi.getStack().replace(/.*[.]/, '');
 
 export const clusterHostname = config.requireEnv('GCP_CLUSTER_HOSTNAME');
@@ -23,17 +25,26 @@ const cloudArmorMaxRateLimitCount = 1000000;
 
 const CloudArmorLoggingConfigSchema = z.object({
   enabled: z.boolean().default(false),
-  verboseLogging: z.boolean().default(false),
   sampleRate: z.number().min(0).max(1).default(1),
 });
 
 export type CloudArmorLoggingConfig = z.infer<typeof CloudArmorLoggingConfigSchema>;
+
+const CloudArmorWafRulesConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  groups: WafRuleGroupsSchema.default([]),
+  // The preconfigured WAF rules deny by default, but are kept in Cloud Armor preview
+  // mode so they only produce logs and alerts. That gives us attack detection and the
+  // data to spot false positives before we let them block real traffic.
+  previewOnly: z.boolean().default(true),
+});
 
 const CloudArmorConfigSchema = z.object({
   enabled: z.boolean(),
   // "preview" is not pulumi preview, but https://cloud.google.com/armor/docs/security-policy-overview#preview_mode
   allRulesPreviewOnly: z.boolean(),
   logging: CloudArmorLoggingConfigSchema.prefault({}),
+  wafRules: CloudArmorWafRulesConfigSchema.prefault({}),
   publicEndpoints: z
     .object({})
     .catchall(

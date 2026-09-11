@@ -1,22 +1,26 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
 module Splice.GovernanceLock where
 
---import DA.Action (when)
 import DA.Assert
 import DA.Optional
 import DA.Time
 
 import Splice.Amulet
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
+import Splice.AmuletConfig (getGovernanceLockConfig)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
 import Splice.Expiry
 import Splice.Fees (relTimeToSeconds)
+import Splice.ExternalPartyConfigState
 import Splice.TokenStandard.Utils hiding (require)
 import Splice.Types
 import Splice.Util
 
--- CI TEST
+
 data GovernanceLockKind
   = GLK_FeaturedApp with
       provider : Party -- ^ Featured app provider party.
@@ -24,7 +28,7 @@ data GovernanceLockKind
       svName : Text  -- ^ Name of the SV rights owner for whom the funds are locked.
   deriving (Eq, Show, Serializable)
 
--- TODO: add controllers specifications
+-- TODO(canton-network/splice-sv-fa-locking#39): add controllers specifications
 data GovernanceLockSpecification
   = GovernanceLockSpecification with
       kind : GovernanceLockKind
@@ -35,8 +39,7 @@ data VestingLockSpecification
       kind : GovernanceLockKind
   deriving (Eq, Show, Serializable)
 
--- | A lock created to satisfy governance requirements, e.g., locking CC
--- to retain SV weight or FA rights.
+
 template GovernanceLock
   with
     dso : Party
@@ -53,12 +56,14 @@ template GovernanceLock
       with
         unlockAmount : Optional Decimal -- ^ Amount to unlock. Defaults to the full amount if not set.
         unlockAt : Time  -- ^ Time as of which the unlock is to be registered and vesting starts. Must be in the future.
-        context : ExternalPartyTransferContext
+        extraArgs : ExtraArgs
         actors : [Party]
       controller actors
       do
-        checkActors actors [[owner]] -- TODO: custom controllers
+        checkActors actors [[owner]] -- TODO(canton-network/splice-sv-fa-locking#39): custom controllers
         assertWithinDeadline "unlockAt" unlockAt
+
+        (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
         let vestingPeriod = vestingDurationFor specification.kind context
         let endTime = unlockAt `addRelTime` vestingPeriod
@@ -74,7 +79,9 @@ template GovernanceLock
           Some unlockAmount -> do -- Splitting.
             require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
             require' ("unlockAmount", unlockAmount) isLessR ("amount", amount)
-            (vesting, stillLockedHolding) <- splitLockedAmulet (ForOwner with dso; owner) lockedAmulet (unlockAmount, vestingLockProperties) context
+            requireMinimumLock state unlockAmount
+            (vesting, stillLockedHolding, stillLockedAmount) <- splitLockedAmulet (ForOwner with dso; owner) lockedAmulet (unlockAmount, vestingLockProperties) context
+            requireMinimumLock state stillLockedAmount
             governanceLock <- create
               this with
                 lockedAmulet = stillLockedHolding
@@ -102,7 +109,7 @@ template GovernanceLock
           -- ^ Locks with the same owner and specification to merge into this lock
         holdingInputs : [ContractId Holding]
           -- ^ Holding inputs used to fund the top-up.
-        context : ExternalPartyTransferContext
+        extraArgs : ExtraArgs
       controller owner
       do
         require' ("topUpAmount", topUpAmount) isGreaterOrEqualR ("zero", 0.0)
@@ -112,6 +119,8 @@ template GovernanceLock
             positiveTopUpAmountBool = topUpAmount > 0.0
         require "The arguments to the GovernanceLock_MergeAndTopUp must be valid"
           $ (positiveTopUpAmountBool && holdingInputsPresence) || lockInputsPresence
+
+        (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
         -- Unlock original governanceLock
         (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmulet
@@ -147,9 +156,9 @@ template GovernanceLock
           governanceLock = newGovernanceLock
           changeHolding = newChangeHolding
 
-  -- TODO: implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
-  -- TODO: implement pending V1 transfer for the above, for backwards compatibility.
-  -- TODO: substitution, probably with a loose function for implementation sharing.
+  -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
+  -- TODO(canton-network/splice-sv-fa-locking#39): implement pending V1 transfer for the above, for backwards compatibility.
+  -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
 data GovernanceLock_UnlockResult
   = GovernanceLock_UnlockResult with
@@ -181,12 +190,13 @@ template VestingLock
       -- and the time of this request.
       with
         requestedAt : Time -- ^ Time to use for determining the funds that have vested. Must be in the past.
-        context : ExternalPartyTransferContext
+        extraArgs : ExtraArgs
         actors : [Party]
       controller actors
       do
-        checkActors actors [[owner]] -- TODO: custom controllers
+        checkActors actors [[owner]] -- TODO(canton-network/splice-sv-fa-locking#39): custom controllers
         assertDeadlineExceeded "requestedAt" requestedAt
+        context <- externalPartyTransferFromChoiceContext dso extraArgs.context
 
         let unvestedAmount = calculateUnvestedAmount requestedAt this
 
@@ -206,9 +216,9 @@ template VestingLock
               vestingLock
               vested = toInterfaceContractId unlocked
 
-  -- TODO: implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
-  -- TODO: implement pending V1 transaction for the above, for backwards compatibility.
-  -- TODO: substitution, probably with a loose function for implementation sharing.
+  -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
+  -- TODO(canton-network/splice-sv-fa-locking#39): implement pending V1 transaction for the above, for backwards compatibility.
+  -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
 data VestingLock_WithdrawResult
   = VestingLock_WithdrawResult with
@@ -231,10 +241,12 @@ governanceLock_lockForGovernance_impl
  -> Decimal
  -> [ContractId Holding]
  -> GovernanceLockSpecification
- -> ExternalPartyTransferContext
+ -> ExtraArgs
  -> Party
  -> Update (ContractId GovernanceLock, Optional (ContractId Amulet))
-governanceLock_lockForGovernance_impl dso amount inputs specification context owner = do
+governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner = do
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+  requireMinimumLock state amount
   let lockProperties = LockProperties with
         context = describeGovernanceSpecification specification
         expiresAt = maxBound
@@ -247,8 +259,8 @@ governanceLock_lockForGovernance_impl dso amount inputs specification context ow
     specification
   pure $ (governanceLock, changeHolding)
 
-  -- TODO: implement V2 AllocationFactory in terms of above.
-  -- TODO: find and use binding point for "magic address" V1 token standard to above.
+  -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 AllocationFactory in terms of above.
+  -- TODO(canton-network/splice-sv-fa-locking#39): find and use binding point for "magic address" V1 token standard to above.
 
 typeExtraObservers : GovernanceLockKind -> [Party]
 typeExtraObservers (GLK_FeaturedApp party) = [party]
@@ -269,10 +281,23 @@ describeVestingSpecification lock = "Unlocking from supporting " <> describeGove
 
 -- Lock properties for LockSubject types
 
--- TODO: make configurable
+-- TODO(canton-network/splice-sv-fa-locking#39): make configurable
 vestingDurationFor : GovernanceLockKind -> ExternalPartyTransferContext -> RelTime
 vestingDurationFor (GLK_FeaturedApp _) _ = days 60
 vestingDurationFor (GLK_SuperValidatorRightsOwner _) _ = days 365 + hours 6
+
+requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
+requireMinimumLock context amount = do
+  require' ("locked amount", amount) isGreaterOrEqualR ("minimum governance lock amount", (getGovernanceLockConfig context.governanceLockConfig).minimumGovernanceLockAmount)
+
+unfeaturedPaymentContextAndConfigFromChoiceContext : Party -> ChoiceContext -> Update (ExternalPartyTransferContext, ExternalPartyConfigState)
+unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
+  (configStateCid, configState) <- getExternalPartyConfigStateFromChoiceContext dso choiceContext
+  pure (ExternalPartyTransferContext with
+          externalPartyConfigState = configStateCid
+          featuredAppRight = None
+       , configState )
+
 
 -- Helpers for handling LockedAmulet
 -- =================================
@@ -284,17 +309,17 @@ data LockProperties = LockProperties with
   context : Text
   expiresAt : Time
 
-splitLockedAmulet : ForOwner -> ContractId LockedAmulet -> LockSpecification -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, ContractId LockedAmulet)
+splitLockedAmulet : ForOwner -> ContractId LockedAmulet -> LockSpecification -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, ContractId LockedAmulet, Decimal)
 splitLockedAmulet forOwner lockedAmuletCid amount context = do
-  ([splitLock], remainder) <- multiSplitLockedAmulet forOwner lockedAmuletCid [amount] context
-  pure (splitLock, remainder)
+  ([splitLock], remainder, remainderAmount) <- multiSplitLockedAmulet forOwner lockedAmuletCid [amount] context
+  pure (splitLock, remainder, remainderAmount)
 
-multiSplitLockedAmulet : ForOwner -> ContractId LockedAmulet -> [LockSpecification] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], ContractId LockedAmulet)
+multiSplitLockedAmulet : ForOwner -> ContractId LockedAmulet -> [LockSpecification] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], ContractId LockedAmulet, Decimal)
 multiSplitLockedAmulet forOwner lockedAmuletCid specs context = do
   (unlockedCid, (currentAmount, currentLockProps)) <- unlockAmulet forOwner lockedAmuletCid
-  let finalAmount = currentAmount - sum (fst <$> specs)
-  (remainderLock::specifiedLocks, None) <- lockAmulet forOwner ((finalAmount, currentLockProps) :: specs) [toInterfaceContractId unlockedCid] context
-  pure (specifiedLocks, remainderLock)
+  let remainderAmount = currentAmount - sum (fst <$> specs)
+  (remainderLock::specifiedLocks, None) <- lockAmulet forOwner ((remainderAmount, currentLockProps) :: specs) [toInterfaceContractId unlockedCid] context
+  pure (specifiedLocks, remainderLock, remainderAmount)
 
 partialUnlock : ForOwner -> ContractId LockedAmulet -> Decimal -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, ContractId Amulet)
 partialUnlock forOwner lockedAmuletCid stillLockedAmount context = do

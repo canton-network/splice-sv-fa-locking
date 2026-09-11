@@ -3,7 +3,11 @@
 import * as gcp from '@pulumi/gcp';
 import * as pulumi from '@pulumi/pulumi';
 import * as _ from 'lodash';
-import { CLUSTER_BASENAME, getDnsNames } from '@canton-network/splice-pulumi-common';
+import {
+  CLOUD_ARMOR_POLICY_NAME,
+  CLUSTER_BASENAME,
+  getDnsNames,
+} from '@canton-network/splice-pulumi-common';
 import { PerEndpointLimits } from '@canton-network/splice-pulumi-common/src/ratelimit/envoyRateLimiter';
 
 import * as config from './config';
@@ -12,10 +16,13 @@ import {
   hostCondition,
   ipWhitelistRuleChunks,
   matchExpression,
+  wafRuleExpression,
+  WafRuleGroup,
 } from './cloudArmorRules';
 import { loadIPRanges } from './whitelisting/ipRanges';
 
 // Rule number ranges
+const WAF_RULE_MIN = 10;
 const IP_WHITELIST_RULE_MIN = 1000010;
 const THROTTLE_BAN_RULE_MIN = 100000010;
 const THROTTLE_BAN_RULE_MAX = 200000010;
@@ -29,19 +36,9 @@ export interface ApiEndpoint {
   hostname: string;
 }
 
-export type CloudArmorConfig = config.CloudArmorConfig & {
-  predefinedWafRules?: PredefinedWafRule[];
-};
+export type CloudArmorConfig = config.CloudArmorConfig;
 
 type ThrottleConfig = CloudArmorConfig['publicEndpoints'];
-
-export interface PredefinedWafRule {
-  name: string;
-  action: 'allow' | 'deny' | 'throttle';
-  priority?: number;
-  preview?: boolean;
-  sensitivityLevel?: 'off' | 'low' | 'medium' | 'high';
-}
 
 // Regional and Global policies and rules use different types/constructors; most
 // of our pulumi code doesn't care about the difference so can use this alias
@@ -66,29 +63,42 @@ export function configureCloudArmorPolicy(
   }
 
   // Step 1: Create the security policy
-  const name = `waf-whitelist-throttle-ban-${CLUSTER_BASENAME}`;
+  const name = CLOUD_ARMOR_POLICY_NAME;
   const securityPolicy = new CloudArmorPolicy(
     name,
     {
       name,
       description: `Cloud Armor security policy for ${CLUSTER_BASENAME}`,
       type: 'CLOUD_ARMOR', // attachable to backend service only
-      advancedOptionsConfig: {
-        logLevel: cac.logging.verboseLogging ? 'VERBOSE' : 'NORMAL',
-      },
       // using `rules` to define all rules at once would be fewer Pulumi resources,
       // but the preview would entail changing this array if the rules were changed,
       // making those changes harder to review than with the separate resources
     },
-    opts
+    {
+      ...opts,
+      // All rules are managed as separate PolicyRule resources below, which use the
+      // per-rule addRule/patchRule/removeRule endpoints. The policy resource itself
+      // still reads the full rule list back from GCP, so a refresh imports the rules
+      // into this resource's inputs and Pulumi then wants to "update" the policy.
+      // That update is a PATCH on the parent policy which always carries the whole
+      // rule list, and GCP rejects it once the policy is attached to a load balancer
+      // backend and contains a deny rule:
+      //   Error 400: HTTP references are not supported for security policies with deny rules.
+      // Ignoring `rules` here keeps the parent policy free of spurious updates.
+      ignoreChanges: [...(opts?.ignoreChanges ?? []), 'rules'],
+    }
   );
 
   const ruleOpts = { ...opts, parent: securityPolicy, deletedWith: securityPolicy };
 
   // Step 2: Add predefined WAF rules
-  if (cac.predefinedWafRules && cac.predefinedWafRules.length > 0) {
-    addPredefinedWafRules();
-    /*securityPolicy, args.predefinedWafRules, cac.allRulesPreviewOnly, ruleOpts*/
+  if (cac.wafRules.enabled) {
+    addWafRules(
+      securityPolicy,
+      cac.wafRules.groups,
+      cac.allRulesPreviewOnly || cac.wafRules.previewOnly,
+      ruleOpts
+    );
   }
 
   // Step 3: Add IP whitelisting rules
@@ -112,16 +122,41 @@ export function configureCloudArmorPolicy(
 }
 
 /**
- * Adds predefined WAF rules to a security policy
+ * Adds the preconfigured (OWASP CRS based) WAF rules to a security policy.
+ *
+ * They sit at the lowest priority numbers, so they are evaluated before the IP
+ * whitelist and endpoint rules: an attack payload should be caught no matter which
+ * host, path or source IP it comes from.
  */
-function addPredefinedWafRules(): void {
-  /*
-  securityPolicy: Policy,
-  rules: PredefinedWafRule[],
+function addWafRules(
+  securityPolicy: CloudArmorPolicy,
+  groups: WafRuleGroup[],
   preview: boolean,
   opts: pulumi.ResourceOptions
-     */
-  // TODO (DACH-NY/canton-network-internal#406) implement
+): void {
+  groups.forEach((group, i) => {
+    const priority = WAF_RULE_MIN + i * RULE_SPACING;
+    if (priority >= IP_WHITELIST_RULE_MIN) {
+      throw new Error(`WAF rule priority ${priority} overlaps the IP whitelist priority range`);
+    }
+    new PolicyRule(
+      group.name,
+      {
+        securityPolicy: securityPolicy.name,
+        region: securityPolicy.region,
+        description: group.description,
+        priority,
+        preview,
+        action: 'deny(403)',
+        match: {
+          expr: {
+            expression: wafRuleExpression(group),
+          },
+        },
+      },
+      opts
+    );
+  });
 }
 
 /**
@@ -288,7 +323,7 @@ function addDefaultDenyRule(
       // we assume that if you want all rules in preview, you *also* still want to
       // allow all traffic.
       preview: false,
-      action: preview ? 'allow' : 'deny',
+      action: preview ? 'allow' : 'deny(403)',
       match: {
         versionedExpr: 'SRC_IPS_V1',
         config: {

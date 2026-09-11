@@ -753,6 +753,12 @@ trait SvDsoStore
       : ListExpiredContracts[so.SvOnboardingConfirmed.ContractId, so.SvOnboardingConfirmed] =
     multiDomainAcsStore.listExpiredFromPayloadExpiry(so.SvOnboardingConfirmed.COMPANION)
 
+  def listExpiredVestingLocks: ListExpiredContracts[
+    splice.governancelock.VestingLock.ContractId,
+    splice.governancelock.VestingLock,
+  ] =
+    multiDomainAcsStore.listExpiredFromPayloadExpiry(splice.governancelock.VestingLock.COMPANION)
+
   def listExpiredAnsEntries(ignoredPartiesStore: Option[IgnoredPartiesStore]): ListExpiredContracts[
     splice.ans.AnsEntry.ContractId,
     splice.ans.AnsEntry,
@@ -1661,6 +1667,17 @@ object SvDsoStore {
         DsoAcsStoreRowData(
           contract,
           contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.expiresAt)),
+        )
+      },
+      mkFilter(splice.governancelock.VestingLock.COMPANION)(
+        co => co.payload.dso == dso,
+        versionGuard = { case (pkgVersionSupport, now) =>
+          (tc) => pkgVersionSupport.supportsGovernanceLock(Seq(dsoParty), now)(tc)
+        },
+      ) { contract =>
+        DsoAcsStoreRowData(
+          contract,
+          contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.endTime)),
         )
       },
     )

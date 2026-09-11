@@ -5,6 +5,7 @@ import {
   extractPathPrefixes,
   PerEndpointLimits,
 } from '@canton-network/splice-pulumi-common/src/ratelimit/envoyRateLimiter';
+import { z } from 'zod';
 
 // limits from https://cloud.google.com/armor/quotas#limits, in which a
 // "subexpression" is an arg to && or ||
@@ -45,6 +46,83 @@ export function ipWhitelistRuleChunks(ipRanges: string[], availablePriorities: n
     );
   }
   return chunks;
+}
+
+const OWASP_CRS_VERSION = 'v030301';
+
+/**
+ * One of Cloud Armor's preconfigured WAF rule sets (see
+ * https://cloud.google.com/armor/docs/waf-rules), with the individual OWASP CRS
+ * signatures we opt out of.
+ */
+const WafSignatureSchema = z.object({
+  // preconfigured rule set name, e.g. 'sqli-v33-stable'
+  name: z.string(),
+  // https://cloud.google.com/armor/docs/rule-tuning#sensitivity_levels: 1 only
+  // evaluates the paranoia level 1 signatures, which are the ones least prone to
+  // false positives.
+  sensitivity: z.number().int().min(0).max(4),
+  // numeric OWASP CRS ids of the signatures to skip, e.g. '942190' for
+  // 'owasp-crs-v030301-id942190-sqli'. These are the signatures that produced false
+  // positives on our own traffic.
+  optOutRuleIds: z.array(z.string().regex(/^[0-9]+$/, 'numeric OWASP CRS id')).default([]),
+});
+
+export const WafRuleGroupSchema = z.object({
+  name: z.string().min(1),
+  description: z.string(),
+  signatures: z.array(WafSignatureSchema).min(1),
+});
+
+export const WafRuleGroupsSchema = z
+  .array(WafRuleGroupSchema)
+  .refine(
+    groups => new Set(groups.map(g => g.name)).size === groups.length,
+    'WAF rule group names must be unique, they are used as the Cloud Armor rule names'
+  );
+
+type WafSignature = z.infer<typeof WafSignatureSchema>;
+export type WafRuleGroup = z.infer<typeof WafRuleGroupSchema>;
+
+/**
+ * Expands a numeric OWASP CRS id into the full opt-out rule id Cloud Armor expects,
+ * e.g. ('sqli-v33-stable', '942190') -> 'owasp-crs-v030301-id942190-sqli'.
+ */
+function optOutRuleId(signatureName: string, crsId: string): string {
+  const category = signatureName.replace(/-v\d+-stable$/, '');
+  return `owasp-crs-${OWASP_CRS_VERSION}-id${crsId}-${category}`;
+}
+
+function wafSignatureCondition(context: string, signature: WafSignature): string {
+  const options = [
+    `'sensitivity': ${signature.sensitivity}`,
+    ...(signature.optOutRuleIds && signature.optOutRuleIds.length > 0
+      ? [
+          `'opt_out_rule_ids': [${signature.optOutRuleIds
+            .map(id => `'${optOutRuleId(signature.name, id)}'`)
+            .join(', ')}]`,
+        ]
+      : []),
+  ].join(', ');
+  return checkSubexpressionLength(
+    `${context}/${signature.name}`,
+    `evaluatePreconfiguredWaf('${signature.name}', {${options}})`
+  );
+}
+
+/**
+ * Builds the match expression of a WAF rule: the request matches if any of the
+ * group's signatures fires.
+ */
+export function wafRuleExpression(group: WafRuleGroup): string {
+  const expr = group.signatures.map(s => wafSignatureCondition(group.name, s)).join(' || ');
+  if (expr.length > MAX_EXPRESSION_LENGTH) {
+    throw new Error(
+      `Cloud Armor WAF expression for ${group.name} exceeds the ${MAX_EXPRESSION_LENGTH} character limit (current: ${expr.length}). ` +
+        `Consider splitting the signatures across more rules.`
+    );
+  }
+  return expr;
 }
 
 export function checkSubexpressionLength(context: string, expr: string): string {
