@@ -3,6 +3,7 @@
 import { Optional } from '@daml/types';
 import {
   AmuletConfig,
+  GovernanceLockConfig,
   PackageConfig,
   RewardConfig,
   RewardVersion,
@@ -131,6 +132,8 @@ export function buildAmuletConfigChanges(
     ...buildPackageConfigChanges(before?.packageConfig, after?.packageConfig),
 
     ...buildRewardConfigChanges(before?.rewardConfig, after?.rewardConfig),
+
+    ...buildGovernanceLockConfigChanges(before?.governanceLockConfig, after?.governanceLockConfig),
   ] as ConfigChange[];
 
   return showAllFields ? changes : changes.filter(c => c.currentValue !== c.newValue);
@@ -387,6 +390,22 @@ function buildRewardConfigChanges(
       newValue: after?.appRewardCouponThreshold || '',
       description:
         'Minimum reward amount in USD below which no RewardCouponV2 is created (default: $0.50)',
+    },
+  ] as ConfigChange[];
+}
+
+function buildGovernanceLockConfigChanges(
+  before: Optional<GovernanceLockConfig> | undefined,
+  after: Optional<GovernanceLockConfig> | undefined
+) {
+  return [
+    {
+      fieldName: 'governanceLockConfigMinimumGovernanceLockAmount',
+      label: 'Governance lock config: Minimum governance lock amount (Amulet)',
+      currentValue: before?.minimumGovernanceLockAmount || '',
+      newValue: after?.minimumGovernanceLockAmount || '',
+      description:
+        'Minimum amount in Amulet required to create a governance lock (default: 10000 Amulet)',
     },
   ] as ConfigChange[];
 }
