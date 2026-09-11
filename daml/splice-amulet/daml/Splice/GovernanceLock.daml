@@ -4,7 +4,10 @@
 module Splice.GovernanceLock where
 
 import DA.Assert
+import DA.Map qualified as Map
 import DA.Optional
+import DA.Text qualified as Text
+import DA.TextMap qualified as TextMap
 import DA.Time
 
 import Splice.Amulet
@@ -13,10 +16,12 @@ import Splice.AmuletConfig (getGovernanceLockConfig)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.TransferInstructionV1 qualified as TransferInstructionV1
 import Splice.Expiry
 import Splice.Fees (relTimeToSeconds)
 import Splice.ExternalPartyConfigState
-import Splice.TokenStandard.Utils hiding (require)
+import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
+import Splice.Amulet.TokenApiUtils
 import Splice.Types
 import Splice.Util
 
@@ -47,6 +52,9 @@ template GovernanceLock
     amount : Decimal  -- ^ Locked amount
     lockedAmulet : ContractId LockedAmulet
     specification : GovernanceLockSpecification
+    originalLockCid : Optional (ContractId GovernanceLock)
+    createdAt : Time
+    meta : Metadata
   where
     signatory dso, owner
     observer typeExtraObservers specification.kind
@@ -96,6 +104,8 @@ template GovernanceLock
           endTime
           vestingAmount
           specification
+          originalLockCid = None
+          meta
 
         pure $ GovernanceLock_UnlockResult with
           vestingLock
@@ -104,6 +114,70 @@ template GovernanceLock
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO(canton-network/splice-sv-fa-locking#39): implement pending V1 transfer for the above, for backwards compatibility.
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
+
+    interface instance TransferInstructionV1.TransferInstruction for GovernanceLock where
+      view = TransferInstructionV1.TransferInstructionView with
+          originalInstructionCid = toInterfaceContractId <$> originalLockCid
+          transfer = TransferInstructionV1.Transfer with
+            sender = owner
+            receiver = receiver
+            amount
+            instrumentId = amuletInstrumentId dso
+            requestedAt = createdAt
+            executeBefore = maxBound
+            inputHoldingCids = []
+            meta = reasonToMeta encodedReason meta
+          status = TransferInstructionV1.TransferPendingInternalWorkflow with
+            pendingActions = Map.empty
+          meta = emptyMetadata
+        where
+          (receiver, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
+      transferInstruction_acceptImpl _ _ = assertFail "Transfers representing governance locks may not be accepted"
+      transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks may not be rejected"
+      transferInstruction_withdrawImpl self arg = do
+          let TransferInstructionV1.TransferInstruction_Withdraw {..} = arg
+          unlockAt <- searchTimeMaximumLowerBound createdAt
+          unlockResult <- exercise (fromInterfaceContractId @GovernanceLock self) GovernanceLock_Unlock with
+            unlockAmount = None
+            unlockAt
+            extraArgs
+            actors = [owner]
+          pure $ TransferInstructionV1.TransferInstructionResult with
+            output = TransferInstructionV1.TransferInstructionResult_Pending with
+              transferInstructionCid = toInterfaceContractId unlockResult.vestingLock
+            senderChangeCids = []
+            meta = emptyMetadata
+
+      -- TODO: determine if we need to emit update choice calls when a withdraw event occurs.
+      transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks may not be updated"
+
+
+loopUntilRightA : Action m => (a -> m (Either a r)) -> a -> m r
+loopUntilRightA f a = do
+  res <- f a
+  case res of
+    Left a' -> loopUntilRightA f a'
+    Right r -> pure r
+
+
+searchTimeMaximumLowerBound : Time -> Update Time
+searchTimeMaximumLowerBound basis = loopUntilRightA binarySearch =<< loopUntilRightA seekForward (0, basis)
+  where
+    binarySearch : (Int, Time) -> Update (Either (Int, Time) Time)
+    binarySearch (seek, basis) = do
+      gt <- isLedgerTimeGT basis
+      pure $ if gt
+         then Left (seek + 1, basis `addRelTime` seekToDays seek)
+         else Right basis
+    seekForward : (Int, Time) -> Update (Either (Int, Time) (Int, Time))
+    seekForward (seek, basis) = do
+      gt <- isLedgerTimeGT basis
+      pure $ if gt
+         then Left (seek + 1, basis `addRelTime` seekToDays seek)
+         else Right (seek - 1, basis)
+    seekToDays seek = days $ 2 ^ seek
+
+  -- TODO: substitution, probably with a loose function for implementation sharing.
 
 data GovernanceLock_UnlockResult
   = GovernanceLock_UnlockResult with
@@ -120,6 +194,8 @@ template VestingLock
     endTime : Time  -- ^ Time at which vesting completes.
     vestingAmount : Decimal  -- ^ The amount that is vesting.
     specification : VestingLockSpecification
+    originalLockCid : Optional (ContractId VestingLock)
+    meta : Metadata
   where
     signatory dso, owner
     ensure vestingAmount > 0.0 && vestingPeriod >= aunit
@@ -159,6 +235,48 @@ template VestingLock
   -- TODO(canton-network/splice-sv-fa-locking#39): implement pending V1 transaction for the above, for backwards compatibility.
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
+    interface instance TransferInstructionV1.TransferInstruction for VestingLock where
+      view = TransferInstructionV1.TransferInstructionView with
+          originalInstructionCid = toInterfaceContractId <$> originalLockCid
+          transfer = TransferInstructionV1.Transfer with
+            sender = owner
+            receiver
+            amount = vestingAmount
+            instrumentId = amuletInstrumentId dso
+            requestedAt = endTime `addRelTime` (- vestingPeriod)
+            executeBefore = endTime
+            inputHoldingCids = []
+            meta = reasonToMeta encodedReason meta
+          status = TransferInstructionV1.TransferPendingInternalWorkflow with
+            pendingActions = Map.empty
+          meta = emptyMetadata
+        where
+          (receiver, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
+      transferInstruction_acceptImpl _ _ = assertFail "Transfers representing governance locks may not be accepted"
+      transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks may not be rejected"
+      transferInstruction_withdrawImpl self arg = do
+        let TransferInstructionV1.TransferInstruction_Withdraw {..} = arg
+        requestedAt <- searchTimeMaximumLowerBound (endTime `addRelTime` (- vestingPeriod))
+        withdrawResult <- exercise (fromInterfaceContractId @VestingLock self) VestingLock_Withdraw with
+          requestedAt
+          extraArgs
+          actors = [owner]
+        case withdrawResult.vestingLock of
+          Some vestingLock -> pure $ TransferInstructionV1.TransferInstructionResult with
+            output = TransferInstructionV1.TransferInstructionResult_Pending with
+              transferInstructionCid = toInterfaceContractId vestingLock
+            senderChangeCids = [withdrawResult.vested]
+            meta = emptyMetadata
+          None -> pure $ TransferInstructionV1.TransferInstructionResult with
+            output = TransferInstructionV1.TransferInstructionResult_Completed with
+              receiverHoldingCids = []
+            senderChangeCids = [withdrawResult.vested]
+            meta = emptyMetadata
+
+      -- TODO: determine if we need to emit update choice calls when a withdraw event occurs.
+      transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks may not be updated"
+  -- TODO: substitution, probably with a loose function for implementation sharing.
+
 data VestingLock_WithdrawResult
   = VestingLock_WithdrawResult with
       vestingLock : Optional (ContractId VestingLock)
@@ -182,8 +300,10 @@ governanceLock_lockForGovernance_impl
  -> GovernanceLockSpecification
  -> ExtraArgs
  -> Party
+ -> Time
+ -> Metadata
  -> Update (ContractId GovernanceLock, Optional (ContractId Amulet))
-governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner = do
+governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner createdAt meta = do
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
   requireMinimumLock state amount
   let lockProperties = LockProperties with
@@ -196,6 +316,9 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
     amount
     lockedAmulet
     specification
+    createdAt
+    originalLockCid = None
+    meta
   pure $ (governanceLock, changeHolding)
 
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 AllocationFactory in terms of above.
@@ -305,4 +428,56 @@ lockAmulet forOwner@ForOwner {..} specs inputHoldingCids context = do
     ( lockedAmulets
     , result.senderChangeAmulet
     )
+
+-- TSv1 support
+-- ============
+
+cipAddressPrefix = "cip-0105"
+
+-- Not sure what to call this.
+magicNamespace = "::1220000000000000000000000000000000000000000000000000000000000000abcd"
+
+isGovernanceLockTransferParty : Party -> Bool
+isGovernanceLockTransferParty party = isSome $ Text.stripPrefix cipAddressPrefix (partyToText party) >>= Text.stripSuffix magicNamespace
+
+-- | Copied from ExternalPartyAmuletRules because of package import order.
+requireExpectedAdminMatch' : Party -> Party -> Update ()
+requireExpectedAdminMatch' expected actual =   require ("Expected admin " <> show expected <> " matches actual admin " <> show actual) (expected == actual)
+
+governanceLock_transferFactoryV1_transferImpl
+  :  Party
+  -> [Party]
+  -> TransferInstructionV1.TransferFactory_Transfer
+  -> Update TransferInstructionV1.TransferInstructionResult
+governanceLock_transferFactoryV1_transferImpl dso actors arg = do
+  let TransferInstructionV1.TransferFactory_Transfer {expectedAdmin, transfer, extraArgs} = arg
+  checkActors actors [[transfer.sender], [transfer.sender, transfer.receiver]]
+
+  -- validate call to factory and retrieve context
+  requireExpectedAdminMatch' expectedAdmin dso
+
+  let operationString = Text.stripPrefix cipAddressPrefix (partyToText transfer.receiver) >>= Text.stripSuffix magicNamespace
+  let subject = Text.stripPrefix "lock-subject=" =<< reasonMetaKey `TextMap.lookup` transfer.meta.values
+  specification <- case liftA2 (,) operationString subject of
+        Some ("sv-lock", subject) -> pure $ GovernanceLockSpecification $ GLK_SuperValidatorRightsOwner with
+          svName = subject
+        Some ("fa-lock", subject) | Some subject <- partyFromText subject -> pure $ GovernanceLockSpecification $ GLK_FeaturedApp with
+          provider = subject
+        _ -> assertFail "Unknown receiver or lock-subject"
+  lockResult <- governanceLock_lockForGovernance_impl expectedAdmin transfer.amount transfer.inputHoldingCids specification extraArgs transfer.sender transfer.requestedAt transfer.meta
+  pure $ TransferInstructionV1.TransferInstructionResult with
+    output = TransferInstructionV1.TransferInstructionResult_Pending with
+      transferInstructionCid = toInterfaceContractId $ fst lockResult
+    senderChangeCids = optionalToList $ toInterfaceContractId <$> snd lockResult
+    meta = emptyMetadata
+
+featuredAppLockCanonicalParty : Party
+featuredAppLockCanonicalParty = fromSome $ partyFromText $ cipAddressPrefix <> "_fa-lock" <> magicNamespace
+superValidatorLockCanonicalParty : Party
+superValidatorLockCanonicalParty = fromSome $ partyFromText $ cipAddressPrefix <> "_sv-lock" <> magicNamespace
+
+lockTypeToCompatibilityPartyAndReason : GovernanceLockKind -> (Party, Text)
+lockTypeToCompatibilityPartyAndReason (GLK_FeaturedApp with provider) = (featuredAppLockCanonicalParty, "lock-subject=" <> partyToText provider)
+lockTypeToCompatibilityPartyAndReason (GLK_SuperValidatorRightsOwner with svName) = (superValidatorLockCanonicalParty, "lock-subject=" <> svName)
+
 
