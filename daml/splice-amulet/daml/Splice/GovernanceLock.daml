@@ -110,7 +110,7 @@ template GovernanceLock
           -- ^ Locks with the same owner and specification to merge into this lock
         holdingInputs : [ContractId Holding]
           -- ^ Holding inputs used to fund the top-up.
-        context : ExternalPartyTransferContext
+        extraArgs : ExtraArgs
       controller owner
       do
         require' ("topUpAmount", topUpAmount) isGreaterOrEqualR ("zero", 0.0)
@@ -120,6 +120,8 @@ template GovernanceLock
             positiveTopUpAmountBool = topUpAmount > 0.0
         require "The arguments to the GovernanceLock_MergeAndTopUp must be valid"
           $ (positiveTopUpAmountBool && holdingInputsPresence) || lockInputsPresence
+
+        (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
         -- Unlock original governanceLock
         (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmulet
@@ -278,46 +280,8 @@ describeGovernanceSpecification lock = "Locked to support " <> describeGovernanc
 describeVestingSpecification : VestingLockSpecification -> Text
 describeVestingSpecification lock = "Unlocking from supporting " <> describeGovernanceLockKind lock.kind
 
--- Implementation for the LockForGovernance choice on ExternalPartyAmuletRules and core implementation of token standard v1 and v2 interfaces.
-
-governanceLock_lockForGovernance_impl
-  : Party
- -> Decimal
- -> [ContractId Holding]
- -> GovernanceLockSpecification
- -> ExternalPartyTransferContext
- -> Party
- -> Update (ContractId GovernanceLock, Optional (ContractId Amulet))
-governanceLock_lockForGovernance_impl dso amount inputs specification context owner = do
-  let lockProperties = LockProperties with
-        context = describeGovernanceSpecification specification
-        expiresAt = maxBound
-  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] inputs context
-  governanceLock <- create GovernanceLock with
-    dso
-    owner
-    amount
-    lockedAmulet
-    specification
-  pure $ (governanceLock, changeHolding)
-
   -- TODO: implement V2 AllocationFactory in terms of above.
   -- TODO: find and use binding point for "magic address" V1 token standard to above.
-
--- Helpers for
-
-governanceToVestingSpecification : GovernanceLockSpecification -> VestingLockSpecification
-governanceToVestingSpecification GovernanceLockSpecification {..} = VestingLockSpecification {..}
-
-describeGovernanceLockType : GovernanceLockType -> Text
-describeGovernanceLockType (GLS_FeaturedApp with provider) = "Featured App party " <> partyToText provider
-describeGovernanceLockType (GLS_SuperValidatorRightsOwner with svName) = "Super Validator rights for " <> svName
-
-describeGovernanceSpecification : GovernanceLockSpecification -> Text
-describeGovernanceSpecification lock = "Locked to support " <> describeGovernanceLockType lock.subject
-
-describeVestingSpecification : VestingLockSpecification -> Text
-describeVestingSpecification lock = "Unlocking from supporting " <> describeGovernanceLockType lock.subject
 
 -- Lock properties for LockSubject types
 

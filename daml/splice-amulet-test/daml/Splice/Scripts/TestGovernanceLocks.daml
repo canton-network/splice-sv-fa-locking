@@ -4,7 +4,6 @@
 module Splice.Scripts.TestGovernanceLocks where
 
 import DA.Action (unless, when)
-import DA.List.Total
 import DA.Optional (isSome, isNone)
 import DA.Time
 
@@ -110,7 +109,7 @@ testTopUpWithAmuletHappyPath : Script ()
 testTopUpWithAmuletHappyPath = do
   env@TestEnv{..} <- setupTest
   let someSvSpec = GovernanceLockSpecification with
-        subject = GLS_SuperValidatorRightsOwner "SomeApp"
+        kind = GLK_SuperValidatorRightsOwner "TestSV"
 
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 280000.0
 
@@ -208,7 +207,7 @@ testTopUpNegativePath : Script ()
 testTopUpNegativePath = do
   env@TestEnv{..} <- setupTest
   let someSvSpec = GovernanceLockSpecification with
-        subject = GLS_SuperValidatorRightsOwner "SomeApp"
+        kind = GLK_SuperValidatorRightsOwner "TestSV"
 
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 280000.0
 
@@ -230,7 +229,7 @@ testTopUpNegativePath = do
         topUpAmount = 5000.0
         holdingInputs = []
         lockInputs = []
-        context
+        extraArgs = emptyExtraArgs with context
 
   -- Test top up when the amount is 0.0 and holdingInputs are supplied (None gives all holdings under the user)
   actionMustFail (expectMessageContains "The requirement 'The arguments to the GovernanceLock_MergeAndTopUp must be valid' was not met.") $
@@ -377,7 +376,7 @@ governanceLockTopUpRawChoice' env cid lockInputs optHoldingInputs topUpAmount ow
     topUpAmount
     lockInputs = lockInputs
     holdingInputs = downcast <$> holdingInputs
-    context
+    extraArgs = emptyExtraArgs with context
   pure $ case result of
     Left e -> Left e
     Right (GovernanceLock_MergeAndTopUpResult governanceLock changeHolding) -> Right (governanceLock, changeHolding)
