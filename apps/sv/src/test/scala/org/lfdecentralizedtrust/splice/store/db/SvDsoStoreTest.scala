@@ -194,6 +194,31 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
 
     }
 
+    "contractFilter" should {
+
+      "ingest GovernanceLocks scoped to the DSO party" in {
+        val dsoLock = governanceLock(userParty(1), amount = BigDecimal(10))
+        val otherDsoLock =
+          governanceLock(userParty(2), amount = BigDecimal(20), dso = userParty(4))
+        for {
+          store <- mkStore()
+          _ <- MonadUtil.sequentialTraverse(Seq(dsoLock, otherDsoLock))(
+            dummyDomain.create(_)(store.multiDomainAcsStore)
+          )
+          dsoLockResult <- store.multiDomainAcsStore.lookupContractById(
+            splice.governancelock.GovernanceLock.COMPANION
+          )(dsoLock.contractId)
+          otherDsoLockResult <- store.multiDomainAcsStore.lookupContractById(
+            splice.governancelock.GovernanceLock.COMPANION
+          )(otherDsoLock.contractId)
+        } yield {
+          dsoLockResult should not be empty
+          otherDsoLockResult should be(empty)
+        }
+      }
+
+    }
+
     "lookupSvOnboardingConfirmedByParty" should {
       offsetFreeLookupTest(
         create = svOnboardingConfirmed("good", userParty(1), "good-pid"),
