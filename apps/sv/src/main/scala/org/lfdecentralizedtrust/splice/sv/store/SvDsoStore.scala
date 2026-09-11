@@ -1680,6 +1680,26 @@ object SvDsoStore {
           contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.endTime)),
         )
       },
+      mkFilter(splice.governancelock.GovernanceLock.COMPANION)(
+        co => co.payload.dso == dso,
+        versionGuard = { case (pkgVersionSupport, now) =>
+          (tc) => pkgVersionSupport.supportsGovernanceLock(Seq(dsoParty), now)(tc)
+        },
+      ) { contract =>
+        contract.payload.specification.kind match {
+          case kind: splice.governancelock.governancelockkind.GLK_SuperValidatorRightsOwner =>
+            DsoAcsStoreRowData(
+              contract,
+              svName = Some(kind.svName),
+            )
+          case kind: splice.governancelock.governancelockkind.GLK_FeaturedApp =>
+            DsoAcsStoreRowData(
+              contract,
+              featuredAppRightProvider = Some(PartyId.tryFromProtoPrimitive(kind.provider)),
+            )
+          case other => sys.error(s"Unexpected GovernanceLockKind: $other")
+        }
+      },
     )
 
     MultiDomainAcsStore.SimpleContractFilter(
