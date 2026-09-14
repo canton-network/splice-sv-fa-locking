@@ -4,6 +4,7 @@
 package org.lfdecentralizedtrust.splice.integration.tests
 
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock
+import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.IntegrationTestWithIsolatedEnvironment
 import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, WalletTestUtil}
@@ -11,7 +12,6 @@ import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, WalletTestUtil}
 class GovernanceLockTimeBasedIntegrationTest
     extends IntegrationTestWithIsolatedEnvironment
     with WalletTestUtil
-    with ExternallySignedPartyTestUtil
     with TimeTestUtil
     with TokenStandardTest {
 
@@ -30,23 +30,15 @@ class GovernanceLockTimeBasedIntegrationTest
       val lockAmount = BigDecimal(10000)
 
       // Setup alice as the lock owner
-      aliceValidatorWalletClient.tap(lockAmount)
-      val owner = onboardAndSetupExternalParty(aliceValidatorBackend, Some("lockOwner"))
-      actAndCheck(
-        "Fund the external lock owner",
-        aliceValidatorWalletClient.transferPreapprovalSend(owner.party, lockAmount, ""),
-      )(
-        "the owner sees enough unlocked funds to create the lock",
-        _ =>
-          aliceValidatorBackend
-            .getExternalPartyBalance(owner.party)
-            .totalUnlockedCoin shouldBe lockAmount.setScale(10).toString,
-      )
+      val ownerParty = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
+      val owner = RichPartyId.local(ownerParty)
+
+      aliceWalletClient.tap(lockAmount)
 
       // Create the governance lock via a transfer to the magic party
       val governanceLockCid = createGovernanceLockViaTokenStandard(
         aliceValidatorBackend.participantClientWithAdminToken,
-        owner.richPartyId,
+        owner,
         superValidatorLockMagicParty,
         lockSubject = "sv1",
         amount = lockAmount,
@@ -56,7 +48,7 @@ class GovernanceLockTimeBasedIntegrationTest
         val governanceLock =
           aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
             .filterJava(governancelock.GovernanceLock.COMPANION)(
-              owner.party,
+              ownerParty,
               predicate = _.id.contractId == governanceLockCid.contractId,
             )
             .loneElement
@@ -67,10 +59,10 @@ class GovernanceLockTimeBasedIntegrationTest
       clue("the GovernanceLock is as a pending TransferInstruction to the magic party") {
         val (cid, view) = listTransferInstructions(
           aliceValidatorBackend.participantClientWithAdminToken,
-          owner.party,
+          ownerParty,
         ).loneElement
         cid.contractId shouldBe governanceLockCid.contractId
-        view.transfer.sender shouldBe owner.party.toProtoPrimitive
+        view.transfer.sender shouldBe ownerParty.toProtoPrimitive
         view.transfer.receiver shouldBe superValidatorLockMagicParty.toProtoPrimitive
         BigDecimal(view.transfer.amount) shouldBe lockAmount
       }
@@ -89,7 +81,7 @@ class GovernanceLockTimeBasedIntegrationTest
         "the owner withdraws the GovernanceLock",
         withdrawTransferInstruction(
           aliceValidatorBackend.participantClientWithAdminToken,
-          owner.richPartyId,
+          owner,
           governanceLockCid,
         ),
       )(
@@ -97,18 +89,18 @@ class GovernanceLockTimeBasedIntegrationTest
         _ => {
           val (cid, view) = listTransferInstructions(
             aliceValidatorBackend.participantClientWithAdminToken,
-            owner.party,
+            ownerParty,
           ).loneElement
           val vestingLock =
             aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
               .filterJava(governancelock.VestingLock.COMPANION)(
-                owner.party,
+                ownerParty,
                 predicate = _.id.contractId == cid.contractId,
               )
               .loneElement
               .data
           cid.contractId should not be governanceLockCid.contractId
-          view.transfer.sender shouldBe owner.party.toProtoPrimitive
+          view.transfer.sender shouldBe ownerParty.toProtoPrimitive
           view.transfer.receiver shouldBe superValidatorLockMagicParty.toProtoPrimitive
           matchSVKind(vestingLock.specification.kind)
           cid
@@ -122,9 +114,7 @@ class GovernanceLockTimeBasedIntegrationTest
       }
 
       clue("the amulet remains locked while vesting") {
-        aliceValidatorBackend
-          .getExternalPartyBalance(owner.party)
-          .totalLockedCoin shouldBe lockAmount.setScale(10).toString
+        aliceWalletClient.balance().lockedQty should beAround(lockAmount)
       }
   }
 }
