@@ -56,8 +56,6 @@ import org.lfdecentralizedtrust.splice.sv.util.SvUtil
 import org.lfdecentralizedtrust.splice.util.{SpliceUtil, SwitchOverTimes}
 
 import java.nio.file.Path
-import java.util.concurrent.TimeUnit
-import scala.concurrent.duration.*
 
 case class ExpectedValidatorOnboardingConfig(
     secret: String,
@@ -133,7 +131,10 @@ object SvOnboardingConfig {
           SwitchOverTimes.NoFeaturedAppChoiceContext -> CantonTimestamp.MinValue
         )
       ),
-      initialGovernanceLockConfig: Option[GovernanceLockConfig] = None,
+      initialGovernanceLockMinimumLockAmount: Option[NonNegativeNumeric[BigDecimal]] = None,
+      initialGovernanceLockSuperValidatorLockVestingDuration: Option[NonNegativeFiniteDuration] =
+        None,
+      initialGovernanceLockFeaturedAppLockVestingDuration: Option[NonNegativeFiniteDuration] = None,
   ) extends SvOnboardingConfig
 
   case class JoinWithKey(
@@ -293,26 +294,6 @@ final case class InitialAnsConfig(
     entryLifetime: NonNegativeFiniteDuration = NonNegativeFiniteDuration.ofDays(90),
     entryFee: Double = 1.0,
 )
-
-final case class GovernanceLockConfig(
-    minimumGovernanceLockAmount: NonNegativeNumeric[BigDecimal] =
-      NonNegativeNumeric.tryCreate(10000),
-    superValidatorGovernanceLockVestingDuration: NonNegativeFiniteDuration =
-      NonNegativeFiniteDuration.tryFromDuration(365.25.days),
-    featuredAppGovernanceLockVestingDuration: NonNegativeFiniteDuration =
-      NonNegativeFiniteDuration.tryFromDuration(60.days),
-) {
-  def toGovernanceLockConfig: splice.amuletconfig.GovernanceLockConfig =
-    new splice.amuletconfig.GovernanceLockConfig(
-      minimumGovernanceLockAmount.value.bigDecimal,
-      new org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime(
-        TimeUnit.NANOSECONDS.toMicros(superValidatorGovernanceLockVestingDuration.duration.toNanos)
-      ),
-      new org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime(
-        TimeUnit.NANOSECONDS.toMicros(featuredAppGovernanceLockVestingDuration.duration.toNanos)
-      ),
-    )
-}
 
 final case class SynchronizerFeesConfig(
     extraTrafficPrice: NonNegativeNumeric[BigDecimal] =
