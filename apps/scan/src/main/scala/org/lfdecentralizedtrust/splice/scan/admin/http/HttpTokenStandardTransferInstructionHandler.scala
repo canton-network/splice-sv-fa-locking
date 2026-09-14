@@ -422,6 +422,7 @@ class HttpTokenStandardTransferInstructionHandler(
 
     extractTransferInstruction(
       transferInstructionId,
+      // TODO(canton-network/splice-sv-fa-locking#50): update to only perform one DB query
       getAmuletTransferInstruction(transferInstructionId)(tc)
         .semiflatMap(amuletInstr =>
           util.ChoiceContextBuilder.getTwoStepTransferContext[
