@@ -229,6 +229,9 @@ testTopUpNegativePath = do
         topUpAmount = 5000.0
         holdingInputs = []
         lockInputs = []
+        svRewardCouponInputs = []
+        svRewardCouponPercentage = 0.0
+        optCurrentIssuingMiningRound = None
         extraArgs = emptyExtraArgs with context
 
   -- Test top up when the amount is 0.0 and holdingInputs are supplied (None gives all holdings under the user)
@@ -297,7 +300,8 @@ governanceLockRawChoice' env owner amount specification = do
   result <- submitWithTransferContext env (actAs [owner] <> discloseMany' disc) $
     \context -> exerciseCmd eparCid ExternalPartyAmuletRules_LockForGovernance with
       amount
-      inputs = coerceContractId <$> inputs -- These are Amulet and LockedAmulet, but we don't have convenient constraints to show that.
+      holdingInputs = coerceContractId <$> inputs -- These are Amulet and LockedAmulet, but we don't have convenient constraints to show that.
+      svRewardCouponInputs = []
       specification
       extraArgs = emptyExtraArgs with context
       owner
@@ -376,6 +380,9 @@ governanceLockTopUpRawChoice' env cid lockInputs optHoldingInputs topUpAmount ow
     topUpAmount
     lockInputs = lockInputs
     holdingInputs = downcast <$> holdingInputs
+    svRewardCouponInputs = []
+    svRewardCouponPercentage = 0.0
+    optCurrentIssuingMiningRound = None
     extraArgs = emptyExtraArgs with context
   pure $ case result of
     Left e -> Left e
