@@ -399,7 +399,7 @@ class HttpTokenStandardTransferInstructionHandler(
   ): Future[v1.definitions.ChoiceContext] = {
     val newBuilder = new V1ChoiceContextBuilder(_, excludeDebugFields)
 
-    def description(tpe: String): String = s"$tpe '$transferInstructionId'"
+    def description(type_ : String): String = s"$type_ '$transferInstructionId'"
 
     def getGovernanceLockContext(
         tpe: String,
