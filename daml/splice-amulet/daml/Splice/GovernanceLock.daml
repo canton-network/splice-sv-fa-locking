@@ -65,7 +65,7 @@ template GovernanceLock
 
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
-        let vestingPeriod = vestingDurationFor specification.kind context
+        let vestingPeriod = vestingDurationFor specification.kind state
         let endTime = unlockAt `addRelTime` vestingPeriod
         let specification = governanceToVestingSpecification this.specification
         let vestingLockProperties = LockProperties with
@@ -303,9 +303,9 @@ describeVestingSpecification lock = "Unlocking from supporting " <> describeGove
 -- Lock properties for LockSubject types
 
 -- TODO(canton-network/splice-sv-fa-locking#39): make configurable
-vestingDurationFor : GovernanceLockKind -> ExternalPartyTransferContext -> RelTime
-vestingDurationFor (GLK_FeaturedApp _) _ = days 60
-vestingDurationFor (GLK_SuperValidatorRightsOwner _) _ = days 365 + hours 6
+vestingDurationFor : GovernanceLockKind -> ExternalPartyConfigState -> RelTime
+vestingDurationFor (GLK_FeaturedApp _) context = (getGovernanceLockConfig context.governanceLockConfig).featuredAppGovernanceLockVestingDuration
+vestingDurationFor (GLK_SuperValidatorRightsOwner _) context = (getGovernanceLockConfig context.governanceLockConfig).superValidatorGovernanceLockVestingDuration
 
 requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
 requireMinimumLock context amount = do

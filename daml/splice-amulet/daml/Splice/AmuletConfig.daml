@@ -223,12 +223,18 @@ validPackageConfig _ = True
 data GovernanceLockConfig = GovernanceLockConfig with
     minimumGovernanceLockAmount : Decimal
       -- ^ The minimum amount for a governance lock. Default: 10k Amulet.
+    superValidatorGovernanceLockVestingDuration : RelTime
+      -- ^ The vesting duration for an SV governance lock. Default: 365.25 days.
+    featuredAppGovernanceLockVestingDuration : RelTime
+      -- ^ The vesting duration for an FA governance lock. Default: 60 days.
   deriving (Eq, Show, Serializable)
 
 -- | Unwrap Optional GovernanceLockConfig, using the defaults if None.
 getGovernanceLockConfig : Optional GovernanceLockConfig -> GovernanceLockConfig
 getGovernanceLockConfig cfg = flip fromOptional cfg $ GovernanceLockConfig with
   minimumGovernanceLockAmount = 10000.0
+  superValidatorGovernanceLockVestingDuration = days 365 + hours 6
+  featuredAppGovernanceLockVestingDuration = days 60
 
 instance Patchable RewardVersion where
   patch = patchScalar
@@ -284,3 +290,5 @@ instance Patchable PackageConfig where
 instance Patchable GovernanceLockConfig where
   patch new base current = GovernanceLockConfig with
     minimumGovernanceLockAmount = patch new.minimumGovernanceLockAmount base.minimumGovernanceLockAmount current.minimumGovernanceLockAmount
+    superValidatorGovernanceLockVestingDuration = patch new.superValidatorGovernanceLockVestingDuration base.superValidatorGovernanceLockVestingDuration current.superValidatorGovernanceLockVestingDuration
+    featuredAppGovernanceLockVestingDuration = patch new.featuredAppGovernanceLockVestingDuration base.featuredAppGovernanceLockVestingDuration current.featuredAppGovernanceLockVestingDuration
