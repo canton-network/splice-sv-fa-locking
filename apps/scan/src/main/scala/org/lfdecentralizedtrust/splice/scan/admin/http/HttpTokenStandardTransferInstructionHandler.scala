@@ -446,9 +446,16 @@ class HttpTokenStandardTransferInstructionHandler(
           )
         )
         .orElse(
-          getVestingLock(transferInstructionId)(tc).semiflatMap(vestingLock =>
-            getGovernanceLockContext("VestingLock", vestingLock.payload.lockedAmulet, false)
-          )
+          getVestingLock(transferInstructionId)(tc).semiflatMap { vestingLock =>
+            // A partial withdrawal (< endTime) unlocks the LockedAmulet, so it is required.
+            // A full withdrawal (>= endTime) returns the holding directly, so doesn't need it.
+            val requireLockedAmulet = clock.now.toInstant.isBefore(vestingLock.payload.endTime)
+            getGovernanceLockContext(
+              "VestingLock",
+              vestingLock.payload.lockedAmulet,
+              requireLockedAmulet,
+            )
+          }
         ),
     )
   }
