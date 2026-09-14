@@ -56,6 +56,8 @@ import org.lfdecentralizedtrust.splice.sv.util.SvUtil
 import org.lfdecentralizedtrust.splice.util.{SpliceUtil, SwitchOverTimes}
 
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
+import scala.concurrent.duration.*
 
 case class ExpectedValidatorOnboardingConfig(
     secret: String,
@@ -293,11 +295,22 @@ final case class InitialAnsConfig(
 )
 
 final case class GovernanceLockConfig(
-    minimumGovernanceLockAmount: NonNegativeNumeric[BigDecimal]
+    minimumGovernanceLockAmount: NonNegativeNumeric[BigDecimal] =
+      NonNegativeNumeric.tryCreate(10000),
+    superValidatorGovernanceLockVestingDuration: NonNegativeFiniteDuration =
+      NonNegativeFiniteDuration.tryFromDuration(365.25.days),
+    featuredAppGovernanceLockVestingDuration: NonNegativeFiniteDuration =
+      NonNegativeFiniteDuration.tryFromDuration(60.days),
 ) {
   def toGovernanceLockConfig: splice.amuletconfig.GovernanceLockConfig =
     new splice.amuletconfig.GovernanceLockConfig(
-      minimumGovernanceLockAmount.value.bigDecimal
+      minimumGovernanceLockAmount.value.bigDecimal,
+      new org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime(
+        TimeUnit.NANOSECONDS.toMicros(superValidatorGovernanceLockVestingDuration.duration.toNanos)
+      ),
+      new org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime(
+        TimeUnit.NANOSECONDS.toMicros(featuredAppGovernanceLockVestingDuration.duration.toNanos)
+      ),
     )
 }
 
