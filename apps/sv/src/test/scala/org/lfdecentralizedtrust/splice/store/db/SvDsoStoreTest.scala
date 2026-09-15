@@ -194,6 +194,27 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
 
     }
 
+    "contractFilter" should {
+
+      "ingest GovernanceLocks scoped to the DSO party" in {
+        val dsoLock = governanceLock(userParty(1), amount = BigDecimal(10))
+        val otherDsoLock =
+          governanceLock(userParty(2), amount = BigDecimal(20), dso = userParty(4))
+        for {
+          store <- mkStore()
+          _ <- MonadUtil.sequentialTraverse(Seq(dsoLock, otherDsoLock))(
+            dummyDomain.create(_)(store.multiDomainAcsStore)
+          )
+          result <- store.multiDomainAcsStore.listContracts(
+            splice.governancelock.GovernanceLock.COMPANION
+          )
+        } yield {
+          result.map(_.contractId) should contain theSameElementsAs Seq(dsoLock.contractId)
+        }
+      }
+
+    }
+
     "lookupSvOnboardingConfirmedByParty" should {
       offsetFreeLookupTest(
         create = svOnboardingConfirmed("good", userParty(1), "good-pid"),
@@ -2398,6 +2419,57 @@ class DbSvDsoStoreTest
         Map(SynchronizerAlias.tryCreate(domain) -> dummyDomain)
       )
     } yield store
+  }
+
+  "listProvisionalGovernanceLocksWithFeaturedAppRight" should {
+
+    "return only provisional locks whose provider has a live FeaturedAppRight" in {
+      val readyProvider = userParty(1)
+      val readyLockCid = nextCid()
+      val readyLock = governanceLock(
+        userParty(2),
+        amount = BigDecimal(10),
+        kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+          readyProvider.toProtoPrimitive
+        ),
+        contractId = readyLockCid,
+      )
+      val readyRight = featuredAppRight(readyProvider)
+
+      val notReadyProvider = userParty(3)
+      val notReadyLock = governanceLock(
+        userParty(4),
+        amount = BigDecimal(20),
+        kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+          notReadyProvider.toProtoPrimitive
+        ),
+      )
+      // No matching FeaturedAppRight is created for notReadyProvider.
+
+      val confirmedProvider = userParty(5)
+      val confirmedLock = governanceLock(
+        userParty(6),
+        amount = BigDecimal(30),
+        kind = new splice.governancelock.governancelockkind.GLK_FeaturedApp(
+          confirmedProvider.toProtoPrimitive
+        ),
+      )
+      val confirmedRight = featuredAppRight(confirmedProvider)
+      // confirmedLock has a matching right but isn't provisional, so it should be excluded.
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(readyLock)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(readyRight)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(notReadyLock)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(confirmedLock)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(confirmedRight)(store.multiDomainAcsStore)
+        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRight()
+      } yield {
+        result.map(_.contractId.contractId) should contain theSameElementsAs Seq(readyLockCid)
+      }
+    }
+
   }
 
   "listVoteRequestsReadyToBeClosed" should {
