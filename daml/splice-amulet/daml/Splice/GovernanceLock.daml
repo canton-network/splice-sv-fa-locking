@@ -172,7 +172,7 @@ governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt
                 (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
                 pure (None, unlockedAmulet)
               Some unlockAmount -> do
-                (stillLockedHolding, unlockedAmulet) <- partialUnlock forOwner lockedAmulet unlockAmount context
+                (stillLockedHolding, unlockedAmulet) <- partialUnlock forOwner lockedAmulet (amount - unlockAmount) context
                 governanceLock <- create
                   this with
                     lockedAmulet = stillLockedHolding
