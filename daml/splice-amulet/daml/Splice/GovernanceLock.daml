@@ -129,15 +129,33 @@ governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt
             pure $ Some unlockAmount
 
         let vestingPeriod = vestingDurationFor specification.kind context
+        let endTime = unlockAt `addRelTime` vestingPeriod
         let specification = governanceToVestingSpecification this.specification
         let forOwner = ForOwner with dso; owner
+        let vestingLockProperties = LockProperties with
+              context = describeVestingSpecification specification
+              expiresAt = endTime
 
-        case vestingPeriod of
-          Some vestingPeriod -> do
-            let endTime = unlockAt `addRelTime` vestingPeriod
-            let vestingLockProperties = LockProperties with
-                  context = describeVestingSpecification specification
-                  expiresAt = endTime
+        if vestingPeriod == days 0
+          then do
+            (governanceLock, unlockedAmulet) <- case unlockAmount' of
+              None -> do
+                (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
+                pure (None, unlockedAmulet)
+              Some unlockAmount -> do
+                (stillLockedHolding, unlockedAmulet) <- partialUnlock forOwner lockedAmulet (amount - unlockAmount) context
+                governanceLock <- create
+                  this with
+                    lockedAmulet = stillLockedHolding
+                    amount = amount - unlockAmount
+                pure (Some governanceLock, unlockedAmulet)
+
+            pure $ GovernanceLock_UnlockResult with
+              vestingLock = None
+              governanceLock
+              unlockedAmulet = Some unlockedAmulet
+
+          else do
             (vestingLockedHolding, governanceLock, vestingAmount) <- case unlockAmount' of
               None -> do -- No split required, relock to change the expireAt and description.
                 newLockedAmulet <- relockAmulet forOwner lockedAmulet vestingLockProperties context
@@ -165,24 +183,6 @@ governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt
               vestingLock = Some vestingLock
               governanceLock
               unlockedAmulet = None
-
-          None -> do
-            (governanceLock, unlockedAmulet) <- case unlockAmount' of
-              None -> do
-                (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
-                pure (None, unlockedAmulet)
-              Some unlockAmount -> do
-                (stillLockedHolding, unlockedAmulet) <- partialUnlock forOwner lockedAmulet (amount - unlockAmount) context
-                governanceLock <- create
-                  this with
-                    lockedAmulet = stillLockedHolding
-                    amount = amount - unlockAmount
-                pure (Some governanceLock, unlockedAmulet)
-
-            pure $ GovernanceLock_UnlockResult with
-              vestingLock = None
-              governanceLock
-              unlockedAmulet = Some unlockedAmulet
 
 
 loopUntilRightA : Action m => (a -> m (Either a r)) -> a -> m r
@@ -391,10 +391,10 @@ describeVestingSpecification lock = "Unlocking from supporting " <> describeGove
 -- Lock properties for LockSubject types
 
 -- TODO(canton-network/splice-sv-fa-locking#39): make configurable
-vestingDurationFor : GovernanceLockKind -> ExternalPartyTransferContext -> Optional RelTime
-vestingDurationFor (GLK_FeaturedApp _) _ = Some $ days 60
-vestingDurationFor (GLK_ProvisionalFeaturedApp _) _ = None
-vestingDurationFor (GLK_SuperValidatorRightsOwner _) _ = Some $ days 365 + hours 6
+vestingDurationFor : GovernanceLockKind -> ExternalPartyTransferContext -> RelTime
+vestingDurationFor (GLK_FeaturedApp _) _ = days 60
+vestingDurationFor (GLK_ProvisionalFeaturedApp _) _ = days 0
+vestingDurationFor (GLK_SuperValidatorRightsOwner _) _ = days 365 + hours 6
 
 requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
 requireMinimumLock context amount = do
