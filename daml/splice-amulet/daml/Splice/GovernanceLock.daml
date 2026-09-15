@@ -152,17 +152,11 @@ governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt
               unlockedAmulet = Some unlockedAmulet
 
           else do
-            (vestingLockedHolding, governanceLock, vestingAmount) <- case unlockAmount' of
-              None -> do -- No split required, relock to change the expireAt and description.
-                newLockedAmulet <- relockAmulet forOwner lockedAmulet vestingLockProperties context
-                pure (newLockedAmulet, None, amount)
-              Some unlockAmount -> do -- Splitting.
-                (vesting, stillLockedHolding, _) <- splitLockedAmulet forOwner lockedAmulet (unlockAmount, vestingLockProperties) context
-                governanceLock <- create
-                  this with
-                    lockedAmulet = stillLockedHolding
-                    amount = amount - unlockAmount
-                pure (vesting, Some governanceLock, unlockAmount)
+            (vestingLockedHolding, stillLockedOpt) <- splitLockedAmuletOpt forOwner lockedAmulet (unlockAmount', vestingLockProperties) context
+            governanceLock <- forA stillLockedOpt (\(lockedAmulet, stillLockedAmount) -> create
+              this with
+                lockedAmulet
+                amount = stillLockedAmount)
 
             vestingLock <- create VestingLock with
               dso
@@ -170,7 +164,7 @@ governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt
               lockedAmulet = vestingLockedHolding
               vestingPeriod
               endTime
-              vestingAmount
+              vestingAmount = fromOptional amount unlockAmount'
               specification
               originalLockCid = None
               meta
@@ -401,6 +395,7 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
 -- Invariant: _none_ of these functions move amounts to new parties or modify total amounts of amulet (except when minting from reward coupons).
 
 type LockSpecification = (Decimal, LockProperties)
+type LockSpecificationOpt = (Optional Decimal, LockProperties)
 data LockProperties = LockProperties with
   context : Text
   expiresAt : Time
@@ -409,6 +404,12 @@ splitLockedAmulet : ForOwner -> ContractId LockedAmulet -> LockSpecification -> 
 splitLockedAmulet forOwner lockedAmuletCid amount context = do
   ([splitLock], remainder, remainderAmount) <- multiSplitLockedAmulet forOwner lockedAmuletCid [amount] context
   pure (splitLock, remainder, remainderAmount)
+
+splitLockedAmuletOpt : ForOwner -> ContractId LockedAmulet -> LockSpecificationOpt -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, Optional (ContractId LockedAmulet, Decimal))
+splitLockedAmuletOpt forOwner lockedAmuletCid (None, lockProps) context = (, None) <$> relockAmulet forOwner lockedAmuletCid lockProps context
+splitLockedAmuletOpt forOwner lockedAmuletCid (Some unlockAmount, lockProps) context = do
+  (splitLock, remainderLock, remainderAmount) <- splitLockedAmulet forOwner lockedAmuletCid (unlockAmount, lockProps) context
+  pure (splitLock, Some (remainderLock, remainderAmount))
 
 multiSplitLockedAmulet : ForOwner -> ContractId LockedAmulet -> [LockSpecification] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], ContractId LockedAmulet, Decimal)
 multiSplitLockedAmulet forOwner lockedAmuletCid specs context = do
@@ -424,7 +425,7 @@ partialUnlock forOwner lockedAmuletCid stillLockedAmount context = do
   pure (newLockedCid, unlockedAmulet, lockSpec)
 
 partialUnlockOpt : ForOwner -> ContractId LockedAmulet -> Optional Decimal -> ExternalPartyTransferContext -> Update (Optional (ContractId LockedAmulet, Decimal), ContractId Amulet)
-partialUnlockOpt forOwner lockedAmuletCid None _ = fmap (\(cid, _) -> (None, cid)) $ unlockAmulet forOwner lockedAmuletCid
+partialUnlockOpt forOwner lockedAmuletCid None _ = (\(cid, _) -> (None, cid)) <$> unlockAmulet forOwner lockedAmuletCid
 partialUnlockOpt forOwner lockedAmuletCid (Some stillLockedAmount) context = do
   (stillLockedAmulet, unlockedAmulet, (previousAmount, _)) <- partialUnlock forOwner lockedAmuletCid stillLockedAmount context
   pure (Some (stillLockedAmulet, previousAmount - stillLockedAmount), unlockedAmulet)
