@@ -3,12 +3,16 @@
 
 module Splice.GovernanceLock where
 
+import Prelude hiding (forA)
+import DA.Action (unless)
 import DA.Assert
+import DA.Foldable (toList)
 import DA.Map qualified as Map
 import DA.Optional
 import DA.Text qualified as Text
 import DA.TextMap qualified as TextMap
 import DA.Time
+import DA.Traversable (forA)
 
 import Splice.Amulet
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
@@ -29,6 +33,8 @@ import Splice.Util
 data GovernanceLockKind
   = GLK_FeaturedApp with
       provider : Party -- ^ Featured app provider party.
+  | GLK_ProvisionalFeaturedApp with
+      provider : Party -- ^ Provisional featured app provider party.
   | GLK_SuperValidatorRightsOwner with
       svName : Text  -- ^ Name of the SV rights owner for whom the funds are locked.
   deriving (Eq, Show, Serializable)
@@ -97,9 +103,12 @@ template GovernanceLock
           unlockAt <- searchTimeMaximumLowerBound createdAt
           unlockResult <- governanceLock_unlockImpl (coerceContractId self) this None unlockAt extraArgs [owner]
           pure $ TransferInstructionV1.TransferInstructionResult with
-            output = TransferInstructionV1.TransferInstructionResult_Pending with
-              transferInstructionCid = toInterfaceContractId unlockResult.vestingLock
-            senderChangeCids = []
+            output = case unlockResult.vestingLock of
+              Some vestingLock -> TransferInstructionV1.TransferInstructionResult_Pending with
+                transferInstructionCid = toInterfaceContractId vestingLock
+              None -> TransferInstructionV1.TransferInstructionResult_Completed with
+                receiverHoldingCids = []
+            senderChangeCids = toList $ fmap toInterfaceContractId unlockResult.unlockedAmulet
             meta = emptyMetadata
 
       -- TODO: determine if we need to emit update choice calls when a withdraw event occurs.
@@ -112,43 +121,49 @@ governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt
 
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
+        let actualUnlockAmount = fromOptional amount unlockAmount
+        let stillLockedAmount = amount - actualUnlockAmount
+        require' ("unlockAmount", actualUnlockAmount) isGreaterR ("zero", 0.0)
+        require' ("unlockAmount", actualUnlockAmount) isLessOrEqualR ("amount", amount)
+        requireMinimumLock state actualUnlockAmount
+        unless (stillLockedAmount == 0.0) $ requireMinimumLock state stillLockedAmount
+
         let vestingPeriod = vestingDurationFor specification.kind context
         let endTime = unlockAt `addRelTime` vestingPeriod
         let specification = governanceToVestingSpecification this.specification
+        let forOwner = ForOwner with dso; owner
         let vestingLockProperties = LockProperties with
               context = describeVestingSpecification specification
               expiresAt = endTime
 
-        (vestingLockedHolding, governanceLock, vestingAmount) <- case guard (unlockAmount /= Some amount) >> unlockAmount of
-          None -> do -- No split required, relock to change the expireAt and description.
-            newLockedAmulet <- relockAmulet (ForOwner with dso; owner) lockedAmulet vestingLockProperties context
-            pure (newLockedAmulet, None, amount)
-          Some unlockAmount -> do -- Splitting.
-            require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
-            require' ("unlockAmount", unlockAmount) isLessR ("amount", amount)
-            requireMinimumLock state unlockAmount
-            (vesting, stillLockedHolding, stillLockedAmount) <- splitLockedAmulet (ForOwner with dso; owner) lockedAmulet (unlockAmount, vestingLockProperties) context
-            requireMinimumLock state stillLockedAmount
-            governanceLock <- create
-              this with
-                lockedAmulet = stillLockedHolding
-                amount = amount - unlockAmount
-            pure (vesting, Some governanceLock, unlockAmount)
+        (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if vestingPeriod == days 0
+          then do
+            (optStillLocked, unlockedAmulet) <- partialUnlock forOwner lockedAmulet stillLockedAmount context
+            pure (None, optStillLocked, Some unlockedAmulet)
+          else do
+            (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (stillLockedAmount, vestingLockProperties) context
+            pure (Some vestingLockedAmulet, optStillLocked, None)
 
-        vestingLock <- create VestingLock with
+        governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
+          this with
+            lockedAmulet
+            amount = stillLockedAmount)
+
+        vestingLock <- forA optVestingLockedAmulet (\lockedAmulet -> create VestingLock with
           dso
           owner
-          lockedAmulet = vestingLockedHolding
+          lockedAmulet
           vestingPeriod
           endTime
-          vestingAmount
+          vestingAmount = actualUnlockAmount
           specification
           originalLockCid = None
-          meta
+          meta)
 
         pure $ GovernanceLock_UnlockResult with
           vestingLock
           governanceLock
+          unlockedAmulet
 
 
 loopUntilRightA : Action m => (a -> m (Either a r)) -> a -> m r
@@ -180,8 +195,9 @@ searchTimeMaximumLowerBound basis = loopUntilRightA binarySearch =<< loopUntilRi
 
 data GovernanceLock_UnlockResult
   = GovernanceLock_UnlockResult with
-      vestingLock : ContractId VestingLock
+      vestingLock : Optional (ContractId VestingLock)
       governanceLock : Optional (ContractId GovernanceLock)
+      unlockedAmulet : Optional (ContractId Amulet)
   deriving (Eq, Show, Serializable)
 
 template VestingLock
@@ -267,11 +283,11 @@ vestingLock_withdrawImpl _self this@(VestingLock {..}) requestedAt extraArgs act
               vested = toInterfaceContractId lockedAmulet
           Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
             require' ("withdraw amount", vestingAmount - stillLockedAmount) isGreaterR ("zero", 0.0)
-            (locked, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet stillLockedAmount context
-            vestingLock <- Some <$> create this with
-              lockedAmulet = locked
+            (lockedOpt, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet stillLockedAmount context
+            vestingLock <- forA lockedOpt (\(lockedAmulet, vestingAmount) -> create this with
+              lockedAmulet
               vestingPeriod = endTime `subTime` requestedAt
-              vestingAmount = stillLockedAmount
+              vestingAmount)
             pure VestingLock_WithdrawResult with
               vestingLock
               vested = toInterfaceContractId unlocked
@@ -326,13 +342,15 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
 
 typeExtraObservers : GovernanceLockKind -> [Party]
 typeExtraObservers (GLK_FeaturedApp party) = [party]
-typeExtraObservers _ = []
+typeExtraObservers (GLK_ProvisionalFeaturedApp party) = [party]
+typeExtraObservers (GLK_SuperValidatorRightsOwner _) = []
 
 governanceToVestingSpecification : GovernanceLockSpecification -> VestingLockSpecification
 governanceToVestingSpecification GovernanceLockSpecification {..} = VestingLockSpecification {..}
 
 describeGovernanceLockKind : GovernanceLockKind -> Text
 describeGovernanceLockKind (GLK_FeaturedApp with provider) = "Featured App party " <> partyToText provider
+describeGovernanceLockKind (GLK_ProvisionalFeaturedApp with provider) = "Provisional Featured App party " <> partyToText provider
 describeGovernanceLockKind (GLK_SuperValidatorRightsOwner with svName) = "SV rights for " <> svName
 
 describeGovernanceSpecification : GovernanceLockSpecification -> Text
@@ -346,6 +364,7 @@ describeVestingSpecification lock = "Unlocking from supporting " <> describeGove
 -- TODO(canton-network/splice-sv-fa-locking#39): make configurable
 vestingDurationFor : GovernanceLockKind -> ExternalPartyTransferContext -> RelTime
 vestingDurationFor (GLK_FeaturedApp _) _ = days 60
+vestingDurationFor (GLK_ProvisionalFeaturedApp _) _ = days 0
 vestingDurationFor (GLK_SuperValidatorRightsOwner _) _ = days 365 + hours 6
 
 requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
@@ -367,27 +386,29 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
 -- Invariant: _none_ of these functions move amounts to new parties or modify total amounts of amulet (except when minting from reward coupons).
 
 type LockSpecification = (Decimal, LockProperties)
+type LockSpecificationOpt = (Optional Decimal, LockProperties)
 data LockProperties = LockProperties with
   context : Text
   expiresAt : Time
 
-splitLockedAmulet : ForOwner -> ContractId LockedAmulet -> LockSpecification -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, ContractId LockedAmulet, Decimal)
-splitLockedAmulet forOwner lockedAmuletCid amount context = do
-  ([splitLock], remainder, remainderAmount) <- multiSplitLockedAmulet forOwner lockedAmuletCid [amount] context
-  pure (splitLock, remainder, remainderAmount)
+splitLockedAmulet : ForOwner -> ContractId LockedAmulet -> LockSpecification -> ExternalPartyTransferContext -> Update (Optional (ContractId LockedAmulet, Decimal), ContractId LockedAmulet)
+splitLockedAmulet forOwner lockedAmuletCid (stillLockedAmount, lockProps) context =
+  if stillLockedAmount == 0.0
+    then (None,) <$> relockAmulet forOwner lockedAmuletCid lockProps context
+    else do
+      (unlockedCid, (currentAmount, currentLockProps)) <- unlockAmulet forOwner lockedAmuletCid
+      let remainderAmount = currentAmount - stillLockedAmount
+      ([splitLock, remainderLock], None) <- lockAmulet forOwner [(stillLockedAmount, currentLockProps), (remainderAmount, lockProps)] [toInterfaceContractId unlockedCid] context
+      pure (Some (splitLock, stillLockedAmount),remainderLock)
 
-multiSplitLockedAmulet : ForOwner -> ContractId LockedAmulet -> [LockSpecification] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], ContractId LockedAmulet, Decimal)
-multiSplitLockedAmulet forOwner lockedAmuletCid specs context = do
-  (unlockedCid, (currentAmount, currentLockProps)) <- unlockAmulet forOwner lockedAmuletCid
-  let remainderAmount = currentAmount - sum (fst <$> specs)
-  (remainderLock::specifiedLocks, None) <- lockAmulet forOwner ((remainderAmount, currentLockProps) :: specs) [toInterfaceContractId unlockedCid] context
-  pure (specifiedLocks, remainderLock, remainderAmount)
-
-partialUnlock : ForOwner -> ContractId LockedAmulet -> Decimal -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, ContractId Amulet)
+partialUnlock : ForOwner -> ContractId LockedAmulet -> Decimal -> ExternalPartyTransferContext -> Update (Optional (ContractId LockedAmulet, Decimal), ContractId Amulet)
 partialUnlock forOwner lockedAmuletCid stillLockedAmount context = do
-  (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmuletCid
-  ([newLockedCid], Some unlockedAmulet) <- lockAmulet forOwner [(stillLockedAmount, lockProps)] [toInterfaceContractId $ unlockedAmuletCid] context
-  pure (newLockedCid, unlockedAmulet)
+  (unlockedAmuletCid, (currentAmount, lockProps)) <- unlockAmulet forOwner lockedAmuletCid
+  if stillLockedAmount == 0.0
+    then pure (None, unlockedAmuletCid)
+    else do
+      ([newLockedCid], Some unlockedAmulet) <- lockAmulet forOwner [(stillLockedAmount, lockProps)] [toInterfaceContractId unlockedAmuletCid] context
+      pure (Some (newLockedCid, currentAmount - stillLockedAmount), unlockedAmulet)
 
 relockAmulet : ForOwner -> ContractId LockedAmulet -> LockProperties -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet)
 relockAmulet forOwner lockedAmuletCid newLockProperties context = do
@@ -437,6 +458,11 @@ cipAddressPrefix = "cip-0105_"
 -- Not sure what to call this.
 magicNamespace = "::1220000000000000000000000000000000000000000000000000000000000000abcd"
 
+
+featuredAppLockTag = "fa-lock"
+provisionalFeaturedAppLockTag = "provisional-" <> featuredAppLockTag
+superValidatorLockTag = "sv-lock"
+
 isGovernanceLockTransferParty : Party -> Bool
 isGovernanceLockTransferParty party = isSome $ Text.stripPrefix cipAddressPrefix (partyToText party) >>= Text.stripSuffix magicNamespace
 
@@ -470,19 +496,27 @@ specificationFromReceiverAndReason receiver meta = do
   let operationString = Text.stripPrefix cipAddressPrefix (partyToText receiver) >>= Text.stripSuffix magicNamespace
   let subject = Text.stripPrefix "lock-subject=" =<< reasonMetaKey `TextMap.lookup` meta.values
   case liftA2 (,) operationString subject of
-        Some ("sv-lock", subject) -> pure $ GovernanceLockSpecification $ GLK_SuperValidatorRightsOwner with
+        Some (tag, subject) | tag == superValidatorLockTag -> pure $ GovernanceLockSpecification $ GLK_SuperValidatorRightsOwner with
           svName = subject
-        Some ("fa-lock", subject) | Some subject <- partyFromText subject -> pure $ GovernanceLockSpecification $ GLK_FeaturedApp with
+        Some (tag, subject) | tag == featuredAppLockTag, Some subject <- partyFromText subject -> pure $ GovernanceLockSpecification $ GLK_FeaturedApp with
+          provider = subject
+        Some (tag, subject) | tag == provisionalFeaturedAppLockTag, Some subject <- partyFromText subject -> pure $ GovernanceLockSpecification $ GLK_ProvisionalFeaturedApp with
           provider = subject
         _ -> assertFail "Unknown receiver or lock-subject"
 
+makeCanonicalParty : Text -> Party
+makeCanonicalParty tag = fromSome $ partyFromText $ cipAddressPrefix <> tag <> magicNamespace
+
 featuredAppLockCanonicalParty : Party
-featuredAppLockCanonicalParty = fromSome $ partyFromText $ cipAddressPrefix <> "fa-lock" <> magicNamespace
+featuredAppLockCanonicalParty = makeCanonicalParty featuredAppLockTag
+provisionalFeaturedAppLockCanonicalParty : Party
+provisionalFeaturedAppLockCanonicalParty = makeCanonicalParty provisionalFeaturedAppLockTag
 superValidatorLockCanonicalParty : Party
-superValidatorLockCanonicalParty = fromSome $ partyFromText $ cipAddressPrefix <> "sv-lock" <> magicNamespace
+superValidatorLockCanonicalParty = makeCanonicalParty superValidatorLockTag
 
 lockTypeToCompatibilityPartyAndReason : GovernanceLockKind -> (Party, Text)
 lockTypeToCompatibilityPartyAndReason (GLK_FeaturedApp with provider) = (featuredAppLockCanonicalParty, "lock-subject=" <> partyToText provider)
+lockTypeToCompatibilityPartyAndReason (GLK_ProvisionalFeaturedApp with provider) = (provisionalFeaturedAppLockCanonicalParty, "lock-subject=" <> partyToText provider)
 lockTypeToCompatibilityPartyAndReason (GLK_SuperValidatorRightsOwner with svName) = (superValidatorLockCanonicalParty, "lock-subject=" <> svName)
 
 
