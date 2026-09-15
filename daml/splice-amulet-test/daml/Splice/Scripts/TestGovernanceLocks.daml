@@ -117,8 +117,9 @@ testGovernanceLockCompatHappyPathScenario : CompatGovernanceLockOperations -> Sc
 testGovernanceLockCompatHappyPathScenario ops = do
   env@TestEnv{..} <- setupTest
 
+  -- Using a featured app to get a whole and very divisible number of days.
   let someSvSpec = GovernanceLockSpecification with
-        kind = GLK_SuperValidatorRightsOwner "TestSV"
+        kind = GLK_FeaturedApp bob
 
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 180000.0
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob 10000.0
@@ -128,29 +129,29 @@ testGovernanceLockCompatHappyPathScenario ops = do
   -- Unlock 80k Amulet such that 1/8th should result in 10k Amulet withdrawable after 1/8th year.
   aliceVesting <- ops.governanceUnlock env aliceLock alice
 
-
-  -- Chosen to be exactly 1/8th of the specified 365.25 year.
+  -- Chosen to make the vesting period to exactly 1/4th of the specified 60 day vesting period.
   -- 1/8th and 80k are reliably exactly representible in fixed-point binary
   -- with at least three fractional places, so the arithmetic is exact and we can
   -- comfortably use equality.
 
-  passTime (days 45 + hours 15 + minutes 45)
+  passTime (days 16)
 
+  now <- getTime
   Some newVestingLock <- ops.vestingWithdraw env aliceVesting alice
 
 
   -- Check that we did indeed unlock 10k amulet as expected - 1/8th of the total vesting amount of 80k.
-  WalletClientV2.checkHoldingWithAmountExists alice env.instrId 10000.0
+  WalletClientV2.checkHoldingWithAmountExists alice env.instrId 20000.0
 
   -- And check that we remain with 7/8ths of the vesting amount - 70k.
-  checkLockedHolding alice newVestingLock 70000.0
+  checkLockedHolding alice newVestingLock 60000.0
 
-  passTime (days 365)
+  passTime (days 60)
 
   None <- ops.vestingWithdraw env newVestingLock alice
 
   -- Check that we withdrew all and exactly the 70k _remaining_ after the above withdrawal.
-  WalletClientV2.checkHoldingWithAmountExists alice env.instrId 70000.0
+  WalletClientV2.checkHoldingWithAmountExists alice env.instrId 60000.0
 
 
 testGovernanceLockMinimumLocksLockUnlockWithdraw : Script ()

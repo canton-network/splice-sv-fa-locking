@@ -94,7 +94,7 @@ template GovernanceLock
       transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks may not be rejected"
       transferInstruction_withdrawImpl self arg = do
           let TransferInstructionV1.TransferInstruction_Withdraw {..} = arg
-          unlockAt <- searchTimeMaximumLowerBound createdAt
+          (_, unlockAt) <- searchTimeMaximumLowerBound createdAt
           unlockResult <- governanceLock_unlockImpl (coerceContractId self) this None unlockAt extraArgs [owner]
           pure $ TransferInstructionV1.TransferInstructionResult with
             output = TransferInstructionV1.TransferInstructionResult_Pending with
@@ -159,20 +159,29 @@ loopUntilRightA f a = do
     Right r -> pure r
 
 
-searchTimeMaximumLowerBound : Time -> Update Time
-searchTimeMaximumLowerBound basis = loopUntilRightA binarySearch =<< loopUntilRightA seekForward (0, basis)
+-- | Takes a reference time, that must be at or before the current ledger time,
+-- and returns a pair where the first is before the current time and the second is
+-- after.
+
+searchTimeMaximumLowerBound : Time -> Update (Time, Time)
+searchTimeMaximumLowerBound basis = loopUntilRightA binarySearch =<< loopUntilRightA seekForward (1, modifiedBasis)
   where
-    binarySearch : (Int, Time) -> Update (Either (Int, Time) Time)
+    modifiedBasis = basis `addRelTime` (days (-1))
+    binarySearch : (Int, Time) -> Update (Either (Int, Time) (Time, Time))
+    binarySearch (-1, basis) = do
+      pure $ Right (basis, basis `addRelTime` days 1)
     binarySearch (seek, basis) = do
-      gt <- isLedgerTimeGT basis
+      let nextBasis = basis `addRelTime` seekToDays seek
+      gt <- isLedgerTimeGE nextBasis
       pure $ if gt
-         then Left (seek + 1, basis `addRelTime` seekToDays seek)
-         else Right basis
+         then Left (seek - 1, nextBasis)
+         else Left (seek - 1, basis)
     seekForward : (Int, Time) -> Update (Either (Int, Time) (Int, Time))
     seekForward (seek, basis) = do
-      gt <- isLedgerTimeGT basis
+      let nextBasis = basis `addRelTime` seekToDays seek
+      gt <- isLedgerTimeGE nextBasis
       pure $ if gt
-         then Left (seek + 1, basis `addRelTime` seekToDays seek)
+         then Left (seek + 1, nextBasis)
          else Right (seek - 1, basis)
     seekToDays seek = days $ 2 ^ seek
 
@@ -233,7 +242,7 @@ template VestingLock
       transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks may not be rejected"
       transferInstruction_withdrawImpl self arg = do
         let TransferInstructionV1.TransferInstruction_Withdraw {..} = arg
-        requestedAt <- searchTimeMaximumLowerBound (endTime `addRelTime` (- vestingPeriod))
+        (requestedAt, _) <- searchTimeMaximumLowerBound (endTime `addRelTime` (- vestingPeriod))
         withdrawResult <- vestingLock_withdrawImpl (coerceContractId self) this requestedAt extraArgs [owner]
         case withdrawResult.vestingLock of
           Some vestingLock -> pure $ TransferInstructionV1.TransferInstructionResult with
@@ -250,6 +259,7 @@ template VestingLock
       -- TODO: determine if we need to emit update choice calls when a withdraw event occurs.
       transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks may not be updated"
   -- TODO: substitution, probably with a loose function for implementation sharing.
+
 
 vestingLock_withdrawImpl : ContractId VestingLock -> VestingLock -> Time -> ExtraArgs -> [Party] -> Update VestingLock_WithdrawResult
 vestingLock_withdrawImpl _self this@(VestingLock {..}) requestedAt extraArgs actors
