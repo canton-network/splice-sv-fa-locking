@@ -7,9 +7,11 @@ import com.digitalasset.canton.crypto.Fingerprint
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
 import com.digitalasset.canton.resource.DbStorage
+import slick.jdbc.canton.ActionBasedSQLInterpolation.Implicits.actionBasedSQLInterpolationCanton
 import com.digitalasset.canton.topology.*
 import com.digitalasset.canton.tracing.TraceContext
 import com.digitalasset.canton.util.MonadUtil
+import org.lfdecentralizedtrust.splice.util.FutureUnlessShutdownUtil.FutureUnlessShutdownOps
 import com.digitalasset.canton.{HasActorSystem, HasExecutionContext, SynchronizerAlias}
 import org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime
 import org.lfdecentralizedtrust.splice.codegen.java.splice
@@ -189,6 +191,27 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
             dsoLock.contractId,
             laterDsoLock.contractId,
           )
+        }
+      }
+
+    }
+
+    "contractFilter" should {
+
+      "ingest GovernanceLocks scoped to the DSO party" in {
+        val dsoLock = governanceLock(userParty(1), amount = BigDecimal(10))
+        val otherDsoLock =
+          governanceLock(userParty(2), amount = BigDecimal(20), dso = userParty(4))
+        for {
+          store <- mkStore()
+          _ <- MonadUtil.sequentialTraverse(Seq(dsoLock, otherDsoLock))(
+            dummyDomain.create(_)(store.multiDomainAcsStore)
+          )
+          result <- store.multiDomainAcsStore.listContracts(
+            splice.governancelock.GovernanceLock.COMPANION
+          )
+        } yield {
+          result.map(_.contractId) should contain theSameElementsAs Seq(dsoLock.contractId)
         }
       }
 
