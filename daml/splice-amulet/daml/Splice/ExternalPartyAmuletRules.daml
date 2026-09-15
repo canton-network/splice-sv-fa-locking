@@ -137,13 +137,14 @@ template ExternalPartyAmuletRules
     nonconsuming choice ExternalPartyAmuletRules_LockForGovernance : ExternalPartyAmuletRules_LockForGovernanceResult
       with
         amount : Decimal
-        inputs : [ContractId V1.Holding]
+        holdingInputs : [ContractId V1.Holding]
+        svRewardCouponInputs : [ContractId SvRewardCoupon]
         specification : GovernanceLockSpecification
         extraArgs : ExtraArgs
         owner : Party
       controller owner
       do
-        (governanceLock, changeHolding) <- governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner
+        (governanceLock, changeHolding) <- governanceLock_lockForGovernance_impl dso amount holdingInputs svRewardCouponInputs specification extraArgs owner
         pure $ ExternalPartyAmuletRules_LockForGovernanceResult with
           governanceLock
           changeHolding
