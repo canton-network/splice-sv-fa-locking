@@ -23,7 +23,7 @@ template FeaturedAppUnderlockInstruction with
     provider : Party
     underlocked : Bool
       -- ^ True indicates that the DSO observed the given provider to be underlocked.
-      -- False indicates observed recovered from underlock.
+      -- False indicates that they observed their recovery from underlock.
   where
     signatory dso
 
