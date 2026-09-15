@@ -3,7 +3,6 @@
 
 -- | Instruction contracts recording DSO decisions to be applied by any SV against whichever
 -- contract is current at execution time.
-
 module Splice.DSO.Instruction where
 
 import Splice.Amulet (FeaturedAppRight_UpdateConfig)
