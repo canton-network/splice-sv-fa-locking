@@ -2423,6 +2423,56 @@ class DbSvDsoStoreTest
     } yield store
   }
 
+  "listProvisionalGovernanceLocksWithFeaturedAppRight" should {
+
+    "return only provisional locks whose provider has a live FeaturedAppRight" in {
+      val readyProvider = userParty(1)
+      val readyLockCid = nextCid()
+      val readyLock = governanceLock(
+        userParty(2),
+        amount = BigDecimal(10),
+        kind = new splice.governancelock.governancelockkind.GLK_FeaturedApp(
+          readyProvider.toProtoPrimitive
+        ),
+        contractId = readyLockCid,
+      )
+      val readyRight = featuredAppRight(readyProvider)
+
+      val notReadyProvider = userParty(3)
+      val notReadyLockCid = nextCid()
+      val notReadyLock = governanceLock(
+        userParty(4),
+        amount = BigDecimal(20),
+        kind = new splice.governancelock.governancelockkind.GLK_FeaturedApp(
+          notReadyProvider.toProtoPrimitive
+        ),
+        contractId = notReadyLockCid,
+      )
+      // No matching FeaturedAppRight is created for notReadyProvider.
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(readyLock)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(readyRight)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(notReadyLock)(store.multiDomainAcsStore)
+        // The ingestion filter doesn't populate governance_lock_is_provisional yet (blocked on
+        // GLK_ProvisionalFeaturedApp, canton-network/splice-sv-fa-locking#45), so both locks are
+        // forced to look provisional here to isolate and test the join logic on its own.
+        _ <- storage
+          .update(
+            sqlu"""update dso_acs_store set governance_lock_is_provisional = true
+                 where contract_id in ($readyLockCid, $notReadyLockCid)""",
+            "force governance_lock_is_provisional for test",
+          )
+          .toFuture
+        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRight()
+      } yield {
+        result.map(_.contractId.contractId) should contain theSameElementsAs Seq(readyLockCid)
+      }
+    }
+
+  }
+
   "listVoteRequestsReadyToBeClosed" should {
 
     val votesAccept =
