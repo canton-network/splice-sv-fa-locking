@@ -1689,6 +1689,21 @@ object SvDsoStore {
           contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.endTime)),
         )
       },
+      mkFilter(splice.governancelock.GovernanceLock.COMPANION)(
+        co => co.payload.dso == dso,
+        versionGuard = { case (pkgVersionSupport, now) =>
+          (tc) => pkgVersionSupport.supportsGovernanceLock(Seq(dsoParty), now)(tc)
+        },
+      ) { contract =>
+        val isProvisional = contract.payload.specification.kind match {
+          case _: splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp => true
+          case _ => false
+        }
+        DsoAcsStoreRowData(
+          contract,
+          governanceLockIsProvisional = Some(isProvisional),
+        )
+      },
     )
 
     MultiDomainAcsStore.SimpleContractFilter(
