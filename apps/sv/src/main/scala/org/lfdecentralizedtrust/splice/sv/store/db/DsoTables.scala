@@ -53,6 +53,7 @@ object DsoTables extends AcsTables with NamedLogging {
       featuredAppRightProvider: Option[PartyId] = None,
       svParty: Option[PartyId] = None,
       svName: Option[String] = None,
+      governanceLockIsProvisional: Option[Boolean] = None,
       walletParty: Option[PartyId] = None,
       conversionRateFeedPublisher: Option[PartyId] = None,
       rewardBeneficiaryIsObserver: Option[Boolean] = None,
@@ -91,6 +92,7 @@ object DsoTables extends AcsTables with NamedLogging {
       DsoAcsStoreRowData.IndexColumns.wallet_party -> walletParty,
       DsoAcsStoreRowData.IndexColumns.conversion_rate_feed_publisher -> conversionRateFeedPublisher,
       DsoAcsStoreRowData.IndexColumns.reward_beneficiary_is_observer -> rewardBeneficiaryIsObserver,
+      DsoAcsStoreRowData.IndexColumns.governance_lock_is_provisional -> governanceLockIsProvisional,
     )
   }
   object DsoAcsStoreRowData {
@@ -133,6 +135,7 @@ object DsoTables extends AcsTables with NamedLogging {
       val wallet_party = "wallet_party"
       val conversion_rate_feed_publisher = "conversion_rate_feed_publisher"
       val reward_beneficiary_is_observer = "reward_beneficiary_is_observer"
+      val governance_lock_is_provisional = "governance_lock_is_provisional"
       val All = Seq(
         amulet_round_of_expiry,
         reward_round,
@@ -166,6 +169,7 @@ object DsoTables extends AcsTables with NamedLogging {
         wallet_party,
         conversion_rate_feed_publisher,
         reward_beneficiary_is_observer,
+        governance_lock_is_provisional,
       )
     }
   }
