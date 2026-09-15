@@ -35,6 +35,7 @@ import Splice.Ans
 import Splice.SvOnboarding
 import Splice.DSO.AmuletPrice
 import Splice.DSO.DecentralizedSynchronizer
+import Splice.DSO.Instruction
 import Splice.DSO.SvState
 import Splice.Schedule
 import Splice.Util
@@ -247,7 +248,7 @@ data DsoRules_CreateFeaturedAppUnderlockInstructionResult = DsoRules_CreateFeatu
 data DsoRules_ExecuteFeaturedAppUnderlockInstructionResult = DsoRules_ExecuteFeaturedAppUnderlockInstructionResult
   deriving (Serializable)
 
-data DsoRules_EnforceFeaturedAppUnderlockResult = DsoRules_EnforceFeaturedAppUnderlockResult
+data DsoRules_EnforceFeaturedAppPermanentUnderlockResult = DsoRules_EnforceFeaturedAppPermanentUnderlockResult
   deriving (Serializable)
 
 data DsoRules_CreateFeaturedAppConfigUpdateInstructionResult = DsoRules_CreateFeaturedAppConfigUpdateInstructionResult with
@@ -1095,19 +1096,15 @@ template DsoRules with
       with
         provider : Party
         activityWeight : Optional Decimal
-          -- ^ Deprecated: superseded by the corresponding value provided in config when that is set.
-        config : Optional FeaturedAppConfig
+        config : Optional FeaturedAppConfigInternal
       controller dso
       do
-        let right = FeaturedAppRight with
-              dso
-              provider
-              activityWeight
-              config = None
-              underlockState = None
-        featuredAppRight <- create $ case config of
-          None -> right
-          Some c -> setFeaturedAppConfig c right
+        featuredAppRight <- create FeaturedAppRight with
+          dso
+          provider
+          activityWeight
+          config
+          underlockPermanentAt = None
         return DsoRules_GrantFeaturedAppRightResult with ..
 
     nonconsuming choice DsoRules_RevokeFeaturedAppRight : DsoRules_RevokeFeaturedAppRightResult
@@ -1149,18 +1146,14 @@ template DsoRules with
       do
         void $ getAndValidateSvParty this (Some sv)
         instruction <- fetchAndArchive (ForDso dso) instructionCid
-        if instruction.underlocked
-          then void $ exercise amuletRulesCid $ AmuletRules_SetFeaturedAppUnderlock with
-            provider = instruction.provider
-            rightCid
-            expectedDso = Some dso
-          else void $ exercise amuletRulesCid $ AmuletRules_SetFeaturedAppRecovering with
-            provider = instruction.provider
-            rightCid
-            expectedDso = Some dso
+        void $ fetchChecked (ForOwner with dso; owner = instruction.provider) rightCid
+        void $ exercise amuletRulesCid AmuletRules_UpdateFeaturedAppUnderlockState with
+          rightCid
+          underlocked = instruction.underlocked
+          expectedDso = Some dso
         pure DsoRules_ExecuteFeaturedAppUnderlockInstructionResult
 
-    nonconsuming choice DsoRules_EnforceFeaturedAppUnderlock : DsoRules_EnforceFeaturedAppUnderlockResult
+    nonconsuming choice DsoRules_EnforceFeaturedAppPermanentUnderlock : DsoRules_EnforceFeaturedAppPermanentUnderlockResult
       with
         rightCid : ContractId FeaturedAppRight
         sv : Party
@@ -1168,19 +1161,17 @@ template DsoRules with
       do
         void $ getAndValidateSvParty this (Some sv)
         void $ fetchChecked (ForDso with dso) rightCid
-        void $ exercise rightCid FeaturedAppRight_EnforceUnderlock
-        pure DsoRules_EnforceFeaturedAppUnderlockResult
+        void $ exercise rightCid FeaturedAppRight_EnforcePermanentUnderlock
+        pure DsoRules_EnforceFeaturedAppPermanentUnderlockResult
 
     nonconsuming choice DsoRules_CreateFeaturedAppConfigUpdateInstruction : DsoRules_CreateFeaturedAppConfigUpdateInstructionResult
       with
         provider : Party
-        baseConfig : FeaturedAppConfig
-        newConfig : FeaturedAppConfig
-        reason : Text
+        update : FeaturedAppRight_UpdateConfig
       controller dso
       do
         instructionCid <- create FeaturedAppConfigUpdateInstruction with
-          dso; provider; baseConfig; newConfig; reason
+          dso; provider; update
         pure DsoRules_CreateFeaturedAppConfigUpdateInstructionResult with
           instructionCid
 
@@ -1194,10 +1185,7 @@ template DsoRules with
         void $ getAndValidateSvParty this (Some sv)
         instruction <- fetchAndArchive (ForDso dso) instructionCid
         void $ fetchChecked (ForOwner with dso; owner = instruction.provider) rightCid
-        result <- exercise rightCid FeaturedAppRight_UpdateConfig with
-          baseConfig = instruction.baseConfig
-          newConfig = instruction.newConfig
-          reason = instruction.reason
+        result <- exercise rightCid instruction.update
         pure DsoRules_ExecuteFeaturedAppConfigUpdateInstructionResult with result
 
     -- Validator onboarding

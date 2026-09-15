@@ -92,7 +92,7 @@ testVoteRequestAcceptanceWithoutEffectivity = do
     sv = Some sv1
 
   [(rightCid, right)] <- query @FeaturedAppRight provider
-  right === FeaturedAppRight with dso; provider; activityWeight = Some 11.0; config = None; underlockState = None
+  right === FeaturedAppRight with dso; provider; activityWeight = Some 11.0; config = None; underlockPermanentAt = None
 
   -- the request has been archived
   [] <- query @VoteRequest dso
@@ -188,7 +188,7 @@ testVoteRequestAcceptanceWithEffectivity = do
   result.outcome === VRO_Accepted with effectiveAt = effectiveTime
 
   [(rightCid, right)] <- query @FeaturedAppRight provider
-  right === FeaturedAppRight with dso; provider; activityWeight = None; config = None; underlockState = None
+  right === FeaturedAppRight with dso; provider; activityWeight = None; config = None; underlockPermanentAt = None
 
   -- the request has been archived
   [] <- query @VoteRequest dso
@@ -203,7 +203,7 @@ testVoteRequestAcceptanceWithEffectivity = do
           newActivityWeight = 1.5
 
   [(rightCid, right)] <- query @FeaturedAppRight provider
-  right === FeaturedAppRight with dso; provider; activityWeight = Some 1.5; config = None; underlockState = None
+  right === FeaturedAppRight with dso; provider; activityWeight = Some 1.5; config = None; underlockPermanentAt = None
 
   -- let's test updating the right back to the default
   initiateAndAcceptVote app [sv1, sv2, sv3, sv4] $
@@ -215,7 +215,7 @@ testVoteRequestAcceptanceWithEffectivity = do
           newActivityWeight = 1.0
 
   [(rightCid, right)] <- query @FeaturedAppRight provider
-  right === FeaturedAppRight with dso; provider; activityWeight = None; config = None; underlockState = None
+  right === FeaturedAppRight with dso; provider; activityWeight = None; config = None; underlockPermanentAt = None
 
   -- we can remove the granted right using a vote request, provided enough parties answer in time
   -- This uses early closure of the vote request, which is only possible if a super-majority of svs have voted

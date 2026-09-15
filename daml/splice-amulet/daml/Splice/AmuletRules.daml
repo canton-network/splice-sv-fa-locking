@@ -89,11 +89,7 @@ data AmuletRules_DevNet_FeatureAppResult = AmuletRules_DevNet_FeatureAppResult w
     featuredAppRightCid : ContractId FeaturedAppRight
   deriving (Serializable)
 
-data AmuletRules_SetFeaturedAppUnderlockResult = AmuletRules_SetFeaturedAppUnderlockResult with
-    featuredAppRightCid : Optional (ContractId FeaturedAppRight)
-  deriving (Serializable)
-
-data AmuletRules_SetFeaturedAppRecoveringResult = AmuletRules_SetFeaturedAppRecoveringResult with
+data AmuletRules_UpdateFeaturedAppUnderlockStateResult = AmuletRules_UpdateFeaturedAppUnderlockStateResult with
     featuredAppRightCid : Optional (ContractId FeaturedAppRight)
   deriving (Serializable)
 
@@ -439,7 +435,7 @@ template AmuletRules
           provider
           activityWeight
           config = None
-          underlockState = None
+          underlockPermanentAt = None
         return AmuletRules_DevNet_FeatureAppResult with ..
 
     -- Bootstrap the open mining rounds by creating
@@ -995,46 +991,28 @@ template AmuletRules
                 else pure []
             pure AmuletRules_ConvertFeaturedAppActivityMarkersResult with appRewardCouponCids = concat markerCids
 
-    nonconsuming choice AmuletRules_SetFeaturedAppUnderlock : AmuletRules_SetFeaturedAppUnderlockResult
+    nonconsuming choice AmuletRules_UpdateFeaturedAppUnderlockState : AmuletRules_UpdateFeaturedAppUnderlockStateResult
       with
-        provider : Party
         rightCid : ContractId FeaturedAppRight
+        underlocked : Bool
         expectedDso : Optional Party
       controller dso
       do
         checkExpectedDso dso expectedDso
-        right <- fetchChecked (ForOwner with dso; owner = provider) rightCid
-        case right.underlockState of
-          Some (FAUS_Underlocked _) -> pure AmuletRules_SetFeaturedAppUnderlockResult with featuredAppRightCid = None
-          _ -> do
+        right <- fetchChecked (ForDso with dso) rightCid
+        featuredAppRightCid <- case (underlocked, right.underlockPermanentAt) of
+          (True, None) -> do
             now <- getTime
             let config = getValueAsOf now configSchedule
                 grace = (getGovernanceLockConfig config.governanceLockConfig).faUnderlockGracePeriod
             result <- exercise rightCid FeaturedAppRight_SetUnderlock with
               permanentAt = now `addRelTime` grace
-            pure AmuletRules_SetFeaturedAppUnderlockResult with
-              featuredAppRightCid = Some result.featuredAppRightCid
-
-    nonconsuming choice AmuletRules_SetFeaturedAppRecovering : AmuletRules_SetFeaturedAppRecoveringResult
-      with
-        provider : Party
-        rightCid : ContractId FeaturedAppRight
-        expectedDso : Optional Party
-      controller dso
-      do
-        checkExpectedDso dso expectedDso
-        right <- fetchChecked (ForOwner with dso; owner = provider) rightCid
-        case right.underlockState of
-          Some (FAUS_Underlocked _) -> do
-            now <- getTime
-            let config = getValueAsOf now configSchedule
-                recovery = (getGovernanceLockConfig config.governanceLockConfig).faUnderlockRecoveryPeriod
-            result <- exercise rightCid FeaturedAppRight_SetRecovering with
-              compliantAt = now `addRelTime` recovery
-            pure AmuletRules_SetFeaturedAppRecoveringResult with
-              featuredAppRightCid = Some result.featuredAppRightCid
-          _ -> pure AmuletRules_SetFeaturedAppRecoveringResult with featuredAppRightCid = None
-
+            pure $ Some result.featuredAppRightCid
+          (False, Some _) -> do
+            result <- exercise rightCid FeaturedAppRight_ClearUnderlock
+            pure $ Some result.featuredAppRightCid
+          _ -> pure None -- It's already in the requested state, no need to create contention
+        pure AmuletRules_UpdateFeaturedAppUnderlockStateResult with featuredAppRightCid
 
     nonconsuming choice AmuletRules_Amulet_ExpireTransferInstructions : AmuletRules_Amulet_ExpireTransferInstructionsResult
       with
@@ -1364,8 +1342,7 @@ getUnsuspendedFeaturedAppProvider dso contextFeaturedAppRight tf = do
     None -> pure None
     Some featuredAppRightCid -> do
       right <- fetchReferenceData (ForOwner with dso; owner = tf.provider) featuredAppRightCid
-      now <- getTime
-      pure $ if isFeaturedAppRightSuspended now right
+      pure $ if isFeaturedAppRightSuspended right
         then None
         else Some tf.provider
 
