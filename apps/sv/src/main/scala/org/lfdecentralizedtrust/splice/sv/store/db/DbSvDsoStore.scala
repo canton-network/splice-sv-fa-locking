@@ -1944,6 +1944,42 @@ class DbSvDsoStore(
     )
   }
 
+  override def listProvisionalGovernanceLocksWithFeaturedAppRight(
+      limit: Limit = defaultLimit
+  )(implicit tc: TraceContext): Future[Seq[Contract[
+    splice.governancelock.GovernanceLock.ContractId,
+    splice.governancelock.GovernanceLock,
+  ]]] = waitUntilAcsIngested {
+    val opName = "listProvisionalGovernanceLocksWithFeaturedAppRight"
+    for {
+      result <- storage.query(
+        selectFromAcsTable(
+          DsoTables.acsTableName,
+          acsStoreId,
+          domainMigrationId,
+          splice.governancelock.GovernanceLock.COMPANION,
+          where = sql"""acs.governance_lock_is_provisional
+                    and exists (
+                      select 1
+                      from #${DsoTables.acsTableName} fa_right
+                      where fa_right.store_id = acs.store_id
+                        and fa_right.migration_id = acs.migration_id
+                        and fa_right.package_name = ${FeaturedAppRight.PACKAGE_NAME}
+                        and fa_right.template_id_qualified_name = ${QualifiedName(
+              FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID
+            )}
+                        and fa_right.assigned_domain is not null
+                        and fa_right.featured_app_right_provider =
+                              (acs.create_arguments -> 'specification' -> 'kind' -> 'value' ->> 'provider')
+                    )""",
+          orderLimit = sql"""limit ${sqlLimit(limit)}""",
+        ),
+        opName,
+      )
+      limited = applyLimit(opName, limit, result)
+    } yield limited.map(contractFromRow(splice.governancelock.GovernanceLock.COMPANION)(_))
+  }
+
   override def lookupAnsEntryContext(reference: SubscriptionRequest.ContractId)(implicit
       tc: TraceContext
   ): Future[Option[ContractWithState[AnsEntryContext.ContractId, AnsEntryContext]]] =
