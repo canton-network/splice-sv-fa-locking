@@ -138,41 +138,34 @@ governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt
               context = describeVestingSpecification specification
               expiresAt = endTime
 
-        if vestingPeriod == days 0
+        (vestingLockedAmuletOpt, stillLockedOpt, unlockedAmulet) <- if vestingPeriod == days 0
           then do
             (stillLockedOpt, unlockedAmulet) <- partialUnlock forOwner lockedAmulet ((\a -> amount - a) <$> unlockAmount') context
-            governanceLock <- forA stillLockedOpt (\(lockedAmulet, stillLockedAmount) -> create
-              this with
-                lockedAmulet
-                amount = stillLockedAmount)
-
-            pure $ GovernanceLock_UnlockResult with
-              vestingLock = None
-              governanceLock
-              unlockedAmulet = Some unlockedAmulet
-
+            pure (None, stillLockedOpt, Some unlockedAmulet)
           else do
-            (vestingLockedHolding, stillLockedOpt) <- splitLockedAmulet forOwner lockedAmulet (unlockAmount', vestingLockProperties) context
-            governanceLock <- forA stillLockedOpt (\(lockedAmulet, stillLockedAmount) -> create
-              this with
-                lockedAmulet
-                amount = stillLockedAmount)
+            (vestingLockedAmulet, stillLockedOpt) <- splitLockedAmulet forOwner lockedAmulet (unlockAmount', vestingLockProperties) context
+            pure (Some vestingLockedAmulet, stillLockedOpt, None)
 
-            vestingLock <- create VestingLock with
-              dso
-              owner
-              lockedAmulet = vestingLockedHolding
-              vestingPeriod
-              endTime
-              vestingAmount = fromOptional amount unlockAmount'
-              specification
-              originalLockCid = None
-              meta
+        governanceLock <- forA stillLockedOpt (\(lockedAmulet, stillLockedAmount) -> create
+          this with
+            lockedAmulet
+            amount = stillLockedAmount)
 
-            pure $ GovernanceLock_UnlockResult with
-              vestingLock = Some vestingLock
-              governanceLock
-              unlockedAmulet = None
+        vestingLock <- forA vestingLockedAmuletOpt (\lockedAmulet -> create VestingLock with
+          dso
+          owner
+          lockedAmulet
+          vestingPeriod
+          endTime
+          vestingAmount = fromOptional amount unlockAmount'
+          specification
+          originalLockCid = None
+          meta)
+
+        pure $ GovernanceLock_UnlockResult with
+          vestingLock
+          governanceLock
+          unlockedAmulet
 
 
 loopUntilRightA : Action m => (a -> m (Either a r)) -> a -> m r
