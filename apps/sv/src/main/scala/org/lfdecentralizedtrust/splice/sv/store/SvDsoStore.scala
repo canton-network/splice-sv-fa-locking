@@ -1043,6 +1043,15 @@ trait SvDsoStore
     ]
   ]
 
+  def listProvisionalGovernanceLocksWithFeaturedAppRight(
+      limit: Limit = defaultLimit
+  )(implicit tc: TraceContext): Future[
+    Seq[Contract[
+      splice.governancelock.GovernanceLock.ContractId,
+      splice.governancelock.GovernanceLock,
+    ]]
+  ]
+
   def lookupFeaturedAppRight(
       providerPartyId: PartyId
   )(implicit
