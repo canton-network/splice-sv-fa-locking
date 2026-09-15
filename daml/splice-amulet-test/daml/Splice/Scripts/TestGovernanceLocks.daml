@@ -230,9 +230,9 @@ testGovernanceLockProvisionalPartialWithdrawScenario ops = do
   let provisionalSpec = GovernanceLockSpecification with
         kind = GLK_ProvisionalFeaturedApp with provider = bob
 
-  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 20000.0
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 30000.0
 
-  Right aliceLock <- ops.governanceLock env alice 20000.0 provisionalSpec
+  Right aliceLock <- ops.governanceLock env alice 30000.0 provisionalSpec
 
   unlockAt <- (`addRelTime` minutes 5) <$> getTime
 
@@ -244,7 +244,7 @@ testGovernanceLockProvisionalPartialWithdrawScenario ops = do
   checkIsUnlocked alice unlocked
 
   -- The remaining 10k stays locked
-  checkLockedHolding alice remainingLock 10000.0
+  checkLockedHolding alice remainingLock 20000.0
 
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
