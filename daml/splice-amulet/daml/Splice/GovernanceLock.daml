@@ -211,8 +211,6 @@ searchTimeMaximumLowerBound isTimeGE basis = do
          else Left (seek + 1, nextBasis)
     seekToDays seek = days $ 2 ^ seek
 
-  -- TODO: substitution, probably with a loose function for implementation sharing.
-
 data GovernanceLock_UnlockResult
   = GovernanceLock_UnlockResult with
       vestingLock : Optional (ContractId VestingLock)
@@ -244,6 +242,7 @@ template VestingLock
         actors : [Party]
       controller actors
       do vestingLock_withdrawImpl self this requestedAt extraArgs actors
+
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
@@ -282,7 +281,6 @@ template VestingLock
             senderChangeCids = [withdrawResult.vested]
             meta = emptyMetadata
       transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks cannot be updated"
-  -- TODO: substitution, probably with a loose function for implementation sharing.
 
 
 vestingLock_withdrawImpl : ContractId VestingLock -> VestingLock -> Time -> ExtraArgs -> [Party] -> Update VestingLock_WithdrawResult

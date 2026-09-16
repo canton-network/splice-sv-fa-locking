@@ -305,7 +305,7 @@ errorIfLeft : (Show e, CanAssert m) => Either e a -> m a
 errorIfLeft (Left e) = assertFail $ "Expected success, but failed with " <> show e
 errorIfLeft (Right e) = pure e
 
--- TODO: add checking of interface-specific views to this.
+-- TODO(canton-network/splice-sv-fa-locking#39): add checking of interface-specific views to this.
 data GovernanceLockOperations = GovernanceLockOperations with
   governanceLock
     :  TestEnv
