@@ -209,16 +209,36 @@ testGovernanceLockProvisionalFullWithdrawScenario ops = do
 
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 20000.0
 
-  Right aliceLock <- ops.governanceLock env alice 20000.0 provisionalSpec
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 20000.0 provisionalSpec
 
   unlockAt <- (`addRelTime` minutes 5) <$> getTime
 
   -- Full withdraw: no vesting lock, no remaining governance lock, liquid amulet returned
-  Right (None, None, Some unlocked) <- ops.governanceUnlock env aliceLock None unlockAt [alice]
+  (None, None, Some unlocked) <- expectSuccess $ ops.governanceUnlock env aliceLock None unlockAt [alice]
 
   -- The full 20k is liquid immediately
   checkHolding' alice unlocked 20000.0
   checkIsUnlocked alice unlocked
+
+testGovernanceLockCompatProvisionalFullWithdrawTSv1 : Script ()
+testGovernanceLockCompatProvisionalFullWithdrawTSv1 = testGovernanceLockCompatProvisionalFullWithdrawScenario tsv1Operations
+
+testGovernanceLockCompatProvisionalFullWithdrawScenario : CompatGovernanceLockOperations -> Script ()
+testGovernanceLockCompatProvisionalFullWithdrawScenario ops = do
+  env@TestEnv{..} <- setupTest
+
+  let provisionalSpec = GovernanceLockSpecification with
+        kind = GLK_ProvisionalFeaturedApp with provider = bob
+
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 20000.0
+
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 20000.0 provisionalSpec
+
+  -- Full withdraw: no vesting lock
+  None <- ops.optGovernanceUnlock env aliceLock alice
+
+  -- The full 20k is liquid immediately
+  WalletClientV2.checkHoldingWithAmountExists alice env.instrId 20000.0
 
 testGovernanceLockProvisionalPartialWithdrawRawChoices : Script ()
 testGovernanceLockProvisionalPartialWithdrawRawChoices = testGovernanceLockProvisionalPartialWithdrawScenario rawOperations
@@ -232,12 +252,12 @@ testGovernanceLockProvisionalPartialWithdrawScenario ops = do
 
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 30000.0
 
-  Right aliceLock <- ops.governanceLock env alice 30000.0 provisionalSpec
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 30000.0 provisionalSpec
 
   unlockAt <- (`addRelTime` minutes 5) <$> getTime
 
   -- Partial withdraw: liquid amulet for the unlocked part, remaining governance lock for the rest
-  Right (None, Some remainingLock, Some unlocked) <- ops.governanceUnlock env aliceLock (Some 10000.0) unlockAt [alice]
+  (None, Some remainingLock, Some unlocked) <- expectSuccess $ ops.governanceUnlock env aliceLock (Some 10000.0) unlockAt [alice]
 
   -- The 10k unlocked part is liquid immediately
   checkHolding' alice unlocked 10000.0
@@ -385,6 +405,11 @@ data CompatGovernanceLockOperations = CompatGovernanceLockOperations with
     -> Decimal
     -> GovernanceLockSpecification
     -> Script (Either SubmitError (ContractId GovernanceLock))
+  optGovernanceUnlock
+    :  TestEnv
+    -> ContractId GovernanceLock
+    -> Party
+    -> Script (Optional (ContractId VestingLock))
   governanceUnlock
     :  TestEnv
     -> ContractId GovernanceLock
@@ -410,13 +435,15 @@ fullToCompatLockOperations ops = CompatGovernanceLockOperations with
 
 tsv1Operations = CompatGovernanceLockOperations with
     governanceLock
+    optGovernanceUnlock
     governanceUnlock
     vestingWithdraw
   where
     governanceLock = governanceLockV1
-    governanceUnlock env cid actor = do
+    optGovernanceUnlock env cid actor = do
       unlockResult <- WalletClientV2.withdrawTransferInstructionV1 env.registries actor (toInterfaceContractId cid)
-      pure $ fromInterfaceContractId $ fromSome unlockResult
+      pure $ fromInterfaceContractId <$> unlockResult
+    governanceUnlock env cid actor = fromSome <$> optGovernanceUnlock env cid actor
     vestingWithdraw env cid actor = do
       withdrawResult <- WalletClientV2.withdrawTransferInstructionV1 env.registries actor (toInterfaceContractId cid)
       pure $ fromInterfaceContractId <$> withdrawResult
