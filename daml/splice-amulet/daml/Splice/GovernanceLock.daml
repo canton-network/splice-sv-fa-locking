@@ -399,7 +399,6 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
 -- Invariant: _none_ of these functions move amounts to new parties or modify total amounts of amulet (except when minting from reward coupons).
 
 type LockSpecification = (Decimal, LockProperties)
-type LockSpecificationOpt = (Optional Decimal, LockProperties)
 data LockProperties = LockProperties with
   context : Text
   expiresAt : Time
