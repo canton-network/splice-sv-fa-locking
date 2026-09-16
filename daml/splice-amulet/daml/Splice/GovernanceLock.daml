@@ -123,12 +123,11 @@ governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
         let actualUnlockAmount = fromOptional amount unlockAmount
-        let stillLockedAmount = amount - actualUnlockAmount
         require' ("unlockAmount", actualUnlockAmount) isGreaterR ("zero", 0.0)
         require' ("unlockAmount", actualUnlockAmount) isLessOrEqualR ("amount", amount)
-        unless (stillLockedAmount == 0.0) $ do
+        unless (actualUnlockAmount == amount) $ do
           requireMinimumLock state actualUnlockAmount
-          requireMinimumLock state stillLockedAmount
+          requireMinimumLock state (amount - actualUnlockAmount)
 
         let vestingPeriod = vestingDurationFor specification.kind context
         let endTime = unlockAt `addRelTime` vestingPeriod
