@@ -1958,7 +1958,7 @@ class DbSvDsoStore(
           acsStoreId,
           domainMigrationId,
           splice.governancelock.GovernanceLock.COMPANION,
-          where = sql"""acs.governance_lock_is_provisional
+          where = sql"""acs.provisional_featured_app_lock_for is not null
                     and exists (
                       select 1
                       from #${DsoTables.acsTableName} fa_right
@@ -1970,7 +1970,7 @@ class DbSvDsoStore(
             )}
                         and fa_right.assigned_domain is not null
                         and fa_right.featured_app_right_provider =
-                              (acs.create_arguments -> 'specification' -> 'kind' -> 'value' ->> 'provider')
+                              acs.provisional_featured_app_lock_for
                     )""",
           orderLimit = sql"""limit ${sqlLimit(limit)}""",
         ),
