@@ -231,7 +231,6 @@ testTopUpNegativePath = do
         lockInputs = []
         svRewardCouponInputs = []
         svRewardCouponPercentage = 0.0
-        optCurrentIssuingMiningRound = None
         extraArgs = emptyExtraArgs with context
 
   -- Test top up when the amount is 0.0 and holdingInputs are supplied (None gives all holdings under the user)
@@ -382,7 +381,6 @@ governanceLockTopUpRawChoice' env cid lockInputs optHoldingInputs topUpAmount ow
     holdingInputs = downcast <$> holdingInputs
     svRewardCouponInputs = []
     svRewardCouponPercentage = 0.0
-    optCurrentIssuingMiningRound = None
     extraArgs = emptyExtraArgs with context
   pure $ case result of
     Left e -> Left e
