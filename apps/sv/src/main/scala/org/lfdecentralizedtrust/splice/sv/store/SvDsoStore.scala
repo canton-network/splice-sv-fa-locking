@@ -1695,13 +1695,14 @@ object SvDsoStore {
           (tc) => pkgVersionSupport.supportsGovernanceLock(Seq(dsoParty), now)(tc)
         },
       ) { contract =>
-        val isProvisional = contract.payload.specification.kind match {
-          case _: splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp => true
-          case _ => false
+        val provisionalFeaturedAppLockFor = contract.payload.specification.kind match {
+          case kind: splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp =>
+            Some(PartyId.tryFromProtoPrimitive(kind.provider))
+          case _ => None
         }
         DsoAcsStoreRowData(
           contract,
-          governanceLockIsProvisional = Some(isProvisional),
+          provisionalFeaturedAppLockFor = provisionalFeaturedAppLockFor,
         )
       },
     )
