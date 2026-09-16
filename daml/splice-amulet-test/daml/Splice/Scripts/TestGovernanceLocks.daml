@@ -21,7 +21,6 @@ import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 import Splice.TokenStandard.Utils
 
-
 testGovernanceLockHappyPathRawChoices : Script ()
 testGovernanceLockHappyPathRawChoices = testGovernanceLockHappyPathScenario rawOperations
 
@@ -35,9 +34,9 @@ testGovernanceLockHappyPathScenario ops = do
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 180000.0
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob 10000.0
 
-  Right aliceLock <- ops.governanceLock env alice 180000.0 someSvSpec
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 180000.0 someSvSpec
 
-  Right _bobLock <- ops.governanceLock env bob 10000.0 someSvSpec
+  _bobLock <- expectSuccess $ ops.governanceLock env bob 10000.0 someSvSpec
 
   now <- getTime
 
@@ -55,7 +54,7 @@ testGovernanceLockHappyPathScenario ops = do
   let unlockTime = now `addRelTime` days 1
 
   -- Unlock 80k Amulet such that 1/8th should result in 10k Amulet withdrawable after 1/8th year.
-  Right (aliceVesting, Some aliceLock) <- ops.governanceUnlock env aliceLock (Some 80000.0) (unlockTime) [alice]
+  (aliceVesting, Some aliceLock) <- expectSuccess $ ops.governanceUnlock env aliceLock (Some 80000.0) (unlockTime) [alice]
 
   actionMustFail (expectMessageContains "'unlockAmount' is not greater than 'zero'") $
     ops.governanceUnlock env aliceLock (Some $ -80000.0) (unlockTime) [alice]
@@ -89,7 +88,7 @@ testGovernanceLockHappyPathScenario ops = do
 
   let withdrawTime = unlockTime `addRelTime` (days 45 + hours 15 + minutes 45)
 
-  Right (unlocked, Some newVestingLock) <- ops.vestingWithdraw env aliceVesting withdrawTime [alice]
+  (unlocked, Some newVestingLock) <- expectSuccess $ ops.vestingWithdraw env aliceVesting withdrawTime [alice]
 
   actionMustFail (expectMessageContains "'withdraw amount' is not greater than 'zero'") $
     ops.vestingWithdraw env newVestingLock withdrawTime [alice]
@@ -104,7 +103,7 @@ testGovernanceLockHappyPathScenario ops = do
 
   let fullWithdrawTime = unlockTime `addRelTime` days 366
 
-  Right (unlockedHolding2, None) <- ops.vestingWithdraw env newVestingLock fullWithdrawTime [alice]
+  (unlockedHolding2, None) <- expectSuccess $ ops.vestingWithdraw env newVestingLock fullWithdrawTime [alice]
 
   -- Check that we withdrew all and exactly the 70k _remaining_ after the above withdrawal.
   checkHolding' alice unlockedHolding2 70000.0
@@ -124,7 +123,7 @@ testGovernanceLockCompatHappyPathScenario ops = do
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 180000.0
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob 10000.0
 
-  Right aliceLock <- ops.governanceLock env alice 80000.0 someSvSpec
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 80000.0 someSvSpec
 
   -- Unlock 80k Amulet such that 1/8th should result in 10k Amulet withdrawable after 1/8th year.
   aliceVesting <- ops.governanceUnlock env aliceLock alice
@@ -136,9 +135,7 @@ testGovernanceLockCompatHappyPathScenario ops = do
 
   passTime (days 16)
 
-  now <- getTime
-  Some newVestingLock <- ops.vestingWithdraw env aliceVesting alice
-
+  newVestingLock <- fromSomeNote "Expected a continuing vested lock, but recevied None" <$> ops.vestingWithdraw env aliceVesting alice
 
   -- Check that we did indeed unlock 10k amulet as expected - 1/8th of the total vesting amount of 80k.
   WalletClientV2.checkHoldingWithAmountExists alice env.instrId 20000.0
@@ -148,7 +145,8 @@ testGovernanceLockCompatHappyPathScenario ops = do
 
   passTime (days 60)
 
-  None <- ops.vestingWithdraw env newVestingLock alice
+  rv <- ops.vestingWithdraw env newVestingLock alice
+  require "Expected no remaining vesting lock, received one" $ isNone rv
 
   -- Check that we withdrew all and exactly the 70k _remaining_ after the above withdrawal.
   WalletClientV2.checkHoldingWithAmountExists alice env.instrId 60000.0
@@ -178,23 +176,23 @@ testGovernanceLockMinimumLocksLockUnlockWithdrawScenario ops = do
   actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $ ops.governanceUnlock env successfulLockCid (Some 15000.0) unlockAt [alice]
 
   -- Exact amount should succeed.
-  Right (firstWithdrawnCid, Some remainingLockCid) <- ops.governanceUnlock env successfulLockCid (Some 10000.0) unlockAt [alice]
+  (firstWithdrawnCid, Some remainingLockCid) <- expectSuccess $ ops.governanceUnlock env successfulLockCid (Some 10000.0) unlockAt [alice]
 
   -- Unlock of full amount should succeed.
-  Right (_secondWithdrawnCid, None) <- ops.governanceUnlock env remainingLockCid None unlockAt [alice]
+  (_secondWithdrawnCid, None) <- expectSuccess $ ops.governanceUnlock env remainingLockCid None unlockAt [alice]
 
   passTime (days 180)
 
   now <- getTime
 
   -- Partial withdraw should work even if the remainder is less than the minimum
-  Right (_, Some stillVestingCid) <- ops.vestingWithdraw env firstWithdrawnCid now [alice]
+  (_, Some stillVestingCid) <- expectSuccess $ ops.vestingWithdraw env firstWithdrawnCid now [alice]
 
   passTime (days 200)
 
   now <- getTime
 
-  Right (_, None) <- ops.vestingWithdraw env stillVestingCid now [alice]
+  (_, None) <- expectSuccess $ ops.vestingWithdraw env stillVestingCid now [alice]
 
   pure ()
 
@@ -230,8 +228,11 @@ submitWithTransferContext env options commands = do
   context <- AmuletRegistryV2.getExternalPartyConfigStateContext env.registriesEnv.amuletV2
   trySubmit (options <> discloseMany' context.disclosures) $ commands context.choiceContext
 
+expectSuccess : (CanAssert m, Show err) => m (Either err a) -> m a
+expectSuccess a = a >>= errorIfLeft
+
 errorIfLeft : (Show e, CanAssert m) => Either e a -> m a
-errorIfLeft (Left e) = assertFail (show e)
+errorIfLeft (Left e) = assertFail $ "Expected success, but failed with " <> show e
 errorIfLeft (Right e) = pure e
 
 -- TODO: add checking of interface-specific views to this.
