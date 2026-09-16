@@ -105,7 +105,8 @@ template GovernanceLock
       -- TODO: determine if we need to emit update choice calls when a withdraw event occurs.
       transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks may not be updated"
 
-governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt extraArgs actors
+governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Optional Decimal -> Time -> ExtraArgs -> [Party] -> Update GovernanceLock_UnlockResult
+governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount unlockAt extraArgs actors
     = do
         checkActors actors [[owner]] -- TODO(canton-network/splice-sv-fa-locking#39): custom controllers
         assertWithinDeadline "unlockAt" unlockAt
@@ -119,10 +120,10 @@ governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt
               context = describeVestingSpecification specification
               expiresAt = endTime
 
-        (vestingLockedHolding, governanceLock, vestingAmount) <- case guard (unlockAmount /= Some amount) >> unlockAmount of
+        (vestingLockedHolding, governanceLock, vestingAmount, originalLockCid) <- case guard (unlockAmount /= Some amount) >> unlockAmount of
           None -> do -- No split required, relock to change the expireAt and description.
             newLockedAmulet <- relockAmulet (ForOwner with dso; owner) lockedAmulet vestingLockProperties context
-            pure (newLockedAmulet, None, amount)
+            pure (newLockedAmulet, None, amount, Some $ coerceContractId self)
           Some unlockAmount -> do -- Splitting.
             require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
             require' ("unlockAmount", unlockAmount) isLessR ("amount", amount)
@@ -133,7 +134,7 @@ governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt
               this with
                 lockedAmulet = stillLockedHolding
                 amount = amount - unlockAmount
-            pure (vesting, Some governanceLock, unlockAmount)
+            pure (vesting, Some governanceLock, unlockAmount, None)
 
         vestingLock <- create VestingLock with
           dso
@@ -143,7 +144,7 @@ governanceLock_unlockImpl _self this@(GovernanceLock {..}) unlockAmount unlockAt
           endTime
           vestingAmount
           specification
-          originalLockCid = None
+          originalLockCid
           meta
 
         pure $ GovernanceLock_UnlockResult with
@@ -202,7 +203,7 @@ template VestingLock
     endTime : Time  -- ^ Time at which vesting completes.
     vestingAmount : Decimal  -- ^ The amount that is vesting.
     specification : VestingLockSpecification
-    originalLockCid : Optional (ContractId VestingLock)
+    originalLockCid : Optional AnyContractId
     meta : Metadata
   where
     signatory dso, owner
@@ -223,7 +224,7 @@ template VestingLock
 
     interface instance TransferInstructionV1.TransferInstruction for VestingLock where
       view = TransferInstructionV1.TransferInstructionView with
-          originalInstructionCid = toInterfaceContractId <$> originalLockCid
+          originalInstructionCid = coerceContractId <$> originalLockCid
           transfer = TransferInstructionV1.Transfer with
             sender = owner
             receiver
