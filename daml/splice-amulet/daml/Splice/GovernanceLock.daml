@@ -123,12 +123,11 @@ governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount unlockAt 
 
         let actualUnlockAmount = fromOptional amount unlockAmount
         let isFullUnlock = actualUnlockAmount == amount
-        let stillLockedAmount = amount - actualUnlockAmount
         require' ("unlockAmount", actualUnlockAmount) isGreaterR ("zero", 0.0)
         require' ("unlockAmount", actualUnlockAmount) isLessOrEqualR ("amount", amount)
-        unless (stillLockedAmount == 0.0) $ do
+        unless isFullUnlock $ do
           requireMinimumLock state actualUnlockAmount
-          requireMinimumLock state stillLockedAmount
+          requireMinimumLock state (amount - actualUnlockAmount)
 
         let vestingPeriod = vestingDurationFor specification.kind context
         let endTime = unlockAt `addRelTime` vestingPeriod
