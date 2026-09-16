@@ -77,6 +77,20 @@ template GovernanceLock
       controller actors
       do governanceLock_unlockImpl self this unlockAmount unlockAt extraArgs actors
 
+    choice GovernanceLock_DsoConvertProvisionalFeaturedAppLock : GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
+      with
+        featuredAppRightCid : ContractId FeaturedAppRight
+      controller dso
+      do
+        case specification.kind of
+          GLK_ProvisionalFeaturedApp provider -> do
+            fetchChecked (ForOwner with dso; owner = provider) featuredAppRightCid
+            create this with
+              specification = GovernanceLockSpecification with
+                kind = GLK_FeaturedApp with provider
+            pure GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
+          kind -> error $ "GovernanceLock_DsoConvertProvisionalFeaturedAppLock: cannot convert lock of kind " <> show kind
+
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
@@ -217,6 +231,12 @@ data GovernanceLock_UnlockResult
       governanceLock : Optional (ContractId GovernanceLock)
       unlockedAmulet : Optional (ContractId Amulet)
   deriving (Eq, Show, Serializable)
+
+data GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
+   = GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
+   -- ^ The `GovernanceLock_DsoConvertProvisionalFeaturedAppLock` choice doesn't return anything because an SV trigger
+   -- that converts provisional FA locks doesn't care to do anything with the new `GovernanceLock`.
+   deriving (Serializable)
 
 template VestingLock
   with
