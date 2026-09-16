@@ -409,21 +409,21 @@ data LockProperties = LockProperties with
   expiresAt : Time
 
 splitLockedAmulet : ForOwner -> ContractId LockedAmulet -> LockSpecification -> ExternalPartyTransferContext -> Update (Optional (ContractId LockedAmulet, Decimal), ContractId LockedAmulet)
-splitLockedAmulet forOwner lockedAmuletCid (stillLockedAmount, lockProps) context =
-  if stillLockedAmount == 0.0
-    then (None,) <$> relockAmulet forOwner lockedAmuletCid lockProps context
-    else do
-      (unlockedCid, (currentAmount, currentLockProps)) <- unlockAmulet forOwner lockedAmuletCid
-      let remainderAmount = currentAmount - stillLockedAmount
-      ([splitLock, remainderLock], None) <- lockAmulet forOwner [(stillLockedAmount, currentLockProps), (remainderAmount, lockProps)] [toInterfaceContractId unlockedCid] context
-      pure (Some (splitLock, stillLockedAmount),remainderLock)
+splitLockedAmulet forOwner lockedAmuletCid (stillLockedAmount, lockProps) context
+  | stillLockedAmount < 0.0 = error "splitLockedAmulet: negative amount"
+  | stillLockedAmount == 0.0 = (None,) <$> relockAmulet forOwner lockedAmuletCid lockProps context
+  | otherwise = do
+    (unlockedCid, (currentAmount, currentLockProps)) <- unlockAmulet forOwner lockedAmuletCid
+    let remainderAmount = currentAmount - stillLockedAmount
+    ([splitLock, remainderLock], None) <- lockAmulet forOwner [(stillLockedAmount, currentLockProps), (remainderAmount, lockProps)] [toInterfaceContractId unlockedCid] context
+    pure (Some (splitLock, stillLockedAmount), remainderLock)
 
 partialUnlock : ForOwner -> ContractId LockedAmulet -> Decimal -> ExternalPartyTransferContext -> Update (Optional (ContractId LockedAmulet, Decimal), ContractId Amulet)
-partialUnlock forOwner lockedAmuletCid stillLockedAmount context = do
-  (unlockedAmuletCid, (currentAmount, lockProps)) <- unlockAmulet forOwner lockedAmuletCid
-  if stillLockedAmount == 0.0
-    then pure (None, unlockedAmuletCid)
-    else do
+partialUnlock forOwner lockedAmuletCid stillLockedAmount context
+  | stillLockedAmount < 0.0 = error "partialUnlock: negative amount"
+  | otherwise = do
+    (unlockedAmuletCid, (currentAmount, lockProps)) <- unlockAmulet forOwner lockedAmuletCid
+    if stillLockedAmount == 0.0 then pure (None, unlockedAmuletCid) else do
       ([newLockedCid], Some unlockedAmulet) <- lockAmulet forOwner [(stillLockedAmount, lockProps)] [toInterfaceContractId unlockedAmuletCid] context
       pure (Some (newLockedCid, currentAmount - stillLockedAmount), unlockedAmulet)
 
