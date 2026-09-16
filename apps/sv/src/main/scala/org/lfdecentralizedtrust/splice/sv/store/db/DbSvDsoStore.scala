@@ -1980,6 +1980,50 @@ class DbSvDsoStore(
     } yield limited.map(contractFromRow(splice.governancelock.GovernanceLock.COMPANION)(_))
   }
 
+  // TEMPORARY diagnostic, not part of the real API -- to be deleted once the EXPLAIN output has
+  // been captured. Mirrors listProvisionalGovernanceLocksWithFeaturedAppRight's query exactly,
+  // wrapped in EXPLAIN, reusing the real acsStoreId/domainMigrationId.
+  def explainListProvisionalGovernanceLocksWithFeaturedAppRight(
+      contractIdFilter: Option[String] = None
+  )(implicit
+      tc: TraceContext
+  ): Future[Seq[String]] = {
+    val contractIdClause = contractIdFilter match {
+      case Some(cid) => sql"and acs.contract_id = $cid"
+      case None => sql""
+    }
+    storage
+      .query(
+        (sql"""
+          explain (analyze, buffers)
+          select #${AcsQueries.SelectFromAcsTableResult.sqlColumnsCommaSeparated("acs.")}
+          from #${DsoTables.acsTableName} acs
+          where acs.store_id = $acsStoreId
+            and acs.migration_id = $domainMigrationId
+            and acs.package_name = ${splice.governancelock.GovernanceLock.PACKAGE_NAME}
+            and acs.template_id_qualified_name = ${QualifiedName(
+            splice.governancelock.GovernanceLock.TEMPLATE_ID_WITH_PACKAGE_ID
+          )}
+            and acs.provisional_featured_app_lock_for is not null
+            """ ++ contractIdClause ++ sql"""
+            and exists (
+              select 1
+              from #${DsoTables.acsTableName} fa_right
+              where fa_right.store_id = acs.store_id
+                and fa_right.migration_id = acs.migration_id
+                and fa_right.package_name = ${FeaturedAppRight.PACKAGE_NAME}
+                and fa_right.template_id_qualified_name = ${QualifiedName(
+            FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID
+          )}
+                and fa_right.assigned_domain is not null
+                and fa_right.featured_app_right_provider = acs.provisional_featured_app_lock_for
+            )
+          limit 100
+        """).toActionBuilder.as[String],
+        "explainListProvisionalGovernanceLocksWithFeaturedAppRight",
+      )
+  }
+
   override def lookupAnsEntryContext(reference: SubscriptionRequest.ContractId)(implicit
       tc: TraceContext
   ): Future[Option[ContractWithState[AnsEntryContext.ContractId, AnsEntryContext]]] =

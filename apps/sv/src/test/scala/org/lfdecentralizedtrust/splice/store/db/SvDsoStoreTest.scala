@@ -7,6 +7,8 @@ import com.digitalasset.canton.crypto.Fingerprint
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
 import com.digitalasset.canton.resource.DbStorage
+import slick.jdbc.canton.ActionBasedSQLInterpolation.Implicits.actionBasedSQLInterpolationCanton
+import org.lfdecentralizedtrust.splice.util.FutureUnlessShutdownUtil.FutureUnlessShutdownOps
 import com.digitalasset.canton.topology.*
 import com.digitalasset.canton.tracing.TraceContext
 import com.digitalasset.canton.util.MonadUtil
@@ -2444,6 +2446,108 @@ class DbSvDsoStoreTest
         result <- store.listProvisionalGovernanceLocksWithFeaturedAppRight()
       } yield {
         result.map(_.contractId) should contain theSameElementsAs Seq(readyLock.contractId)
+      }
+    }
+
+    // TEMPORARY diagnostic, not a real test -- verifies the query plan at realistic scale.
+    // To be deleted once the EXPLAIN output has been captured.
+    "TEMP explain query plan at scale" in {
+      val seedProvider = userParty(1)
+      val seedLock = governanceLock(
+        userParty(2),
+        amount = BigDecimal(10),
+        kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+          seedProvider.toProtoPrimitive
+        ),
+      )
+      val seedRight = featuredAppRight(seedProvider)
+
+      // Orphan: a provisional lock whose provider has NO matching FeaturedAppRight anywhere,
+      // to measure the worst case (exhausting the whole scoped range with no early match).
+      val orphanProvider = userParty(3)
+      val orphanLock = governanceLock(
+        userParty(4),
+        amount = BigDecimal(10),
+        kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+          orphanProvider.toProtoPrimitive
+        ),
+      )
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(seedLock)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(seedRight)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(orphanLock)(store.multiDomainAcsStore)
+        _ <- storage
+          .update(
+            sqlu"""
+              do $$$$
+              declare
+                gl_cols text;
+                far_cols text;
+              begin
+                select string_agg(quote_ident(column_name), ', ')
+                into gl_cols
+                from information_schema.columns
+                where table_name = 'dso_acs_store'
+                  and column_name not in ('event_number', 'contract_id', 'provisional_featured_app_lock_for');
+
+                execute format(
+                  'insert into dso_acs_store (contract_id, provisional_featured_app_lock_for, %s)
+                   select ''clone-gl-'' || gs,
+                          case when gs %% 1000 = 0 then provisional_featured_app_lock_for else null end,
+                          %s
+                   from dso_acs_store, generate_series(1, 100000) gs
+                   where contract_id = %L
+                   on conflict do nothing',
+                  gl_cols, gl_cols, '#${seedLock.contractId.contractId}'
+                );
+
+                select string_agg(quote_ident(column_name), ', ')
+                into far_cols
+                from information_schema.columns
+                where table_name = 'dso_acs_store'
+                  and column_name not in ('event_number', 'contract_id', 'featured_app_right_provider');
+
+                execute format(
+                  'insert into dso_acs_store (contract_id, featured_app_right_provider, %s)
+                   select ''clone-far-'' || gs, ''synthetic-provider-'' || gs, %s
+                   from dso_acs_store, generate_series(1, 5000) gs
+                   where contract_id = %L
+                   on conflict do nothing',
+                  far_cols, far_cols, '#${seedRight.contractId.contractId}'
+                );
+              end $$$$;
+            """,
+            "seed synthetic rows for EXPLAIN",
+          )
+          .toFuture
+        // Case 1: fresh bulk load, single provisional_featured_app_lock_for index already in
+        // place (from the migration), but statistics are stale -- no ANALYZE yet.
+        explainRowsStale <- store.explainListProvisionalGovernanceLocksWithFeaturedAppRight()
+        worstCaseExplainRowsStale <- store
+          .explainListProvisionalGovernanceLocksWithFeaturedAppRight(
+            contractIdFilter = Some(orphanLock.contractId.contractId)
+          )
+        // Case 2: same index, now with fresh statistics -- the case we actually decided on.
+        _ <- storage.update(sqlu"analyze dso_acs_store", "analyze after bulk seed").toFuture
+        explainRowsAnalyzed <- store.explainListProvisionalGovernanceLocksWithFeaturedAppRight()
+        worstCaseExplainRowsAnalyzed <- store
+          .explainListProvisionalGovernanceLocksWithFeaturedAppRight(
+            contractIdFilter = Some(orphanLock.contractId.contractId)
+          )
+      } yield {
+        println("=== CASE 1: single index (provisional_featured_app_lock_for), STALE statistics ===")
+        println("--- aggregate (100 real matches) ---")
+        explainRowsStale.foreach(println)
+        println("--- worst case (no match anywhere, single row) ---")
+        worstCaseExplainRowsStale.foreach(println)
+        println("=== CASE 2: single index (provisional_featured_app_lock_for), ANALYZEd ===")
+        println("--- aggregate (100 real matches) ---")
+        explainRowsAnalyzed.foreach(println)
+        println("--- worst case (no match anywhere, single row) ---")
+        worstCaseExplainRowsAnalyzed.foreach(println)
+        succeed
       }
     }
 
