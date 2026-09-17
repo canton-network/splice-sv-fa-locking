@@ -138,50 +138,35 @@ template GovernanceLock
         (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
         -- FIXME: temp case
-        lockedAmuletFromSvCouponRewards <- case length svRewardCouponInputs > 0 of
-          -- No need to do any svrewardcoupon logic
-          False -> pure lockedAmulet
-          True -> do
+        optChangeAmuletFromSvRewardCoupons <- if null svRewardCouponInputs
+          then pure None -- no coupons to mint in locked form
+          else do
             (currentIssuingMiningRoundCid, openMiningRoundCid) <- getMiningRoundsFromChoiceContext dso extraArgs.context
             let currentIssuingMiningRounds = [currentIssuingMiningRoundCid]
             -- temp toAnyValue
             (issuingMiningRoundsMap, issuingMiningRoundCidsMap) <- fetchAndValidateIssuingMiningRounds (toAnyValue <$> currentIssuingMiningRounds) forDso
             svRewardMintAllowance <- computeSvRewardMintingAllowance issuingMiningRoundsMap forOwner svRewardCouponInputs svRewardCouponPercentage
-            --validatorRights <- fetchChecked @ValidatorRight owner (\right -> right.validator == validator)
 
             -- All this stuff temporarily here, and will need to be cleaned up:
             let transferContext = TransferContext with
                   openMiningRound = openMiningRoundCid
                   issuingMiningRounds = issuingMiningRoundCidsMap
-                  -- FIXME: Probably fill these in properly
                   validatorRights = Map.empty
                   featuredAppRight = None
-            let mkOutput (amount, spec) = TransferOutput with
-                  receiver = owner
-                  amount = amount
-                  receiverFeeRatio = 0.0 -- irrelevant as fees are always zero
-                  lock = Some TimeLock with
-                    expiresAt = spec.expiresAt -- We don't have any call to isLedgerTimeLE, so we can use the true maxBound here for arbitrary duration.
-                    holders = [dso]
-                    optContext = Some spec.context
-                  meta = Some (reasonToMeta ("mint " <> show svRewardCouponPercentage <> "of rewards into lock") emptyMetadata)
             let transfer = Splice.AmuletRules.Transfer with
                   sender = owner
                   provider = owner -- the sender is serving as its own "app provider"
-                  outputs = map mkOutput [(svRewardMintAllowance, lockProps)]
+                  outputs = []
                   inputs = fmap InputSvRewardCoupon svRewardCouponInputs
                   beneficiaries = None
             let rewardsConfig = RewardsIssuanceConfig with
-                  issueAppRewards = True
-                  issueValidatorRewards = True
+                  issueAppRewards = False
+                  issueValidatorRewards = False
 
             result <- executeTransfer (toInterfaceContractId context.externalPartyConfigState) rewardsConfig transferContext dso [] transfer
             let [lockedAmuletFromSvCouponRewards] = (\(TransferResultLockedAmulet lockedAmulet) -> lockedAmulet) <$> result.createdAmulets
-                -- This should be None think?
                 changeFromSvCouponRewards = result.senderChangeAmulet
-            -- FIXME: Will be deleting this require
-            require ("changeFromSvCouponRewards should be None, but is " <> show changeFromSvCouponRewards) $ isNone changeFromSvCouponRewards
-            pure lockedAmuletFromSvCouponRewards
+            pure $ Some changeFromSvCouponRewards
 
 
         -- Unlock original governanceLock
@@ -205,6 +190,7 @@ template GovernanceLock
           forOwner
           [(newLockAmount, lockProps)]
           (toInterfaceContractId unlockedAmuletCid :: holdingInputs <> unlockedHoldingsFromMergeLocks)
+          changeFromSvCouponRewards
           svRewardCouponInputs
           context
 
@@ -408,11 +394,10 @@ unlockAmulet forOwner lockedAmuletCid = do
   unlockResult <- exercise lockedAmuletCid LockedAmulet_UnlockV2
   return (unlockResult.amuletCid, (lock.amulet.amount.initialAmount, LockProperties with context = fromOptional "governance" lock.lock.optContext; expiresAt = lock.lock.expiresAt))
 
-lockAmulet : ForOwner -> [LockSpecification] -> [ContractId Holding] -> [ContractId SvRewardCoupon] -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
-lockAmulet forOwner@ForOwner {..} specs holdingInputs svRewardCouponInputs context = do
+lockAmulet : ForOwner -> [LockSpecification] -> [ContractId Holding] -> Optional Amulet -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
+lockAmulet forOwner@ForOwner {..} specs holdingInputs optionalSvRewardCouponChange context = do
   -- lock the amulet
   transferInputsFromHoldings <- holdingToTransferInputs forOwner holdingInputs
---  let transferInputsFromSvRewardCoupons = fmap InputSvRewardCoupon svRewardCouponInputs
   let mkOutput (amount, spec) =
             TransferOutput with
               receiver = owner

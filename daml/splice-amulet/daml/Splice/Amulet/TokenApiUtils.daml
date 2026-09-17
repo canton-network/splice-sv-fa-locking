@@ -180,7 +180,6 @@ lockContextContextKey = "lock-context"
 expireLockKey : Text
 expireLockKey = "expire-lock"
 
--- FIXME: Confirm if round is plural or not, it was in comment
 issuingMiningRoundContextKey : Text
 issuingMiningRoundContextKey = "issuing-mining-round"
 
