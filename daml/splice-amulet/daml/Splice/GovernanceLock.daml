@@ -319,6 +319,7 @@ governanceLock_lockForGovernance_impl
  -> Metadata
  -> Update (ContractId GovernanceLock, Optional (ContractId Amulet))
 governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner requestedAt meta = do
+  assertWithinDeadline "requestedAt + 1 day" $ requestedAt `addRelTime` days 1
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
   requireMinimumLock state amount
   let lockProperties = LockProperties with
