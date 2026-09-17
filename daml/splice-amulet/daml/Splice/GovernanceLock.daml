@@ -90,8 +90,8 @@ template GovernanceLock
           meta = emptyMetadata
         where
           (receiver, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
-      transferInstruction_acceptImpl _ _ = assertFail "Transfers representing governance locks may not be accepted"
-      transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks may not be rejected"
+      transferInstruction_acceptImpl _ _ = assertFail "Transfers representing governance locks cannot be accepted"
+      transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks cannot be rejected"
       transferInstruction_withdrawImpl self arg = do
           let TransferInstructionV1.TransferInstruction_Withdraw {..} = arg
           (_, unlockAt) <- searchTimeMaximumLowerBound createdAt
@@ -103,7 +103,7 @@ template GovernanceLock
             meta = emptyMetadata
 
       -- TODO: determine if we need to emit update choice calls when a withdraw event occurs.
-      transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks may not be updated"
+      transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks cannot be updated"
 
 governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Optional Decimal -> Time -> ExtraArgs -> [Party] -> Update GovernanceLock_UnlockResult
 governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount unlockAt extraArgs actors
@@ -239,8 +239,8 @@ template VestingLock
           meta = emptyMetadata
         where
           (receiver, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
-      transferInstruction_acceptImpl _ _ = assertFail "Transfers representing governance locks may not be accepted"
-      transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks may not be rejected"
+      transferInstruction_acceptImpl _ _ = assertFail "Transfers representing governance locks cannot be accepted"
+      transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks cannot be rejected"
       transferInstruction_withdrawImpl self arg = do
         let TransferInstructionV1.TransferInstruction_Withdraw {..} = arg
         (requestedAt, _) <- searchTimeMaximumLowerBound (endTime `addRelTime` (- vestingPeriod))
@@ -258,7 +258,7 @@ template VestingLock
             meta = emptyMetadata
 
       -- TODO: determine if we need to emit update choice calls when a withdraw event occurs.
-      transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks may not be updated"
+      transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks cannot be updated"
   -- TODO: substitution, probably with a loose function for implementation sharing.
 
 
