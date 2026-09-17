@@ -1,0 +1,291 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.Scripts.DsoTestGovernanceLocks where
+
+import DA.Assert
+import DA.Optional (isNone, isSome)
+import DA.Time
+
+import Daml.Script
+
+import Splice.Amulet (Amulet, FeaturedAppRight(..), LockedAmulet, LockedAmulet_OwnerExpireLockV2(..))
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.DsoRules (DsoRules, DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(..), DsoRules_VestingLock_ExpireVestingLock(..))
+import Splice.GovernanceLock
+import Splice.Scripts.DsoTestUtils (initDevNet)
+import Splice.Scripts.Util (AmuletApp(..), AmuletUser(..), lockTo1, setupUser, tap)
+import Splice.Testing.Utils (actionMustFail, expectMessageContains)
+
+data SharedLockEnv = SharedLockEnv with
+  app : AmuletApp
+  sv1 : Party
+  dsoRulesCid : ContractId DsoRules
+  alice : AmuletUser
+  lockedAmuletCid : ContractId LockedAmulet
+  lockedAmulet : LockedAmulet
+
+setupSharedLock : Decimal -> Decimal -> RelTime -> Script SharedLockEnv
+setupSharedLock tapAmount lockAmount lockPeriod = do
+  (app, _, (sv1, _, _, _)) <- initDevNet
+  [(dsoRulesCid, _)] <- query @DsoRules app.dso
+
+  alice <- setupUser app "alice" app.dso
+  _ <- tap app alice tapAmount
+
+  lockTo1 app alice app.dso lockAmount lockPeriod
+  [(lockedAmuletCid, lockedAmulet)] <- query @LockedAmulet alice.primaryParty
+
+  pure SharedLockEnv with ..
+
+-- | A DsoRules test environment holding a single, not-yet-vested `VestingLock`
+-- owned by alice.
+data VestingLockEnv = VestingLockEnv with
+  app : AmuletApp
+  sv1 : Party
+  dsoRulesCid : ContractId DsoRules
+  alice : AmuletUser
+  lockedAmuletCid : ContractId LockedAmulet
+  vestingLockCid : ContractId VestingLock
+  endTime : Time
+
+testVestingAmount : Decimal
+testVestingAmount = 500.0
+
+testVestingPeriod : RelTime
+testVestingPeriod = hours 1
+
+setupVestingLock : Script VestingLockEnv
+setupVestingLock = do
+  now <- getTime
+  let endTime = now `addRelTime` testVestingPeriod
+
+  -- Lock `testVestingAmount` to the DSO until `endTime`. This mirrors
+  -- `GovernanceLock_Unlock`, which relocks the amulet with `expiresAt` set to
+  -- the very `endTime` it stores on the `VestingLock`.
+  --
+  -- We create a `VestingLock` directly because it easier than going through
+  -- `ExternalPartyAmuletRules_LockForGovernance` -> `GovernanceLock_Unlock`
+  SharedLockEnv{..} <- setupSharedLock 1000.0 testVestingAmount testVestingPeriod
+  lockedAmulet.lock.expiresAt === endTime
+
+  vestingLockCid <- submit (actAs [app.dso, alice.primaryParty]) $ createCmd VestingLock with
+    dso = app.dso
+    owner = alice.primaryParty
+    lockedAmulet = lockedAmuletCid
+    vestingPeriod = testVestingPeriod
+    endTime
+    vestingAmount = testVestingAmount
+    specification = VestingLockSpecification with
+      kind = GLK_SuperValidatorRightsOwner "TestSV"
+    originalLockCid = None
+    meta = emptyMetadata
+
+  pure VestingLockEnv with ..
+
+data GovernanceLockEnv = GovernanceLockEnv with
+  app : AmuletApp
+  sv1 : Party
+  dsoRulesCid : ContractId DsoRules
+  alice : AmuletUser
+  lockedAmuletCid : ContractId LockedAmulet
+  lockedAmulet : LockedAmulet
+  governanceLockCid : ContractId GovernanceLock
+  featuredAppRightCid : ContractId FeaturedAppRight
+
+testGovernanceLockAmount = 20000.0
+
+setupGovernanceLock : (SharedLockEnv -> GovernanceLockKind) -> Script GovernanceLockEnv
+setupGovernanceLock kind = do
+  env@SharedLockEnv{..} <- setupSharedLock testGovernanceLockAmount testGovernanceLockAmount testVestingPeriod
+
+  now <- getTime
+  governanceLockCid <- submit (actAs [app.dso, alice.primaryParty]) $ createCmd GovernanceLock with
+    dso = app.dso
+    owner = alice.primaryParty
+    amount = testGovernanceLockAmount
+    lockedAmulet = lockedAmuletCid
+    specification = GovernanceLockSpecification with kind = kind env
+    originalLockCid = None
+    requestedAt = now
+    meta = emptyMetadata
+
+  featuredAppRightCid <- submit app.dso $ createCmd FeaturedAppRight with
+    dso = app.dso
+    provider = alice.primaryParty
+    activityWeight = None
+
+  pure GovernanceLockEnv with ..
+
+setupProvisionalFeaturedAppLock : Script GovernanceLockEnv
+setupProvisionalFeaturedAppLock = setupGovernanceLock \env -> GLK_ProvisionalFeaturedApp with provider = env.alice.primaryParty
+
+-- | Happy path: an SV collects a fully vested lock, and the owner's holding
+-- survives untouched and spendable.
+testDsoRulesExpireVestingLock : Script ()
+testDsoRulesExpireVestingLock = do
+  env <- setupVestingLock
+
+  passTime (testVestingPeriod + hours 1)
+
+  _ <- submit (actAs env.sv1 <> readAs env.app.dso) $
+    exerciseCmd env.dsoRulesCid DsoRules_VestingLock_ExpireVestingLock with
+      vestingLockCid = env.vestingLockCid
+      sv = env.sv1
+
+  -- The wrapper is gone.
+  vestingLockO <- queryContractId env.app.dso env.vestingLockCid
+  assertMsg "the VestingLock has been collected" (isNone vestingLockO)
+
+  -- The underlying holding is untouched, and its time-lock expired at `endTime`.
+  Some lockedAmulet <- queryContractId env.alice.primaryParty env.lockedAmuletCid
+  lockedAmulet.amulet.amount.initialAmount === testVestingAmount
+  lockedAmulet.lock.expiresAt === env.endTime
+  now <- getTime
+  assertMsg "the underlying LockedAmulet's time-lock has expired" (lockedAmulet.lock.expiresAt <= now)
+
+  -- ... which is what makes it spendable: alice can release it on her own authority.
+  result <- submit env.alice.primaryParty $
+    exerciseCmd env.lockedAmuletCid LockedAmulet_OwnerExpireLockV2
+  Some amulet <- queryContractId @Amulet env.alice.primaryParty result.amuletCid
+  amulet.owner === env.alice.primaryParty
+  amulet.amount.initialAmount === testVestingAmount
+
+
+-- | Negative: the lock has not fully vested yet, so there is nothing to collect.
+testDsoRulesExpireVestingLockNotYetVested : Script ()
+testDsoRulesExpireVestingLockNotYetVested = do
+  env <- setupVestingLock
+
+  let expireAsSv1 = do
+        r <- trySubmit (actAs env.sv1 <> readAs env.app.dso) $
+          exerciseCmd env.dsoRulesCid DsoRules_VestingLock_ExpireVestingLock with
+            vestingLockCid = env.vestingLockCid
+            sv = env.sv1
+        pure (() <$ r)
+
+  -- A whole vesting period early.
+  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'VestingLock.endTime'")
+    expireAsSv1
+
+  -- One second early is still early.
+  setTime (env.endTime `addRelTime` seconds (-1))
+  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'VestingLock.endTime'")
+    expireAsSv1
+
+  vestingLockO <- queryContractId env.app.dso env.vestingLockCid
+  assertMsg "the VestingLock is still live" (isSome vestingLockO)
+
+
+-- | Negative: only an actual SV may drive the collection.
+testDsoRulesExpireVestingLockRejectsNonSv : Script ()
+testDsoRulesExpireVestingLockRejectsNonSv = do
+  env <- setupVestingLock
+
+  passTime (testVestingPeriod + hours 1)
+
+  -- alice owns the lock, but she is not an SV.
+  submitMustFail (actAs env.alice.primaryParty <> readAs env.app.dso) $
+    exerciseCmd env.dsoRulesCid DsoRules_VestingLock_ExpireVestingLock with
+      vestingLockCid = env.vestingLockCid
+      sv = env.alice.primaryParty
+
+  vestingLockO <- queryContractId env.app.dso env.vestingLockCid
+  assertMsg "the VestingLock is still live" (isSome vestingLockO)
+
+
+-- | A vesting lock that nobody collects may eventually has its `LockedAmulet`
+-- removed from under it if the owner decides to unlock it to spend it, so the
+-- collection must still work against a dangling `lockedAmulet` id.
+testDsoRulesExpireVestingLockWithDanglingLockedAmulet : Script ()
+testDsoRulesExpireVestingLockWithDanglingLockedAmulet = do
+  env <- setupVestingLock
+
+  passTime (testVestingPeriod + hours 1)
+
+  _ <- submit env.alice.primaryParty $
+    exerciseCmd env.lockedAmuletCid LockedAmulet_OwnerExpireLockV2
+  lockedAmuletO <- queryContractId env.alice.primaryParty env.lockedAmuletCid
+  assertMsg "the underlying LockedAmulet is gone" (isNone lockedAmuletO)
+
+  -- The choice never reads the `lockedAmulet`, so it is unaffected.
+  _ <- submit (actAs env.sv1 <> readAs env.app.dso) $
+    exerciseCmd env.dsoRulesCid DsoRules_VestingLock_ExpireVestingLock with
+      vestingLockCid = env.vestingLockCid
+      sv = env.sv1
+
+  vestingLockO <- queryContractId env.app.dso env.vestingLockCid
+  assertMsg "the VestingLock has been collected" (isNone vestingLockO)
+
+-- | Happy path: a provisional featured app lock is converted to a true featured app lock.
+testDsoRulesConvertProvisionalFeaturedAppLock : Script ()
+testDsoRulesConvertProvisionalFeaturedAppLock = do
+  env <- setupProvisionalFeaturedAppLock
+  Some provisionalLock <- queryContractId env.app.dso env.governanceLockCid
+
+  submit (actAs env.sv1 <> readAs env.app.dso) $
+    exerciseCmd env.dsoRulesCid DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock with
+      governanceLockCid = env.governanceLockCid
+      featuredAppRightCid = env.featuredAppRightCid
+      sv = env.sv1
+
+  -- Provisional GovernanceLock is archived
+  optProvisionalLock <- queryContractId env.app.dso env.governanceLockCid
+  assertMsg "provisional GovernanceLock is archived" (isNone optProvisionalLock)
+
+  -- LockedAmulet is unchanged
+  Some lockedAmulet <- queryContractId env.alice.primaryParty env.lockedAmuletCid
+  lockedAmulet === env.lockedAmulet
+
+  -- New GovernanceLock is created and is equivalent to the provisional lock with its kind updated to GLK_FeaturedApp
+  let expectedConvertedLock = provisionalLock with
+        specification = GovernanceLockSpecification with
+          kind = GLK_FeaturedApp with provider = env.alice.primaryParty
+  [(_, actualConvertedLock)] <- query @GovernanceLock env.app.dso
+  actualConvertedLock === expectedConvertedLock
+
+-- | Negative: the lock is not a provisional featured app lock, so conversion fails.
+testDsoRulesConvertNonProvisionalFeaturedAppLock : Script ()
+testDsoRulesConvertNonProvisionalFeaturedAppLock = do
+  env <- setupGovernanceLock \env -> GLK_FeaturedApp with provider = env.alice.primaryParty
+
+  submitMustFail (actAs env.sv1 <> readAs env.app.dso) $
+    exerciseCmd env.dsoRulesCid DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock with
+      governanceLockCid = env.governanceLockCid
+      featuredAppRightCid = env.featuredAppRightCid
+      sv = env.sv1
+
+  optLock <- queryContractId env.app.dso env.governanceLockCid
+  assertMsg "the GovernanceLock is still active" (isSome optLock)
+
+-- | Negative: only an actual SV can convert a provisional lock.
+testDsoRulesConvertProvisionalFeaturedAppLockNonSv : Script ()
+testDsoRulesConvertProvisionalFeaturedAppLockNonSv = do
+  env <- setupProvisionalFeaturedAppLock
+
+  submitMustFail (actAs env.alice.primaryParty <> readAs env.app.dso) $
+    exerciseCmd env.dsoRulesCid DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock with
+      governanceLockCid = env.governanceLockCid
+      featuredAppRightCid = env.featuredAppRightCid
+      sv = env.sv1
+
+  optLock <- queryContractId env.app.dso env.governanceLockCid
+  assertMsg "the GovernanceLock is still active" (isSome optLock)
+
+testDsoRulesConvertProvisionalFeaturedAppLockWrongFeaturedAppRight : Script ()
+testDsoRulesConvertProvisionalFeaturedAppLockWrongFeaturedAppRight = do
+  env <- setupProvisionalFeaturedAppLock
+
+  wrongFeaturedAppRightCid <- submit env.app.dso $ createCmd FeaturedAppRight with
+    dso = env.app.dso
+    provider = env.sv1
+    activityWeight = None
+
+  submitMustFail (actAs env.sv1 <> readAs env.app.dso) $
+    exerciseCmd env.dsoRulesCid DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock with
+      governanceLockCid = env.governanceLockCid
+      featuredAppRightCid = wrongFeaturedAppRightCid
+      sv = env.sv1
+
+  optLock <- queryContractId env.app.dso env.governanceLockCid
+  assertMsg "the GovernanceLock is still active" (isSome optLock)

@@ -77,6 +77,20 @@ template GovernanceLock
       controller actors
       do governanceLock_unlockImpl self this unlockAmount unlockAt extraArgs actors
 
+    choice GovernanceLock_DsoConvertProvisionalFeaturedAppLock : GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
+      with
+        featuredAppRightCid : ContractId FeaturedAppRight
+      controller dso
+      do
+        case specification.kind of
+          GLK_ProvisionalFeaturedApp provider -> do
+            fetchChecked (ForOwner with dso; owner = provider) featuredAppRightCid
+            create this with
+              specification = GovernanceLockSpecification with
+                kind = GLK_FeaturedApp with provider
+            pure GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
+          kind -> error $ "GovernanceLock_DsoConvertProvisionalFeaturedAppLock: cannot convert lock of kind " <> show kind
+
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
@@ -218,6 +232,12 @@ data GovernanceLock_UnlockResult
       unlockedAmulet : Optional (ContractId Amulet)
   deriving (Eq, Show, Serializable)
 
+data GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
+   = GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
+   -- ^ The `GovernanceLock_DsoConvertProvisionalFeaturedAppLock` choice doesn't return anything because an SV trigger
+   -- that converts provisional FA locks doesn't care to do anything with the new `GovernanceLock`.
+   deriving (Serializable)
+
 template VestingLock
   with
     dso : Party
@@ -242,6 +262,19 @@ template VestingLock
         actors : [Party]
       controller actors
       do vestingLock_withdrawImpl self this requestedAt extraArgs actors
+
+    choice VestingLock_DsoExpire : VestingLock_DsoExpireResult
+      -- ^ Garbage-collect a fully vested lock, so that SV nodes are not left
+      -- storing locks that nobody has bothered to withdraw.
+      --
+      -- There is nothing to do with `lockedAmulet`. `GovernanceLock_Unlock`
+      -- relocks it with `expiresAt = endTime`, so at the instant the vesting
+      -- period completes its time-lock has expired and wallets already treat it
+      -- as a liquid holding.
+      controller dso
+      do
+        assertDeadlineExceeded "VestingLock.endTime" endTime
+        pure VestingLock_DsoExpireResult
 
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
@@ -317,6 +350,14 @@ data VestingLock_WithdrawResult
       vested : ContractId Holding
         -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
   deriving (Eq, Show, Serializable)
+
+data VestingLock_DsoExpireResult
+  = VestingLock_DsoExpireResult
+    -- ^
+    -- The `VestingLock_DsoExpireResult` choice doesn't return anything because
+    -- an SV trigger that cleans up expired vesting locks doesn't care to do
+    -- anything with the now unlocked `lockedAmulet`.
+  deriving (Serializable)
 
 -- | Uses `None` to represent that no amount remains.
 calculateUnvestedAmount : Time -> VestingLock -> Optional Decimal
