@@ -53,7 +53,7 @@ template GovernanceLock
     lockedAmulet : ContractId LockedAmulet
     specification : GovernanceLockSpecification
     originalLockCid : Optional (ContractId GovernanceLock)
-    createdAt : Time
+    requestedAt : Time
     meta : Metadata
   where
     signatory dso, owner
@@ -80,7 +80,7 @@ template GovernanceLock
             receiver = receiver
             amount
             instrumentId = amuletInstrumentId dso
-            requestedAt = createdAt
+            requestedAt = requestedAt
             executeBefore = maxBound
             inputHoldingCids = []
             meta = reasonToMeta encodedReason meta
@@ -93,7 +93,7 @@ template GovernanceLock
       transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks cannot be rejected"
       transferInstruction_withdrawImpl self arg = do
           let TransferInstructionV1.TransferInstruction_Withdraw {..} = arg
-          (_, unlockAt) <- searchTimeMaximumLowerBound isLedgerTimeGE createdAt
+          (_, unlockAt) <- searchTimeMaximumLowerBound isLedgerTimeGE requestedAt
           unlockResult <- governanceLock_unlockImpl (coerceContractId self) this None unlockAt extraArgs [owner]
           pure $ TransferInstructionV1.TransferInstructionResult with
             output = TransferInstructionV1.TransferInstructionResult_Pending with
@@ -318,7 +318,7 @@ governanceLock_lockForGovernance_impl
  -> Time
  -> Metadata
  -> Update (ContractId GovernanceLock, Optional (ContractId Amulet))
-governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner createdAt meta = do
+governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner requestedAt meta = do
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
   requireMinimumLock state amount
   let lockProperties = LockProperties with
@@ -331,7 +331,7 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
     amount
     lockedAmulet
     specification
-    createdAt
+    requestedAt
     originalLockCid = None
     meta
   pure $ (governanceLock, changeHolding)
@@ -450,7 +450,7 @@ lockAmulet forOwner@ForOwner {..} specs inputHoldingCids context = do
 -- Update this to the implementation CIP once that has a number assigned.
 cipAddressPrefix = "cip-0105_"
 
--- Not sure what to call this.
+-- | Special "dummy" namespace used to identify special parties.
 magicNamespace = "::1220000000000000000000000000000000000000000000000000000000000000abcd"
 
 isGovernanceLockTransferParty : Party -> Bool
