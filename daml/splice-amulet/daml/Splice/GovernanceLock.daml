@@ -165,7 +165,10 @@ loopUntilRightA f a = do
 -- after.
 
 searchTimeMaximumLowerBound : Time -> Update (Time, Time)
-searchTimeMaximumLowerBound basis = loopUntilRightA binarySearch =<< loopUntilRightA seekForward (1, modifiedBasis)
+searchTimeMaximumLowerBound basis = do
+    afterBasis <- isLedgerTimeGE basis
+    let seekF = if afterBasis then seekForward else seekBackward
+    loopUntilRightA binarySearch =<< loopUntilRightA seekF (1, modifiedBasis)
   where
     modifiedBasis = basis `addRelTime` (days (-1))
     binarySearch : (Int, Time) -> Update (Either (Int, Time) (Time, Time))
@@ -184,6 +187,13 @@ searchTimeMaximumLowerBound basis = loopUntilRightA binarySearch =<< loopUntilRi
       pure $ if gt
          then Left (seek + 1, nextBasis)
          else Right (seek - 1, basis)
+    seekBackward : (Int, Time) -> Update (Either (Int, Time) (Int, Time))
+    seekBackward (seek, basis) = do
+      let nextBasis = basis `addRelTime` (- seekToDays seek)
+      gt <- isLedgerTimeGE nextBasis
+      pure $ if gt
+         then Right (seek - 1, basis)
+         else Left (seek + 1, nextBasis)
     seekToDays seek = days $ 2 ^ seek
 
   -- TODO: substitution, probably with a loose function for implementation sharing.
