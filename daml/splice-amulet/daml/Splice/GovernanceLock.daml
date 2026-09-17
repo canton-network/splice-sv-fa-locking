@@ -70,7 +70,6 @@ template GovernanceLock
       do governanceLock_unlockImpl self this unlockAmount unlockAt extraArgs actors
 
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
-  -- TODO(canton-network/splice-sv-fa-locking#39): implement pending V1 transfer for the above, for backwards compatibility.
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
     interface instance TransferInstructionV1.TransferInstruction for GovernanceLock where
@@ -101,8 +100,6 @@ template GovernanceLock
               transferInstructionCid = toInterfaceContractId unlockResult.vestingLock
             senderChangeCids = []
             meta = emptyMetadata
-
-      -- TODO: determine if we need to emit update choice calls when a withdraw event occurs.
       transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks cannot be updated"
 
 governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Optional Decimal -> Time -> ExtraArgs -> [Party] -> Update GovernanceLock_UnlockResult
@@ -229,7 +226,6 @@ template VestingLock
       controller actors
       do vestingLock_withdrawImpl self this requestedAt extraArgs actors
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
-  -- TODO(canton-network/splice-sv-fa-locking#39): implement pending V1 transaction for the above, for backwards compatibility.
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
     interface instance TransferInstructionV1.TransferInstruction for VestingLock where
@@ -266,8 +262,6 @@ template VestingLock
               receiverHoldingCids = []
             senderChangeCids = [withdrawResult.vested]
             meta = emptyMetadata
-
-      -- TODO: determine if we need to emit update choice calls when a withdraw event occurs.
       transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks cannot be updated"
   -- TODO: substitution, probably with a loose function for implementation sharing.
 
@@ -453,6 +447,7 @@ lockAmulet forOwner@ForOwner {..} specs inputHoldingCids context = do
 -- TSv1 support
 -- ============
 
+-- Update this to the implementation CIP once that has a number assigned.
 cipAddressPrefix = "cip-0105_"
 
 -- Not sure what to call this.
@@ -460,10 +455,6 @@ magicNamespace = "::122000000000000000000000000000000000000000000000000000000000
 
 isGovernanceLockTransferParty : Party -> Bool
 isGovernanceLockTransferParty party = isSome $ Text.stripPrefix cipAddressPrefix (partyToText party) >>= Text.stripSuffix magicNamespace
-
--- | Copied from ExternalPartyAmuletRules because of package import order.
-requireExpectedAdminMatch' : Party -> Party -> Update ()
-requireExpectedAdminMatch' expected actual =   require ("Expected admin " <> show expected <> " matches actual admin " <> show actual) (expected == actual)
 
 governanceLock_transferFactoryV1_transferImpl
   :  Party
@@ -475,7 +466,7 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg = do
   checkActors actors [[transfer.sender], [transfer.sender, transfer.receiver]]
 
   -- validate call to factory and retrieve context
-  requireExpectedAdminMatch' expectedAdmin dso
+  requireMatchExpected ("admin", arg.expectedAdmin) dso
 
   specification <- specificationFromReceiverAndReason transfer.receiver transfer.meta
 
