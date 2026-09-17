@@ -277,35 +277,41 @@ registryApi_getTransferInstruction_abortTwoStepTransferContext
 registryApi_getTransferInstruction_abortTwoStepTransferContext registry instrCid = do
   -- check whether the locked amulet is still active, so that aborts still work
   -- even if the owner of the LockedAmulet expired it
-  optAmuletInstr <- lookup (coerceContractId instrCid) <$> query @AmuletTransferInstruction registry.dso
-  optAmuletContext <- forA optAmuletInstr $ registryApi_getTransferInstruction_abortTwoStepTransferContextAbstract registry
-  optGovernanceLock <- lookup (coerceContractId instrCid) <$> query @GovernanceLock registry.dso
-  optGovernanceContext <- forA optGovernanceLock $ registryApi_getTransferInstruction_abortTwoStepTransferContextAbstract registry
-  optVestingLock <- lookup (coerceContractId instrCid) <$> query @VestingLock registry.dso
-  optVestingContext <- forA optVestingLock $ registryApi_getTransferInstruction_abortTwoStepTransferContextAbstract registry
-  externalPartyState <- if isSome optGovernanceLock || isSome optVestingLock then getExternalPartyConfigStateContext registry else pure emptyOpenApiChoiceContext
+  optAmuletContext <- registryApi_getTransferInstruction_abortTwoStepTransferContextAbstract registry
+    (coerceContractId instrCid : ContractId AmuletTransferInstruction)
+  optGovernanceContext <- registryApi_getTransferInstruction_abortTwoStepTransferContextAbstract registry
+    (coerceContractId instrCid : ContractId GovernanceLock)
+  optVestingContext <- registryApi_getTransferInstruction_abortTwoStepTransferContextAbstract registry
+    (coerceContractId instrCid : ContractId VestingLock)
+  externalPartyState <- if isSome optGovernanceContext || isSome optVestingContext
+                           then getExternalPartyConfigStateContext registry
+                           else pure emptyOpenApiChoiceContext
   pure $ fold optAmuletContext <> fold optGovernanceContext <> fold optVestingContext <> externalPartyState
 
 registryApi_getTransferInstruction_abortTwoStepTransferContextAbstract
-  : (HasToInterface t TransferInstruction, HasField "lockedAmulet" t (ContractId LockedAmulet)) => AmuletRegistry -> t -> Script OpenApiChoiceContext
-registryApi_getTransferInstruction_abortTwoStepTransferContextAbstract registry amuletInstr = do
-  optLockedAmulet <- queryContractId @LockedAmulet registry.dso amuletInstr.lockedAmulet
-  let lockedAmuletActive = isSome optLockedAmulet
-  -- this can only happen if the locked amulet already expired
-  now <- getTime
-  unless (lockedAmuletActive || (view (toInterface amuletInstr :TransferInstruction) : TransferInstructionView).transfer.executeBefore <= now) $
-    fail "Invariant violation: the locked amulet is archived, but the transfer is not yet expired"
-  -- this context communicates whether to unlock the amulet
-  let expireLockC = OpenApiChoiceContext with
-        disclosures = mempty
-        choiceContext = mkAmuletContext $ TextMap.fromList [(expireLockKey, AV_Bool lockedAmuletActive)]
-  if lockedAmuletActive
-    then do
-      -- disclose the amulet contract, as the caller might not be able to see it
-      lockedAmuletD <- queryDisclosure' @LockedAmulet registry.dso amuletInstr.lockedAmulet
-      pure $ withExtraDisclosures lockedAmuletD expireLockC
-    else
-      pure expireLockC
+  : forall t. (HasEnsure t, Template t, HasToInterface t TransferInstruction, HasField "lockedAmulet" t (ContractId LockedAmulet))
+  => AmuletRegistry -> ContractId t -> Script (Optional OpenApiChoiceContext)
+registryApi_getTransferInstruction_abortTwoStepTransferContextAbstract registry instrCid = do
+  optInstr <- lookup instrCid <$> query @t registry.dso
+  forA optInstr $ \amuletInstr -> do
+    optLockedAmulet <- queryContractId @LockedAmulet registry.dso amuletInstr.lockedAmulet
+    let lockedAmuletActive = isSome optLockedAmulet
+    -- this can only happen if the locked amulet already expired
+    now <- getTime
+    unless (lockedAmuletActive
+        || (view (toInterface amuletInstr :TransferInstruction) : TransferInstructionView).transfer.executeBefore <= now) $
+      fail "Invariant violation: the locked amulet is archived, but the transfer is not yet expired"
+    -- this context communicates whether to unlock the amulet
+    let expireLockC = OpenApiChoiceContext with
+          disclosures = mempty
+          choiceContext = mkAmuletContext $ TextMap.fromList [(expireLockKey, AV_Bool lockedAmuletActive)]
+    if lockedAmuletActive
+      then do
+        -- disclose the amulet contract, as the caller might not be able to see it
+        lockedAmuletD <- queryDisclosure' @LockedAmulet registry.dso amuletInstr.lockedAmulet
+        pure $ withExtraDisclosures lockedAmuletD expireLockC
+      else
+        pure expireLockC
 
 registryApi_getAllocation_abortTwoStepTransferContext
   : AmuletRegistry -> ContractId Allocation -> Script OpenApiChoiceContext
