@@ -2443,7 +2443,32 @@ class DbSvDsoStoreTest
         _ <- dummyDomain.create(confirmedRight)(store.multiDomainAcsStore)
         result <- store.listProvisionalGovernanceLocksWithFeaturedAppRight()
       } yield {
-        result.map(_.contractId) should contain theSameElementsAs Seq(readyLock.contractId)
+        result.map { case (lock, right) => (lock.contractId, right) } should
+          contain theSameElementsAs Seq((readyLock.contractId, readyRight.contractId))
+      }
+    }
+
+    "not return duplicate rows when a provider has more than one live FeaturedAppRight" in {
+      val provider = userParty(1)
+      val lock = governanceLock(
+        userParty(2),
+        amount = BigDecimal(10),
+        kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+          provider.toProtoPrimitive
+        ),
+      )
+      val right1 = featuredAppRight(provider)
+      val right2 = featuredAppRight(provider)
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(lock)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(right1)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(right2)(store.multiDomainAcsStore)
+        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRight()
+      } yield {
+        result.map(_._1.contractId) should contain theSameElementsAs Seq(lock.contractId)
+        Seq(right1.contractId, right2.contractId) should contain(result.head._2)
       }
     }
 
