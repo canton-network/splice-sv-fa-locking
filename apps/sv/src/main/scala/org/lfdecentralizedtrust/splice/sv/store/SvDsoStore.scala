@@ -1043,6 +1043,20 @@ trait SvDsoStore
     ]
   ]
 
+  def listProvisionalGovernanceLocksWithFeaturedAppRight(
+      limit: Limit = defaultLimit
+  )(implicit tc: TraceContext): Future[
+    Seq[
+      (
+          Contract[
+            splice.governancelock.GovernanceLock.ContractId,
+            splice.governancelock.GovernanceLock,
+          ],
+          splice.amulet.FeaturedAppRight.ContractId,
+      )
+    ]
+  ]
+
   def lookupFeaturedAppRight(
       providerPartyId: PartyId
   )(implicit
@@ -1678,6 +1692,22 @@ object SvDsoStore {
         DsoAcsStoreRowData(
           contract,
           contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.endTime)),
+        )
+      },
+      mkFilter(splice.governancelock.GovernanceLock.COMPANION)(
+        co => co.payload.dso == dso,
+        versionGuard = { case (pkgVersionSupport, now) =>
+          (tc) => pkgVersionSupport.supportsGovernanceLock(Seq(dsoParty), now)(tc)
+        },
+      ) { contract =>
+        val provisionalFeaturedAppLockFor = contract.payload.specification.kind match {
+          case kind: splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp =>
+            Some(PartyId.tryFromProtoPrimitive(kind.provider))
+          case _ => None
+        }
+        DsoAcsStoreRowData(
+          contract,
+          provisionalFeaturedAppLockFor = provisionalFeaturedAppLockFor,
         )
       },
     )
