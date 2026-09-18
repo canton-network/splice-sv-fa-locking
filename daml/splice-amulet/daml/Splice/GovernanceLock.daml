@@ -119,27 +119,20 @@ template GovernanceLock
         svRewardCouponPercentage : Decimal
           -- ^ Percentage (specified as a number between 0.0 and 1.0) of the sv reward coupons
           -- minting allowance to top-up a governance lock with.
---        -- Also probably temp, I think we want to pass this through extraArg's context (hence the AnyValue in fetchAndValidateIssuingMiningRounds)
---        currentIssuingMiningRounds : [ContractId IssuingMiningRound]
         extraArgs : ExtraArgs
       controller owner
       do
         require' ("topUpAmount", topUpAmount) isGreaterOrEqualR ("zero", 0.0)
         require' ("svRewardCouponPercentage", svRewardCouponPercentage) isGreaterOrEqualR ("zero", 0.0)
-
+        require' ("svRewardCouponPercentage", svRewardCouponPercentage) isLessOrEqualR ("one", 1.0)
         let forOwner = ForOwner with dso; owner
             forDso = ForDso with dso
-
---        lock <- fetchChecked forOwner lockedAmulet
---        let lockProps = LockProperties with
---              context = fromOptional "governance" lock.lock.optContext
---              expiresAt = lock.lock.expiresAt
 
         (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
         -- FIXME: temp case
-        optChangeAmuletFromSvRewardCoupon <- if null svRewardCouponInputs
-          then pure None -- no coupons to mint in locked form
+        (optChangeAmuletFromSvRewardCoupon, svRewardMintAllowance) <- if null svRewardCouponInputs
+          then pure (None, 0.0) -- no coupons to mint in locked form
           else do
             (currentIssuingMiningRoundCid, openMiningRoundCid) <- getMiningRoundsFromChoiceContext dso extraArgs.context
             let currentIssuingMiningRounds = [currentIssuingMiningRoundCid]
@@ -166,7 +159,7 @@ template GovernanceLock
             result <- executeTransfer (toInterfaceContractId context.externalPartyConfigState) rewardsConfig transferContext dso [] transfer
 --            let [lockedAmuletFromSvCouponRewards] = (\(TransferResultLockedAmulet lockedAmulet) -> lockedAmulet) <$> result.createdAmulets
             let changeFromSvCouponRewards = result.senderChangeAmulet
-            pure $ InputAmulet <$> changeFromSvCouponRewards
+            pure (InputAmulet <$> changeFromSvCouponRewards, svRewardMintAllowance)
 
 
         -- Unlock original governanceLock
@@ -184,7 +177,7 @@ template GovernanceLock
 
         let unlockedAmountFromMergeLocks : Decimal = sum [amt | (amt, _) <- unlockedAmountsAndHoldings]
             unlockedHoldingsFromMergeLocks : [ContractId Holding] = [holding | (_, holding) <- unlockedAmountsAndHoldings]
-            newLockAmount = amount + topUpAmount + unlockedAmountFromMergeLocks
+            newLockAmount = amount + topUpAmount + unlockedAmountFromMergeLocks + svRewardMintAllowance
 
         ([newLockedAmulet], newChangeHolding) <- lockAmulet
           forOwner
