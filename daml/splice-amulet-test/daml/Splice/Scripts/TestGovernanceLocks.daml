@@ -204,7 +204,7 @@ unitTestSearchTimeMaximumLowerBound = do
   sequence_ $ testPasses <$> testCases
   where
     testPasses (baseTime, trueTime) = do
-      brackets trueTime =<< searchTimeMaximumLowerBound (pure . (< trueTime)) baseTime
+      brackets trueTime =<< searchTimeMaximumLowerBound (pure . (< trueTime)) baseTime None
     testCases = [ (baseTime, trueTime) | baseTime <- times, trueTime <- times, trueTime > minBound, trueTime < maxBound ]
     baseTime = datetime 2026 Jan 1 21 23 10
     smallOffsets = [microseconds 1, seconds 48, minutes 47, hours 2, days 1]
