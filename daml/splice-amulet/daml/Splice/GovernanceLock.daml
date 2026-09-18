@@ -130,15 +130,15 @@ template GovernanceLock
         let forOwner = ForOwner with dso; owner
             forDso = ForDso with dso
 
-        lock <- fetchChecked forOwner lockedAmulet
-        let lockProps = LockProperties with
-              context = fromOptional "governance" lock.lock.optContext
-              expiresAt = lock.lock.expiresAt
+--        lock <- fetchChecked forOwner lockedAmulet
+--        let lockProps = LockProperties with
+--              context = fromOptional "governance" lock.lock.optContext
+--              expiresAt = lock.lock.expiresAt
 
         (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
         -- FIXME: temp case
-        optChangeAmuletFromSvRewardCoupons <- if null svRewardCouponInputs
+        optChangeAmuletFromSvRewardCoupon <- if null svRewardCouponInputs
           then pure None -- no coupons to mint in locked form
           else do
             (currentIssuingMiningRoundCid, openMiningRoundCid) <- getMiningRoundsFromChoiceContext dso extraArgs.context
@@ -164,13 +164,13 @@ template GovernanceLock
                   issueValidatorRewards = False
 
             result <- executeTransfer (toInterfaceContractId context.externalPartyConfigState) rewardsConfig transferContext dso [] transfer
-            let [lockedAmuletFromSvCouponRewards] = (\(TransferResultLockedAmulet lockedAmulet) -> lockedAmulet) <$> result.createdAmulets
-                changeFromSvCouponRewards = result.senderChangeAmulet
-            pure $ Some changeFromSvCouponRewards
+--            let [lockedAmuletFromSvCouponRewards] = (\(TransferResultLockedAmulet lockedAmulet) -> lockedAmulet) <$> result.createdAmulets
+            let changeFromSvCouponRewards = result.senderChangeAmulet
+            pure $ InputAmulet <$> changeFromSvCouponRewards
 
 
         -- Unlock original governanceLock
-        (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmuletFromSvCouponRewards --lockedAmulet
+        (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmulet --lockedAmulet
 
         -- Check if we have any locks to merge and extract required info
         unlockedAmountsAndHoldings : [(Decimal, ContractId Holding)] <- forA lockInputs $ \governanceLockCid -> do
@@ -190,8 +190,7 @@ template GovernanceLock
           forOwner
           [(newLockAmount, lockProps)]
           (toInterfaceContractId unlockedAmuletCid :: holdingInputs <> unlockedHoldingsFromMergeLocks)
-          changeFromSvCouponRewards
-          svRewardCouponInputs
+          optChangeAmuletFromSvRewardCoupon
           context
 
         newGovernanceLock <- create GovernanceLock with
@@ -289,18 +288,17 @@ governanceLock_lockForGovernance_impl
   : Party
  -> Decimal
  -> [ContractId Holding]
- -> [ContractId SvRewardCoupon]
  -> GovernanceLockSpecification
  -> ExtraArgs
  -> Party
  -> Update (ContractId GovernanceLock, Optional (ContractId Amulet))
-governanceLock_lockForGovernance_impl dso amount holdingInputs svRewardCouponInputs specification extraArgs owner = do
+governanceLock_lockForGovernance_impl dso amount holdingInputs specification extraArgs owner = do
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
   requireMinimumLock state amount
   let lockProperties = LockProperties with
         context = describeGovernanceSpecification specification
         expiresAt = maxBound
-  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] holdingInputs svRewardCouponInputs context
+  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] holdingInputs None context
   governanceLock <- create GovernanceLock with
     dso
     owner
@@ -373,19 +371,19 @@ multiSplitLockedAmulet : ForOwner -> ContractId LockedAmulet -> [LockSpecificati
 multiSplitLockedAmulet forOwner lockedAmuletCid specs context = do
   (unlockedCid, (currentAmount, currentLockProps)) <- unlockAmulet forOwner lockedAmuletCid
   let remainderAmount = currentAmount - sum (fst <$> specs)
-  (remainderLock::specifiedLocks, None) <- lockAmulet forOwner ((remainderAmount, currentLockProps) :: specs) [toInterfaceContractId unlockedCid] [] context
+  (remainderLock::specifiedLocks, None) <- lockAmulet forOwner ((remainderAmount, currentLockProps) :: specs) [toInterfaceContractId unlockedCid] None context
   pure (specifiedLocks, remainderLock, remainderAmount)
 
 partialUnlock : ForOwner -> ContractId LockedAmulet -> Decimal -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet, ContractId Amulet)
 partialUnlock forOwner lockedAmuletCid stillLockedAmount context = do
   (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmuletCid
-  ([newLockedCid], Some unlockedAmulet) <- lockAmulet forOwner [(stillLockedAmount, lockProps)] [toInterfaceContractId unlockedAmuletCid] [] context
+  ([newLockedCid], Some unlockedAmulet) <- lockAmulet forOwner [(stillLockedAmount, lockProps)] [toInterfaceContractId unlockedAmuletCid] None context
   pure (newLockedCid, unlockedAmulet)
 
 relockAmulet : ForOwner -> ContractId LockedAmulet -> LockProperties -> ExternalPartyTransferContext -> Update (ContractId LockedAmulet)
 relockAmulet forOwner lockedAmuletCid newLockProperties context = do
   (amuletCid, (currentAmount, _)) <- unlockAmulet forOwner lockedAmuletCid
-  ([newLockedCid], None) <- lockAmulet forOwner [(currentAmount, newLockProperties)] [toInterfaceContractId amuletCid] [] context
+  ([newLockedCid], None) <- lockAmulet forOwner [(currentAmount, newLockProperties)] [toInterfaceContractId amuletCid] None context
   pure newLockedCid
 
 unlockAmulet : ForOwner -> ContractId LockedAmulet -> Update (ContractId Amulet, LockSpecification)
@@ -394,10 +392,12 @@ unlockAmulet forOwner lockedAmuletCid = do
   unlockResult <- exercise lockedAmuletCid LockedAmulet_UnlockV2
   return (unlockResult.amuletCid, (lock.amulet.amount.initialAmount, LockProperties with context = fromOptional "governance" lock.lock.optContext; expiresAt = lock.lock.expiresAt))
 
-lockAmulet : ForOwner -> [LockSpecification] -> [ContractId Holding] -> Optional Amulet -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
+lockAmulet : ForOwner -> [LockSpecification] -> [ContractId Holding] -> Optional TransferInput -> ExternalPartyTransferContext -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
 lockAmulet forOwner@ForOwner {..} specs holdingInputs optionalSvRewardCouponChange context = do
   -- lock the amulet
   transferInputsFromHoldings <- holdingToTransferInputs forOwner holdingInputs
+  let mkReasonWithSvReward defaultReason (Some _) = defaultReason <> " (includes minting and locking SV rewards)"
+      mkReasonWithSvReward defaultReason None = defaultReason
   let mkOutput (amount, spec) =
             TransferOutput with
               receiver = owner
@@ -407,12 +407,12 @@ lockAmulet forOwner@ForOwner {..} specs holdingInputs optionalSvRewardCouponChan
                 expiresAt = spec.expiresAt -- We don't have any call to isLedgerTimeLE, so we can use the true maxBound here for arbitrary duration.
                 holders = [dso]
                 optContext = Some spec.context
-              meta = Some (reasonToMeta ("lock for " <> spec.context) emptyMetadata)
+              meta = Some $ reasonToMeta (mkReasonWithSvReward ("lock for " <> spec.context) optionalSvRewardCouponChange) emptyMetadata
   let transfer = Splice.AmuletRules.Transfer with
         sender = owner
         provider = owner -- the sender is serving as its own "app provider"
         outputs = map mkOutput specs
-        inputs = transferInputsFromHoldings -- <> transferInputsFromSvRewardCoupons
+        inputs = optionalToList optionalSvRewardCouponChange <> transferInputsFromHoldings
         beneficiaries = None
 
   result <- executeExternalPartyTransfer forOwner.dso context transfer

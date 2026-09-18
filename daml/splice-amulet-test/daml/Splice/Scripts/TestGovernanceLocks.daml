@@ -349,8 +349,7 @@ governanceLockRawChoice' env owner amount specification = do
   result <- submitWithTransferContext env (actAs [owner] <> discloseMany' disc) $
     \context -> exerciseCmd eparCid ExternalPartyAmuletRules_LockForGovernance with
       amount
-      holdingInputs = coerceContractId <$> inputs -- These are Amulet and LockedAmulet, but we don't have convenient constraints to show that.
-      svRewardCouponInputs = []
+      inputs = coerceContractId <$> inputs -- These are Amulet and LockedAmulet, but we don't have convenient constraints to show that.
       specification
       extraArgs = emptyExtraArgs with context
       owner
