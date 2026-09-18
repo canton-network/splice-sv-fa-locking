@@ -1962,7 +1962,7 @@ class DbSvDsoStore(
           select #${AcsQueries.SelectFromAcsTableResult.sqlColumnsCommaSeparated("acs.")},
                  fa_right.contract_id
           from #${DsoTables.acsTableName} acs
-          join lateral (
+          cross join lateral (
             select contract_id
             from #${DsoTables.acsTableName} fa_right
             where fa_right.store_id = acs.store_id
@@ -1974,7 +1974,7 @@ class DbSvDsoStore(
               and fa_right.assigned_domain is not null
               and fa_right.featured_app_right_provider = acs.provisional_featured_app_lock_for
             limit 1
-          ) fa_right on true
+          ) fa_right
           where acs.store_id = $acsStoreId
             and acs.migration_id = $domainMigrationId
             and acs.package_name = ${splice.governancelock.GovernanceLock.PACKAGE_NAME}
