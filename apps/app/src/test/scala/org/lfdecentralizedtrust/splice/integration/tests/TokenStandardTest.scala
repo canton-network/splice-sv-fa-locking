@@ -220,6 +220,9 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
   val superValidatorLockMagicParty = makeLockMagicParty("sv-lock")
   val featuredAppLockMagicParty = makeLockMagicParty("fa-lock")
 
+  def makeGovernanceLockSubject(lockSubject: String): String =
+    s"lock-subject=$lockSubject"
+
   def createGovernanceLockViaTokenStandard(
       participant: ParticipantClientReference,
       owner: RichPartyId,
@@ -235,7 +238,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       lockParty,
       amount,
       transferinstruction.v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer,
-      description = Some(s"lock-subject=$lockSubject"),
+      description = Some(makeGovernanceLockSubject(lockSubject)),
     )
     listTransferInstructions(participant, owner.partyId).collect {
       case (cid, view) if view.transfer.receiver == lockParty.toProtoPrimitive => cid
