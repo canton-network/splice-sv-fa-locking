@@ -85,7 +85,7 @@ template GovernanceLock
             inputHoldingCids = []
             meta = reasonToMeta encodedReason meta
           status = V1.TransferPendingInternalWorkflow with
-            pendingActions = Map.singleton owner "unlock amount"
+            pendingActions = Map.singleton owner "withdraw transfer instruction to unlock"
           meta = emptyMetadata
         where
           (receiver, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
