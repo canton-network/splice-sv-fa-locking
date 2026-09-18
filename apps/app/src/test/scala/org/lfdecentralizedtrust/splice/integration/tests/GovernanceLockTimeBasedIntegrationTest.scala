@@ -28,8 +28,9 @@ class GovernanceLockTimeBasedIntegrationTest
             // Shorten the SV vesting period and search time granularity so we can test partial and
             // full withdrawal while only advancing the clock a couple minutes
             initialGovernanceLockSuperValidatorLockVestingDuration =
-              Some(NonNegativeFiniteDuration.ofSeconds(5)),
-            initialGovernanceLockSearchTimeGranularity = Some(NonNegativeFiniteDuration.ofMicros(1)),
+              Some(NonNegativeFiniteDuration.ofMinutes(2)),
+            initialGovernanceLockSearchTimeGranularity =
+              Some(NonNegativeFiniteDuration.ofSeconds(1)),
           )
         )(config)
       )
@@ -132,8 +133,8 @@ class GovernanceLockTimeBasedIntegrationTest
         aliceWalletClient.balance().lockedQty should beAround(lockAmount)
       }
 
-      // Advance 2.5 seconds into the 5 second vesting period and withdraw
-      advanceTime(Duration.ofMillis(2500))
+      // Advance 30 seconds into the 2 minute vesting period and withdraw
+      advanceTime(Duration.ofSeconds(30))
 
       val (_, (remainingVestingLockCid, remainingVestingAmount)) = actAndCheck(
         "the owner withdraws the VestingLock mid-vesting",
@@ -162,14 +163,18 @@ class GovernanceLockTimeBasedIntegrationTest
           view.transfer.receiver shouldBe superValidatorLockMagicParty.toProtoPrimitive
           matchSVKind(remainingVestingLock.specification.kind)
           val remainingVestingAmount = BigDecimal(remainingVestingLock.vestingAmount)
-          remainingVestingAmount should beAround(lockAmount / 2)
-          aliceWalletClient.balance().lockedQty should beAround(lockAmount / 2)
+          val expectedLockAmount = lockAmount / 4 * 3
+          // The 1 second search time granularity requires a looser assertion as the calculated
+          // vested amount is not precisely equal to 1/4 of the total lock amount
+          val expectedLockAmountRange = (expectedLockAmount - 100, expectedLockAmount + 100)
+          assertInRange(remainingVestingAmount, expectedLockAmountRange)
+          assertInRange(aliceWalletClient.balance().lockedQty, expectedLockAmountRange)
           (cid, remainingVestingAmount)
         },
       )
 
       // Advance past the end of the vesting period and withdraw
-      advanceTime(Duration.ofSeconds(5))
+      advanceTime(Duration.ofMinutes(2))
 
       actAndCheck(
         "the owner withdraws the fully-vested VestingLock",
