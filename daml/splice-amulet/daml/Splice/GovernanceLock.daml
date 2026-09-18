@@ -165,9 +165,8 @@ searchTimeMaximumLowerBound : forall m. Action m => (Time -> m Bool) -> Time -> 
 searchTimeMaximumLowerBound isTimeGE basis = do
     afterBasis <- isTimeGE basis
     let seekF = if afterBasis then seekForward else seekBackward
-    loopUntilRightA binarySearch =<< loopUntilRightA seekF (1, modifiedBasis)
+    loopUntilRightA binarySearch =<< loopUntilRightA seekF (1, basis)
   where
-    modifiedBasis = basis `addRelTime` (days (-1))
     binarySearch : (Int, Time) -> m (Either (Int, Time) (Time, Time))
     binarySearch (-1, basis) = do
       pure $ Right (basis, basis `addRelTime` days 1)
@@ -189,9 +188,10 @@ searchTimeMaximumLowerBound isTimeGE basis = do
       let nextBasis = basis `addRelTime` (- seekToDays seek)
       gt <- isTimeGE nextBasis
       pure $ if gt
-         then Right (seek - 1, basis)
+         then Right (seek - 1, nextBasis)
          else Left (seek + 1, nextBasis)
     seekToDays seek = days $ 2 ^ seek
+
 
   -- TODO: substitution, probably with a loose function for implementation sharing.
 

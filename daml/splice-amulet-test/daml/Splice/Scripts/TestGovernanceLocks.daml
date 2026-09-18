@@ -4,7 +4,9 @@
 module Splice.Scripts.TestGovernanceLocks where
 
 import DA.Action (unless)
+import DA.Date
 import DA.Either
+import DA.Foldable
 import DA.Optional
 import DA.Time
 
@@ -195,6 +197,26 @@ testGovernanceLockMinimumLocksLockUnlockWithdrawScenario ops = do
   (_, None) <- expectSuccess $ ops.vestingWithdraw env stillVestingCid now [alice]
 
   pure ()
+
+
+unitTestSearchTimeMaximumLowerBound : Script ()
+unitTestSearchTimeMaximumLowerBound = do
+  sequence_ $ testPasses <$> testCases
+  where
+    testPasses (baseTime, trueTime) = do
+      brackets trueTime =<< searchTimeMaximumLowerBound (pure . (< trueTime)) baseTime
+    testCases = [ (baseTime, trueTime) | baseTime <- times, trueTime <- times, trueTime > minBound, trueTime < maxBound ]
+    baseTime = datetime 2026 Jan 1 21 23 10
+    smallOffsets = [microseconds 1, seconds 48, minutes 47, hours 2, days 1]
+    -- Unfortunately, searchTimeMaximumLowerBound does not work for the _full_ range; issues appear when the exponential offsets go past the bounds.
+    -- It does work quickly for several thousand years.
+    largeOffsets = [ days (-365000), days (-3650), days (-30), days (-1), days 0, days 1, days 30, days 3650, days 365000 ]
+    times = [baseTime `addRelTime` (largeOffset + smallOffset)
+              | largeOffset <- largeOffsets, smallOffset <- smallOffsets ]
+    brackets trueTime (beforeTime, afterTime) = do
+      require "beforeTime must be before trueTime" $ beforeTime <= trueTime
+      require "trueTime must be before afterTime" $ trueTime <= afterTime
+
 
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
