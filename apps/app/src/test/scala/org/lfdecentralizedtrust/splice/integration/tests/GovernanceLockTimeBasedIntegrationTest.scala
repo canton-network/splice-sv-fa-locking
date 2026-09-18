@@ -190,7 +190,7 @@ class GovernanceLockTimeBasedIntegrationTest
         },
       )
 
-      clue("the full withdraw returns the LockedAmulet to the owner as an expired lock") {
+      clue("the only LockedAmulet of the owner is the expired LockedAmulet of the vesting lock") {
         val now = getLedgerTime.toInstant
         val remainingLock =
           aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
