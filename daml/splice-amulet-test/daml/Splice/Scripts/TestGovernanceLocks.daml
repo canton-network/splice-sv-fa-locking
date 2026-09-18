@@ -203,9 +203,12 @@ unitTestSearchTimeMaximumLowerBound : Script ()
 unitTestSearchTimeMaximumLowerBound = do
   sequence_ $ testPasses <$> testCases
   where
-    testPasses (baseTime, trueTime) = do
-      brackets trueTime =<< searchTimeMaximumLowerBound (pure . (< trueTime)) baseTime None
-    testCases = [ (baseTime, trueTime) | baseTime <- times, trueTime <- times, trueTime > minBound, trueTime < maxBound ]
+    testPasses (baseTime, trueTime, granularity) = do
+      brackets trueTime =<< searchTimeMaximumLowerBound (pure . (< trueTime)) baseTime granularity
+    testCases = [ (baseTime, trueTime, granularity)
+                | baseTime <- times
+                , trueTime <- times, trueTime > minBound, trueTime < maxBound
+                , granularity <- granularities ]
     baseTime = datetime 2026 Jan 1 21 23 10
     smallOffsets = [microseconds 1, seconds 48, minutes 47, hours 2, days 1]
     -- Unfortunately, searchTimeMaximumLowerBound does not work for the _full_ range; issues appear when the exponential offsets go past the bounds.
@@ -213,6 +216,7 @@ unitTestSearchTimeMaximumLowerBound = do
     largeOffsets = [ days (-365000), days (-3650), days (-30), days (-1), days 0, days 1, days 30, days 3650, days 365000 ]
     times = [baseTime `addRelTime` (largeOffset + smallOffset)
               | largeOffset <- largeOffsets, smallOffset <- smallOffsets ]
+    granularities = [None, Some (days 1), Some (hours 6), Some (minutes 1), Some (seconds 30)]
     brackets trueTime (beforeTime, afterTime) = do
       require "beforeTime must be before trueTime" $ beforeTime <= trueTime
       require "trueTime must be before afterTime" $ trueTime <= afterTime
