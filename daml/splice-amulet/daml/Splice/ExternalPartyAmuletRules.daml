@@ -141,11 +141,11 @@ template ExternalPartyAmuletRules
         specification : GovernanceLockSpecification
         extraArgs : ExtraArgs
         owner : Party
-        createAt : Time
+        requestedAt : Time
         meta : Metadata
       controller owner
       do
-        (governanceLock, changeHolding) <- governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner createAt meta
+        (governanceLock, changeHolding) <- governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner requestedAt meta
         pure $ ExternalPartyAmuletRules_LockForGovernanceResult with
           governanceLock
           changeHolding

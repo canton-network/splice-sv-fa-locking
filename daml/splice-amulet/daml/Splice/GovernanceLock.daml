@@ -55,8 +55,8 @@ template GovernanceLock
     originalLockCid : Optional (ContractId GovernanceLock)
     requestedAt : Time  -- ^ Time of the request to create this lock.
     meta : Metadata
-      -- ^ Metadata provided upon creation of the lock, 
-      -- which can for example be used by apps and wallets to add extra 
+      -- ^ Metadata provided upon creation of the lock,
+      -- which can for example be used by apps and wallets to add extra
       -- info to help the user manage their locks.
   where
     signatory dso, owner
@@ -96,7 +96,7 @@ template GovernanceLock
       transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks cannot be rejected"
       transferInstruction_withdrawImpl self arg = do
           let V1.TransferInstruction_Withdraw {..} = arg
-          (_, unlockAt) <- searchTimeMaximumLowerBound isLedgerTimeGE requestedAt
+          (_, unlockAt) <- searchCurrentTimeBounds requestedAt
           -- Need to call the body of unlock directly to avoid double consumption.
           unlockResult <- governanceLock_unlockImpl (coerceContractId self) this None unlockAt extraArgs [owner]
           pure $ V1.TransferInstructionResult with
@@ -164,11 +164,28 @@ loopUntilRightA f a = do
 -- | Takes a reference time, that must be at or before the current ledger time,
 -- and returns a pair where the first is before the current time and the second is
 -- after.
-searchTimeMaximumLowerBound : forall m. Action m => (Time -> m Bool) -> Time -> m (Time, Time)
-searchTimeMaximumLowerBound isTimeGE basis = do
+searchCurrentTimeBounds : Time -> Update (Time, Time)
+searchCurrentTimeBounds
+  = searchCurrentTimeBounds_impl isLedgerTimeGE assertDeadlineExceeded assertWithinDeadline
+
+-- | Implementation for searchCurrentTimeBounds, taking explicit functions to
+-- allow running outside of Update.
+searchCurrentTimeBounds_impl
+ : forall m. Action m
+  => (Time -> m Bool)
+  -> (Text -> Time -> m ())
+  -> (Text -> Time -> m ())
+  -> Time
+  -> m (Time, Time)
+searchCurrentTimeBounds_impl isTimeGE assertDeadlineExceeded' assertWithinDeadline' basis = do
     afterBasis <- isTimeGE basis
     let seekF = if afterBasis then seekForward else seekBackward
-    loopUntilRightA binarySearch =<< loopUntilRightA seekF (1, basis)
+    bounds@(ubBefore, lbAfter) <- loopUntilRightA binarySearch =<< loopUntilRightA seekF (1, basis)
+    assertDeadlineExceeded' "ubBefore" ubBefore
+    assertDeadlineExceeded' "lbAfter - 1 day" (lbAfter `addRelTime` negate (days 1))
+    assertWithinDeadline' "lbAfter" lbAfter
+    assertWithinDeadline' "ubBefore + 1 day" (ubBefore `addRelTime` days 1)
+    pure bounds
   where
     binarySearch : (Int, Time) -> m (Either (Int, Time) (Time, Time))
     binarySearch (-1, basis) = do
@@ -252,7 +269,7 @@ template VestingLock
       transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks cannot be rejected"
       transferInstruction_withdrawImpl self arg = do
         let V1.TransferInstruction_Withdraw {..} = arg
-        (requestedAt, _) <- searchTimeMaximumLowerBound isLedgerTimeGE (endTime `addRelTime` (- vestingPeriod))
+        (requestedAt, _) <- searchCurrentTimeBounds (endTime `addRelTime` (- vestingPeriod))
         withdrawResult <- vestingLock_withdrawImpl (coerceContractId self) this requestedAt extraArgs [owner]
         case withdrawResult.vestingLock of
           Some vestingLock -> pure $ V1.TransferInstructionResult with
@@ -474,11 +491,11 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg = do
 
   specification <- specificationFromReceiverAndReason transfer.receiver transfer.meta
 
-  lockResult <- governanceLock_lockForGovernance_impl expectedAdmin transfer.amount transfer.inputHoldingCids specification extraArgs transfer.sender transfer.requestedAt transfer.meta
+  (lockCid, changeCid) <- governanceLock_lockForGovernance_impl expectedAdmin transfer.amount transfer.inputHoldingCids specification extraArgs transfer.sender transfer.requestedAt transfer.meta
   pure $ V1.TransferInstructionResult with
     output = V1.TransferInstructionResult_Pending with
-      transferInstructionCid = toInterfaceContractId $ fst lockResult
-    senderChangeCids = optionalToList $ toInterfaceContractId <$> snd lockResult
+      transferInstructionCid = toInterfaceContractId $ lockCid
+    senderChangeCids = optionalToList $ toInterfaceContractId <$> changeCid
     meta = emptyMetadata
 
 specificationFromReceiverAndReason : CanAssert m => Party -> Metadata -> m GovernanceLockSpecification

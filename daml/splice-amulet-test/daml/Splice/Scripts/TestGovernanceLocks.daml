@@ -203,8 +203,11 @@ unitTestSearchTimeMaximumLowerBound : Script ()
 unitTestSearchTimeMaximumLowerBound = do
   sequence_ $ testPasses <$> testCases
   where
+    assertDeadlineExceeded' now msg compare = require msg $ now > compare
+    assertWithinDeadline' now msg compare = require msg $ now <= compare
     testPasses (baseTime, trueTime) = do
-      brackets trueTime =<< searchTimeMaximumLowerBound (pure . (< trueTime)) baseTime
+      foundTimes <- searchCurrentTimeBounds_impl (pure . (< trueTime)) (assertDeadlineExceeded' trueTime) (assertWithinDeadline' trueTime) baseTime
+      brackets trueTime foundTimes
     testCases = [ (baseTime, trueTime) | baseTime <- times, trueTime <- times, trueTime > minBound, trueTime < maxBound ]
     baseTime = datetime 2026 Jan 1 21 23 10
     smallOffsets = [microseconds 1, seconds 48, minutes 47, hours 2, days 1]
@@ -301,7 +304,7 @@ governanceLockRawChoice' env owner amount specification = do
       specification
       extraArgs = emptyExtraArgs with context
       owner
-      createAt = now
+      requestedAt = now
       meta = emptyMetadata
   pure $ (.governanceLock) <$> result
 
