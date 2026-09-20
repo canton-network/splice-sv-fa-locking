@@ -34,7 +34,7 @@ class ExpireVestingLockTrigger(
 ) extends BatchedMultiDomainExpiredContractTrigger.Template[LockCid, Lock](
       svTaskContext.dsoStore.multiDomainAcsStore,
       svConfig.delegatelessAutomationExpiredVestingLockBatchSize,
-      svTaskContext.dsoStore.listExpiredVestingLocks,
+      svTaskContext.dsoStore.listExpiredVestingLocks(Some(ignoredPartiesStore)),
       splice.governancelock.VestingLock.COMPANION,
       svTaskContext.vettingLookupService,
       PackageIdResolver.Package.SpliceAmulet,
