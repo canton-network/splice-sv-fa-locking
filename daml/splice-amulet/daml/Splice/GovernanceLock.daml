@@ -12,7 +12,7 @@ import DA.Map qualified as Map
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils (toAnyValue, getFromContextU, issuingMiningRoundContextKey, openMiningRoundContextKey)
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
-import Splice.AmuletConfig (getGovernanceLockConfig, getDevelopmentFundManagerBlacklist)
+import Splice.AmuletConfig (defaultGovernanceLockFeaturedAppLockVestingDuration, defaultGovernanceLockMinimumLockAmount, defaultGovernanceLockSuperValidatorLockVestingDuration)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
@@ -70,7 +70,7 @@ template GovernanceLock
 
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
-        let vestingPeriod = vestingDurationFor specification.kind context
+        let vestingPeriod = vestingDurationFor specification.kind state
         let endTime = unlockAt `addRelTime` vestingPeriod
         let specification = governanceToVestingSpecification this.specification
         let vestingLockProperties = LockProperties with
@@ -257,9 +257,30 @@ template VestingLock
               vestingLock
               vested = toInterfaceContractId unlocked
 
+    choice VestingLock_DsoExpire : VestingLock_DsoExpireResult
+      -- ^ Garbage-collect a fully vested lock, so that SV nodes are not left
+      -- storing locks that nobody has bothered to withdraw.
+      --
+      -- There is nothing to do with `lockedAmulet`. `GovernanceLock_Unlock`
+      -- relocks it with `expiresAt = endTime`, so at the instant the vesting
+      -- period completes its time-lock has expired and wallets already treat it
+      -- as a liquid holding.
+      controller dso
+      do
+        assertDeadlineExceeded "VestingLock.endTime" endTime
+        pure VestingLock_DsoExpireResult
+
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO(canton-network/splice-sv-fa-locking#39): implement pending V1 transaction for the above, for backwards compatibility.
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
+
+data VestingLock_DsoExpireResult
+  = VestingLock_DsoExpireResult
+    -- ^
+    -- The `VestingLock_DsoExpireResult` choice doesn't return anything because
+    -- an SV trigger that cleans up expired vesting locks doesn't care to do
+    -- anything with the now unlocked `lockedAmulet`.
+  deriving (Serializable)
 
 data VestingLock_WithdrawResult
   = VestingLock_WithdrawResult with
@@ -322,14 +343,13 @@ describeVestingSpecification lock = "Unlocking from supporting " <> describeGove
 
 -- Lock properties for LockSubject types
 
--- TODO(canton-network/splice-sv-fa-locking#39): make configurable
-vestingDurationFor : GovernanceLockKind -> ExternalPartyTransferContext -> RelTime
-vestingDurationFor (GLK_FeaturedApp _) _ = days 60
-vestingDurationFor (GLK_SuperValidatorRightsOwner _) _ = days 365 + hours 6
+vestingDurationFor : GovernanceLockKind -> ExternalPartyConfigState -> RelTime
+vestingDurationFor (GLK_FeaturedApp _) state = fromOptional defaultGovernanceLockFeaturedAppLockVestingDuration state.governanceLockFeaturedAppLockVestingDuration
+vestingDurationFor (GLK_SuperValidatorRightsOwner _) state = fromOptional defaultGovernanceLockSuperValidatorLockVestingDuration state.governanceLockSuperValidatorLockVestingDuration
 
 requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
 requireMinimumLock context amount = do
-  require' ("locked amount", amount) isGreaterOrEqualR ("minimum governance lock amount", (getGovernanceLockConfig context.governanceLockConfig).minimumGovernanceLockAmount)
+  require' ("locked amount", amount) isGreaterOrEqualR ("minimum governance lock amount", fromOptional defaultGovernanceLockMinimumLockAmount context.governanceLockMinimumLockAmount)
 
 unfeaturedPaymentContextAndConfigFromChoiceContext : Party -> ChoiceContext -> Update (ExternalPartyTransferContext, ExternalPartyConfigState)
 unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
