@@ -55,10 +55,7 @@ setupVestingLock = do
   _ <- tap app alice (testVestingAmount + 1000.0)
 
   -- Reach the `VestingLock` the way production does:
-  -- `ExternalPartyAmuletRules_LockForGovernance` -> `GovernanceLock_Unlock`,
-  -- re-using the helpers from `Splice.Scripts.TestGovernanceLocks`. They take an
-  -- `AmuletRegistryV2.AmuletRegistry`, which `AmuletApp` already carries, rather
-  -- than the `TestEnv` of `splice-amulet-test` (which has no `DsoRules`).
+  -- `ExternalPartyAmuletRules_LockForGovernance` -> `GovernanceLock_Unlock`
   let registry = TSU.upcast app.registry : AmuletRegistryV2.AmuletRegistry
 
   governanceLockCid <- governanceLockRawChoice registry alice.primaryParty testVestingAmount testLockSpecification
@@ -68,14 +65,21 @@ setupVestingLock = do
   -- `unlockAmount = None` unlocks the full amount, so no `GovernanceLock` remains.
   (vestingLockCid, None) <- governanceUnlockRawChoice registry governanceLockCid None unlockAt [alice.primaryParty]
 
+  [(lockedAmuletCid, lockedAmulet)] <- query @LockedAmulet alice.primaryParty
+
+  let expectedVestingLock = VestingLock with
+        dso = app.dso
+        owner = alice.primaryParty
+        lockedAmulet = lockedAmuletCid
+        vestingPeriod = testVestingPeriod
+        endTime = unlockAt `addRelTime` testVestingPeriod
+        vestingAmount = testVestingAmount
+        specification = governanceToVestingSpecification testLockSpecification
+
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
-  vestingLock.vestingAmount === testVestingAmount
-  vestingLock.vestingPeriod === testVestingPeriod
-  vestingLock.endTime === unlockAt `addRelTime` testVestingPeriod
+  vestingLock === expectedVestingLock
 
   -- `GovernanceLock_Unlock` relocks the amulet with `expiresAt = endTime`.
-  let lockedAmuletCid = vestingLock.lockedAmulet
-  Some lockedAmulet <- queryContractId alice.primaryParty lockedAmuletCid
   lockedAmulet.lock.expiresAt === vestingLock.endTime
 
   pure VestingLockEnv with
