@@ -1,0 +1,34 @@
+module Splice.Scripts.UnitTests.GovernanceLock where
+
+import DA.Date
+import DA.Foldable
+import DA.Time
+
+import Daml.Script
+
+import Splice.GovernanceLock
+import Splice.TokenStandard.Utils
+
+unitTestSearchCurrentTimeBounds : Script ()
+unitTestSearchCurrentTimeBounds = do
+  sequence_ $ testPasses <$> testCases
+  where
+    assertDeadlineExceeded' now msg compare = require msg $ now > compare
+    assertWithinDeadline' now msg compare = require msg $ now <= compare
+    testPasses (baseTime, trueTime) = do
+      foundTimes <- searchCurrentTimeBounds_impl (pure . (< trueTime)) (assertDeadlineExceeded' trueTime) (assertWithinDeadline' trueTime) baseTime
+      brackets trueTime foundTimes
+    testCases = [ (baseTime, trueTime) | baseTime <- times, trueTime <- times, trueTime > minBound, trueTime < maxBound ]
+    baseTime = datetime 2026 Jan 1 21 23 10
+    smallOffsets = microseconds 0 :: [ t | mag <- [microseconds 1, seconds 48, minutes 47, hours 2, days 1], t <- [negate mag, mag]]
+    -- Unfortunately, searchTimeMaximumLowerBound does not work for the _full_ range; issues appear when the exponential offsets go past the bounds.
+    -- It does work quickly for several thousand years.
+    largeOffsets = days 0 :: [ days n | mag <- [365000, 3650, 30, 1], n <- [negate mag, mag]]
+    times = [baseTime `addRelTime` (largeOffset + smallOffset)
+              | largeOffset <- largeOffsets, smallOffset <- smallOffsets ]
+    brackets trueTime (beforeTime, afterTime) = do
+      require "beforeTime must be before trueTime" $ trueTime > beforeTime
+      require "trueTime must be before afterTime" $ trueTime <= afterTime
+      require "one day after beforeTime must be after trueTime" $ trueTime <= (beforeTime `addRelTime` days 1)
+      require "one day before afterTime must be before trueTime" $ trueTime > (beforeTime `addRelTime` days (-1))
+
