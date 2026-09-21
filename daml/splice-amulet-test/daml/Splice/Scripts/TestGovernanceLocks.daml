@@ -4,7 +4,6 @@
 module Splice.Scripts.TestGovernanceLocks where
 
 import DA.Action (unless, when)
-import DA.List qualified as L
 import DA.Optional (isSome, isNone)
 import DA.TextMap qualified as TM
 import DA.Time
@@ -238,8 +237,6 @@ testTopUpWithSvRewardCouponsHappyPath = do
   svRewardAlice1 <- createSvRewardCoupon provider1 alice aliceWeight
   svRewardAlice2 <- createSvRewardCoupon provider1 alice aliceWeight
   svRewardAlice3 <- createSvRewardCoupon provider1 alice aliceWeight
-  (Some svRewardAlice1') <- queryContractId alice svRewardAlice1
-  debugRaw $ "lol" <> (show svRewardAlice1')
 
   -- Advance until issuing mining round 0 is opened.
   AmuletRegistryV2.runNextIssuance dso 0.5
@@ -248,7 +245,6 @@ testTopUpWithSvRewardCouponsHappyPath = do
   [(issuingMiningRoundCid, _)] <- queryFilter @IssuingMiningRound dso (\r -> r.round == Round 0)
   [(openRoundCid, _)] <- queryFilter @OpenMiningRound dso (\r -> r.round == Round 3)
   (Some issuingMiningRound) <- queryContractId dso issuingMiningRoundCid
-  debugRaw $ "issuingMiningRound: " <> show issuingMiningRound
 
   issuingMiningRoundDisclosure <- queryDisclosure' dso issuingMiningRoundCid
   openRoundDisclosure <- queryDisclosure' dso openRoundCid
@@ -262,18 +258,25 @@ testTopUpWithSvRewardCouponsHappyPath = do
             [ (issuingMiningRoundContextKey, AV_ContractId $ toAnyContractId issuingMiningRoundCid)
             , (openMiningRoundContextKey, AV_ContractId $ toAnyContractId openRoundCid)
             ]
-  let expectedAmount = aliceLockAmount + (intToDecimal svRewardAlice1'.weight) * issuingMiningRound.issuancePerSvRewardCoupon
-  (aliceLock', Some changeHolding) <-
-    governanceLockTopUpRawChoice env aliceLock [] None 0.0 [svRewardAlice1] 1.0 alice (issuingMiningRoundDisclosure <> openRoundDisclosure) (Some extraArgs)
-  (Some aliceLock'') <- queryContractId alice aliceLock'
-  require "Top Up via SvRewardCoupon should be the expected amount" $ expectedAmount == aliceLock''.amount
 
--- FIXME: Throw these checks in a nice function
---  let expectedAmount = (aliceLockAmount + (intToDecimal svRewardAlice1'.weight) * issuingMiningRound.issuancePerSvRewardCoupon) * 2.0
---  (aliceLock', Some changeHolding) <-
---    governanceLockTopUpRawChoice registry aliceLock [] None 0.0 [svRewardAlice2, svRewardAlice3] 0.4 alice (issuingMiningRoundDisclosure <> openRoundDisclosure) (Some extraArgs)
-  --(Some aliceLock'') <- queryContractId alice aliceLock'
-  --require "Top Up via SvRewardCoupon should be the expected amount" $ expectedAmount == aliceLock''.amount
+  -- Top up with 1 SvRewardCoupon
+  let svRewardCouponPercentage = 1.0
+      (expectedAmount, _) = calculateSvRewardCouponAmounts aliceLockAmount [aliceWeight] issuingMiningRound.issuancePerSvRewardCoupon svRewardCouponPercentage
+  -- Should produce no change since svRewardCoupons are the only input and 100 percent is to be topped up
+  (newAliceLock, None) <-
+    governanceLockTopUpRawChoice env aliceLock [] (Some []) 0.0 [svRewardAlice1] svRewardCouponPercentage alice (issuingMiningRoundDisclosure <> openRoundDisclosure) (Some extraArgs)
+  newAliceLockAmount <- checkExpectedAmountFromSvRewardCoupon alice newAliceLock expectedAmount
+
+  -- Top up with another 2 SvRewardCoupons, using the last modified governanceLock
+  let svRewardCouponPercentage = 0.4
+      (expectedAmount, expectedChange) = calculateSvRewardCouponAmounts newAliceLockAmount [aliceWeight, aliceWeight] issuingMiningRound.issuancePerSvRewardCoupon svRewardCouponPercentage
+  (newAliceLock2, Some changeHolding) <-
+    governanceLockTopUpRawChoice env newAliceLock [] (Some []) 0.0 [svRewardAlice2, svRewardAlice3] svRewardCouponPercentage alice (issuingMiningRoundDisclosure <> openRoundDisclosure) (Some extraArgs)
+  checkExpectedAmountFromSvRewardCoupon alice newAliceLock2 expectedAmount
+  (Some changeHolding') <- queryContractId alice changeHolding
+  let changeHoldingAmount = changeHolding'.amount.initialAmount
+  require ("Top up via SvRewardCoupons should produce change, expected: " <> show changeHoldingAmount <> ", actual: " <> show expectedChange)
+    $ changeHoldingAmount == expectedChange
 
   pure ()
 
@@ -281,7 +284,7 @@ testTopUpNegativePath : Script ()
 testTopUpNegativePath = do
   env@TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
-
+      dso = env.instrId.admin
   let someSvSpec = GovernanceLockSpecification with
         kind = GLK_SuperValidatorRightsOwner "TestSV"
 
@@ -309,14 +312,6 @@ testTopUpNegativePath = do
         svRewardCouponPercentage = 0.0
         extraArgs = emptyExtraArgs with context
 
-  -- Test top up when the amount is 0.0 and holdingInputs are supplied (None gives all holdings under the user)
---  actionMustFail (expectMessageContains "The requirement 'The arguments to the GovernanceLock_MergeAndTopUp must be valid' was not met.") $
---    governanceLockTopUpRawChoice' registry aliceLock [] None 0.0 [] 0.0 alice
-
-  -- Test top up when the amount is positive and there are no holdingInputs supplied
---  actionMustFail (expectMessageContains "The requirement 'The arguments to the GovernanceLock_MergeAndTopUp must be valid' was not met.") $
---    governanceLockTopUpRawChoice' registry aliceLock [] (Some []) 3000.0 [] 0.0 alice
-
   -- Test top up when the lock it is merging with has differnt attributes
   aliceLock2 <- governanceLockRawChoice registry alice 10000.0
     $ GovernanceLockSpecification with kind = GLK_SuperValidatorRightsOwner "FakeSV"
@@ -324,10 +319,44 @@ testTopUpNegativePath = do
   actionMustFail (expectMessageContains "'governanceLock.specification' is not equal to 'expected value'") $
     governanceLockTopUpRawChoice' env aliceLock [aliceLock2] (Some []) 0.0 [] 0.0 alice mempty None
 
-  -- Test top up choice when all inputs are empty or 0.0
---  actionMustFail (expectMessageContains "The requirement 'The arguments to the GovernanceLock_MergeAndTopUp must be valid' was not met.") $
---    governanceLockTopUpRawChoice' env aliceLock [] (Some []) 0.0 [] 0.0 alice
-  -- FIXME: Add negative SvRewardCoupon test here
+  -- Test top up with an illegal SvRewardCouponPercentage
+  let aliceWeight = 10 * 100
+      aliceLockAmount = 10000.0
+  aliceLock <- governanceLockRawChoice registry alice aliceLockAmount someSvSpec
+  checkLockedHolding alice aliceLock aliceLockAmount
+  svRewardAlice1 <- submit (actAs dso) $ createCmd SvRewardCoupon with
+        dso
+        sv = provider1
+        beneficiary = alice
+        weight = aliceWeight
+        round = Round 0
+
+  -- Advance until issuing mining round 0 is opened.
+  AmuletRegistryV2.runNextIssuance dso 0.5
+  AmuletRegistryV2.runNextIssuance dso 0.5
+
+  [(issuingMiningRoundCid, _)] <- queryFilter @IssuingMiningRound dso (\r -> r.round == Round 0)
+  [(openRoundCid, _)] <- queryFilter @OpenMiningRound dso (\r -> r.round == Round 3)
+
+  openApiChoiceContext <- AmuletRegistryV2.getExternalPartyConfigStateContext registry
+  let context = openApiChoiceContext.choiceContext
+  let extraArgs = ExtraArgs with
+        meta = emptyMetadata
+        context = context with
+          values = TM.union context.values $ TM.fromList
+            [ (issuingMiningRoundContextKey, AV_ContractId $ toAnyContractId issuingMiningRoundCid)
+            , (openMiningRoundContextKey, AV_ContractId $ toAnyContractId openRoundCid)
+            ]
+
+  actionMustFail (expectMessageContains "'svRewardCouponPercentage' is greater than 'one'.\nsvRewardCouponPercentage: 2.0\none: 1.0") $
+    submitWithTransferContext registry (actAs alice)
+      $ \_ -> exerciseCmd aliceLock GovernanceLock_MergeAndTopUp with
+        topUpAmount = 0.0
+        holdingInputs = []
+        lockInputs = []
+        svRewardCouponInputs = [svRewardAlice1]
+        svRewardCouponPercentage = 2.0
+        extraArgs
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
@@ -352,6 +381,27 @@ checkLockedHolding
 checkLockedHolding p lockCid amount = do
   Some lock <- queryContractId p lockCid
   checkHolding' p lock.lockedAmulet amount
+
+checkExpectedAmountFromSvRewardCoupon : Party -> ContractId GovernanceLock -> Decimal -> Script Decimal
+checkExpectedAmountFromSvRewardCoupon p lockCid expectedAmount = do
+  optLock <- queryContractId p lockCid
+  case optLock of
+    None -> fail $ "Couldn't find lock with cid: " <> show lockCid
+    Some lock -> do
+      require
+        ( "Top Up via SvRewardCoupon should be the expected amount, expected: "
+        <> show expectedAmount
+        <> ", actual: "
+        <> show lock.amount
+        ) $ expectedAmount == lock.amount
+      pure lock.amount
+
+calculateSvRewardCouponAmounts : Decimal -> [Int] -> Decimal -> Decimal -> (Decimal, Decimal)
+calculateSvRewardCouponAmounts lockAmount svWeights issuancePerSvRewardCoupon svRewardCouponPercentage =
+  let svWeightsSummed : Decimal = sum $ intToDecimal <$> svWeights
+      expectedAmount = lockAmount + (svWeightsSummed * issuancePerSvRewardCoupon * svRewardCouponPercentage)
+      expectedChange = svWeightsSummed * issuancePerSvRewardCoupon * (1.0 - svRewardCouponPercentage)
+  in (expectedAmount, expectedChange)
 
 
 -- | a couple helpers to make the raw choice implementations easier to write
@@ -459,7 +509,6 @@ governanceLockTopUpRawChoice' env cid lockInputs optHoldingInputs topUpAmount sv
     -- None should just grab all from wallet for user
     None -> WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
     Some holdingInputs -> pure holdingInputs
-  let dso = env.instrId.admin
   result : Either SubmitError GovernanceLock_MergeAndTopUpResult <- submitWithTransferContext env.registriesEnv.amuletV2 (actAs [owner] <> discloseMany' disc) $
     \context -> exerciseCmd cid GovernanceLock_MergeAndTopUp with
                 topUpAmount

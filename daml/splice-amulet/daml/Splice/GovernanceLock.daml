@@ -20,7 +20,6 @@ import Splice.Expiry
 import Splice.Fees (relTimeToSeconds)
 import Splice.ExternalPartyConfigState
 import Splice.Round
-import Splice.Schedule
 import Splice.TokenStandard.Utils hiding (require)
 import Splice.Types
 import Splice.Util
@@ -118,7 +117,8 @@ template GovernanceLock
           -- ^ Sv Reward Coupon inputs used to fund the top-up.
         svRewardCouponPercentage : Decimal
           -- ^ Percentage (specified as a number between 0.0 and 1.0) of the sv reward coupons
-          -- minting allowance to top-up a governance lock with.
+          -- minting allowance to top-up a governance lock with. Whatever percentage doesn't go into
+          -- funding the top up, comes back as loose change.
         extraArgs : ExtraArgs
       controller owner
       do
@@ -126,41 +126,15 @@ template GovernanceLock
         require' ("svRewardCouponPercentage", svRewardCouponPercentage) isGreaterOrEqualR ("zero", 0.0)
         require' ("svRewardCouponPercentage", svRewardCouponPercentage) isLessOrEqualR ("one", 1.0)
         let forOwner = ForOwner with dso; owner
-            forDso = ForDso with dso
 
         (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
-        -- FIXME: temp case
-        (optChangeAmuletFromSvRewardCoupon, svRewardMintAllowance) <- if null svRewardCouponInputs
-          then pure (None, 0.0) -- no coupons to mint in locked form
-          else do
-            (currentIssuingMiningRoundCid, openMiningRoundCid) <- getMiningRoundsFromChoiceContext dso extraArgs.context
-            let currentIssuingMiningRounds = [currentIssuingMiningRoundCid]
-            -- temp toAnyValue
-            (issuingMiningRoundsMap, issuingMiningRoundCidsMap) <- fetchAndValidateIssuingMiningRounds (toAnyValue <$> currentIssuingMiningRounds) forDso
-            svRewardMintAllowance <- computeSvRewardMintingAllowance issuingMiningRoundsMap forOwner svRewardCouponInputs svRewardCouponPercentage
-
-            -- All this stuff temporarily here, and will need to be cleaned up:
-            let transferContext = TransferContext with
-                  openMiningRound = openMiningRoundCid
-                  issuingMiningRounds = issuingMiningRoundCidsMap
-                  validatorRights = Map.empty
-                  featuredAppRight = None
-            let transfer = Splice.AmuletRules.Transfer with
-                  sender = owner
-                  provider = owner -- the sender is serving as its own "app provider"
-                  outputs = []
-                  inputs = fmap InputSvRewardCoupon svRewardCouponInputs
-                  beneficiaries = None
-            let rewardsConfig = RewardsIssuanceConfig with
-                  issueAppRewards = False
-                  issueValidatorRewards = False
-
-            result <- executeTransfer (toInterfaceContractId context.externalPartyConfigState) rewardsConfig transferContext dso [] transfer
---            let [lockedAmuletFromSvCouponRewards] = (\(TransferResultLockedAmulet lockedAmulet) -> lockedAmulet) <$> result.createdAmulets
-            let changeFromSvCouponRewards = result.senderChangeAmulet
-            pure (InputAmulet <$> changeFromSvCouponRewards, svRewardMintAllowance)
-
+        (optChangeAmuletFromSvRewardCoupon, svRewardMintAllowance) <- getSvRewardInputAmuletAndChange
+          svRewardCouponInputs
+          svRewardCouponPercentage
+          extraArgs
+          forOwner
+          context
 
         -- Unlock original governanceLock
         (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmulet --lockedAmulet
@@ -359,8 +333,8 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
           featuredAppRight = None
        , configState )
 
-getMiningRoundsFromChoiceContext : Party -> ChoiceContext -> Update (ContractId IssuingMiningRound, ContractId OpenMiningRound)
-getMiningRoundsFromChoiceContext dso choiceContext = do
+getMiningRoundsFromChoiceContext : ChoiceContext -> Update (ContractId IssuingMiningRound, ContractId OpenMiningRound)
+getMiningRoundsFromChoiceContext choiceContext = do
   issuingMiningRoundCid <- getFromContextU @(ContractId IssuingMiningRound) choiceContext issuingMiningRoundContextKey
   openMiningRoundCid <- getFromContextU @(ContractId OpenMiningRound) choiceContext openMiningRoundContextKey
   pure (issuingMiningRoundCid, openMiningRoundCid)
@@ -465,3 +439,37 @@ computeSvRewardMintingAllowance issuingMiningRoundMap forOwner svRewardCouponCid
 
     let svRewardAvailableAmount = (intToDecimal svRewardCoupon.weight) * issuingMiningRound.issuancePerSvRewardCoupon
     pure $ svRewardAvailableAmount * svRewardCouponPercentage
+
+getSvRewardInputAmuletAndChange
+  : [ContractId SvRewardCoupon]
+  -> Decimal
+  -> ExtraArgs
+  -> ForOwner
+  -> ExternalPartyTransferContext
+  -> Update (Optional TransferInput, Decimal)
+getSvRewardInputAmuletAndChange [] _ _ _ _ = pure (None, 0.0)
+getSvRewardInputAmuletAndChange svRewardCouponInputs svRewardCouponPercentage extraArgs forOwner context = do
+  let dso = forOwner.dso
+  (currentIssuingMiningRoundCid, openMiningRoundCid) <- getMiningRoundsFromChoiceContext extraArgs.context
+  (issuingMiningRoundsMap, issuingMiningRoundCidsMap) <-
+    fetchAndValidateIssuingMiningRounds (toAnyValue <$> [currentIssuingMiningRoundCid]) $ ForDso with dso
+  svRewardMintAllowance <- computeSvRewardMintingAllowance issuingMiningRoundsMap forOwner svRewardCouponInputs svRewardCouponPercentage
+
+  let transferContext = TransferContext with
+        openMiningRound = openMiningRoundCid
+        issuingMiningRounds = issuingMiningRoundCidsMap
+        validatorRights = Map.empty
+        featuredAppRight = None
+      transfer = Splice.AmuletRules.Transfer with
+        sender = forOwner.owner
+        provider = forOwner.owner -- the sender is serving as its own "app provider"
+        outputs = []
+        inputs = fmap InputSvRewardCoupon svRewardCouponInputs
+        beneficiaries = None
+      rewardsConfig = RewardsIssuanceConfig with
+        issueAppRewards = False
+        issueValidatorRewards = False
+
+  result <- executeTransfer (toInterfaceContractId context.externalPartyConfigState) rewardsConfig transferContext dso [] transfer
+  let changeFromSvCouponRewards = result.senderChangeAmulet
+  pure (InputAmulet <$> changeFromSvCouponRewards, svRewardMintAllowance)
