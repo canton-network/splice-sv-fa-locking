@@ -5,17 +5,16 @@ package org.lfdecentralizedtrust.splice.integration.tests
 
 import com.daml.ledger.javaapi.data.Identifier
 import com.digitalasset.canton.HasExecutionContext
-import com.digitalasset.canton.topology.PartyId
-import org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime
+import com.digitalasset.canton.config.NonNegativeFiniteDuration
+import com.digitalasset.canton.config.RequireTypes.NonNegativeNumeric
+import com.digitalasset.canton.logging.SuppressionRule
+import org.slf4j.event.Level
 import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet.{Amulet, LockedAmulet}
-import org.lfdecentralizedtrust.splice.codegen.java.splice.fees.{ExpiringAmount, RatePerRound}
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock.{
+  GovernanceLockSpecification,
   VestingLock,
-  VestingLockSpecification,
 }
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock.governancelockkind.GLK_SuperValidatorRightsOwner
-import org.lfdecentralizedtrust.splice.codegen.java.splice.expiry.TimeLock
-import org.lfdecentralizedtrust.splice.codegen.java.splice.types.Round
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms.{
   ConfigurableApp,
@@ -31,11 +30,14 @@ import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.{
   ExpiredAmuletTrigger,
   ExpiredLockedAmuletTrigger,
 }
-import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, TriggerTestUtil, WalletTestUtil}
+import org.lfdecentralizedtrust.splice.util.{
+  GovernanceLockTestUtil,
+  TimeTestUtil,
+  TriggerTestUtil,
+  WalletTestUtil,
+}
 
-import java.time.{Duration, Instant}
-import scala.jdk.CollectionConverters.*
-import scala.jdk.OptionConverters.*
+import java.time.Duration
 
 /** Covers `ExpireVestingLockTrigger`: batched archival of fully vested
   * `VestingLock`s.
@@ -55,24 +57,45 @@ class ExpireVestingLockTimeBasedIntegrationTest
     with HasExecutionContext
     with WalletTestUtil
     with TimeTestUtil
-    with TriggerTestUtil {
+    with TriggerTestUtil
+    with GovernanceLockTestUtil {
 
-  // We create the `LockedAmulet` wrapped by each `VestingLock` directly as a
-  // root contract, so the token-standard CLI sees a `Holding` appear without an
-  // originating standard choice. This breaks
-  // `TokenStandardCliSanityCheckPlugin`. Here, we exclude `LockedAmulet` from
-  // the "token standard sanity check".
+  // The token-standard CLI knows nothing about the governance-lock choices:
+  // `txparse` labels an event by the nearest token-standard choice above it,
+  // and neither `ExternalPartyAmuletRules_LockForGovernance` nor
+  // `GovernanceLock_Unlock` is one, so the `Amulet`/`LockedAmulet` events they
+  // produce come out as `"parentChoice": "none (root node)"` and `--strict`
+  // rejects them.
   override protected lazy val sanityChecksIgnoredRootCreates: Seq[Identifier] = Seq(
-    LockedAmulet.TEMPLATE_ID_WITH_PACKAGE_ID
+    Amulet.TEMPLATE_ID_WITH_PACKAGE_ID,
+    LockedAmulet.TEMPLATE_ID_WITH_PACKAGE_ID,
   )
 
   private val batchSize = 2
   private val numLocks = 3
-  private val vestingDuration = Duration.ofHours(1)
+
+  // Sim-time budget, all of it inside one 10-minute round tick
+  // (`SpliceUtil.defaultInitialTickDuration`):
+  //   t0            fixture built
+  //   t0 + 1 min    unlockAt (must be strictly in the future)
+  //   t0 + 6 min    endTime  (= unlockAt + vestingDuration, taken from the config below)
+  //   t0 + 7 min    after advanceTime (strictly past endTime)
+  // Advances spanning many round ticks make the round automation work through a backlog that
+  // everything afterwards then races; see canton-network/splice#7223.
+  private val unlockDelay = Duration.ofMinutes(1)
+  private val vestingDuration = Duration.ofMinutes(5)
+  private val totalAdvance = Duration.ofMinutes(7)
+
+  // Enough to fund all locks plus fees out of a single tap.
+  private val lockAmount = BigDecimal(10.0)
+  private val tapAmount = BigDecimal(100.0)
 
   override def environmentDefinition: SpliceEnvironmentDefinition =
     EnvironmentDefinition
       .simpleTopology1SvWithSimTime(this.getClass.getSimpleName)
+      // Keeps `CollectRewardsAndMergeAmuletsTrigger` from merging the tapped `Amulet`s in the
+      // background: they are the `inputs` to `ExternalPartyAmuletRules_LockForGovernance`, and a
+      // merge landing between listing and submitting would archive them under us.
       .withoutAutomaticRewardsCollectionAndAmuletMerging
       // The trigger under test is driven explicitly via `runOnce()`, and we assert that the
       // `LockedAmulet` survives `VestingLock` expiry, so the amulet expiry triggers stay paused.
@@ -88,25 +111,92 @@ class ExpireVestingLockTimeBasedIntegrationTest
           _.copy(delegatelessAutomationExpiredVestingLockBatchSize = batchSize)
         )(config)
       )
+      // Makes the governance lock test-sized. Without this the vesting period would be the SV
+      // default of 365 days and each lock would have to clear a 10 000 CC minimum.
+      .addConfigTransforms((_, config) =>
+        ConfigTransforms.updateAllSvAppFoundDsoConfigs_(
+          _.copy(
+            initialGovernanceLockSuperValidatorLockVestingDuration =
+              Some(NonNegativeFiniteDuration.ofMillis(vestingDuration.toMillis)),
+            initialGovernanceLockMinimumLockAmount =
+              Some(NonNegativeNumeric.tryCreate(BigDecimal(1))),
+          )
+        )(config)
+      )
 
   "ExpireVestingLockTrigger archives fully vested VestingLocks in batches" in { implicit env =>
     val sv1UserId = sv1Backend.config.ledgerApiUser
     val sv1Party = sv1Backend.getDsoInfo().svParty
+    val participant = sv1Backend.participantClientWithAdminToken
 
-    val endTime = getLedgerTime.toInstant.plus(vestingDuration)
+    val unlockAt = getLedgerTime.toInstant.plus(unlockDelay)
+    val endTime = unlockAt.plus(vestingDuration)
 
-    val (lockedAmuletCids, _) = actAndCheck(
-      s"Create $numLocks LockedAmulet/VestingLock pairs owned by sv1, vesting until $endTime", {
-        (1 to numLocks).map { _ =>
-          val lockedAmuletCid = createLockedAmuletForVesting(sv1UserId, sv1Party, endTime)
-          createVestingLock(sv1UserId, sv1Party, lockedAmuletCid, endTime)
-          lockedAmuletCid
+    // `lockForGovernance` calls `listUnlockedHoldingCids` and feeds them into
+    // the `ExternalPartyAmuletRules_LockForGovernance` choice. Thus, the tap
+    // has to have landed before the first lock is submitted.
+    actAndCheck(
+      s"Tap $tapAmount CC for sv1",
+      sv1WalletClient.tap(walletAmuletToUsd(tapAmount)),
+    )(
+      "the tapped amulet is visible",
+      _ => listUnlockedHoldingCids(participant, sv1Party) should have length 1,
+    )
+
+    // Similar problem to what is described in `sanityChecksIgnoredRootCreates`
+    // comment above but originating from the `UserWalletTxLogParser`.
+    // `sv1`'s SV party is also a wallet party, so a `UserWalletService` gets
+    // instantiated for this party with `DbUserWalletStore`
+    // with `UserWalletTxLogParser`. And the parser runs over the transactions
+    // created by this test. But `apps/wallet` has no governance-lock handling
+    // at all. So, it logs an "Unexpected amulet archive event" error because
+    // `executeExternalPartyTransfer` function is used inside `GovernanceLock`
+    // rather than a known choice exercise like `AmuletRules_Transfer`. So the
+    // parser never sees a node it recognizes.
+    val (vestingLocks, _) = loggerFactory.assertEventuallyLogsSeq(
+      SuppressionRule.LevelAndAbove(Level.ERROR)
+    )(
+      actAndCheck(
+        s"Lock and unlock $numLocks times, vesting until $endTime", {
+          (1 to numLocks).map { _ =>
+            val governanceLock = lockForGovernance(
+              participant,
+              sv1UserId,
+              sv1Party,
+              lockAmount,
+              new GovernanceLockSpecification(new GLK_SuperValidatorRightsOwner(sv1Name)),
+            )
+            unlockGovernanceLock(
+              participant,
+              sv1UserId,
+              governanceLock,
+              unlockAmount = None,
+              unlockAt = unlockAt,
+              actors = Seq(sv1Party),
+            )._1
+          }
+        },
+      )(
+        "SvDsoStore ingests all VestingLocks",
+        _ => listVestingLocks should have length numLocks.toLong,
+      ),
+      logs => {
+        logs should have length (2 * numLocks).toLong
+        forAll(logs) { line =>
+          line.errorMessage should include("Unexpected amulet archive event")
+          line.loggerName should include("DbMultiDomainAcsStore")
         }
       },
-    )(
-      "SvDsoStore ingests all VestingLocks",
-      _ => listVestingLocks should have length numLocks.toLong,
     )
+
+    // `GovernanceLock_Unlock` relocks, so the `LockedAmulet` cids are the ones the `VestingLock`s
+    // point at, not anything a create handed back.
+    val lockedAmuletCids = clue("Read the relocked LockedAmulets off the VestingLocks") {
+      val locks = listVestingLocks
+      locks.map(_.payload.lockedAmulet.contractId).toSet
+    }
+    lockedAmuletCids should have size numLocks.toLong
+    vestingLocks should have length numLocks.toLong
 
     clue("The locks are not yet expired, so the trigger has no work") {
       expireVestingLockTrigger.runOnce().futureValue shouldBe false
@@ -114,8 +204,8 @@ class ExpireVestingLockTimeBasedIntegrationTest
     }
 
     // `listExpiredFromPayloadExpiry` uses a strict `expires_at < now`, so we step strictly past
-    // `endTime` rather than exactly onto it.
-    advanceTime(vestingDuration.plus(Duration.ofMinutes(1)))
+    // `endTime` rather than exactly onto it. A single advance, kept under one round tick.
+    advanceTime(totalAdvance)
 
     clue("The locks stay put while the trigger is paused") {
       listVestingLocks should have length numLocks.toLong
@@ -145,7 +235,7 @@ class ExpireVestingLockTimeBasedIntegrationTest
         .futureValue
         .map(_.contractId.contractId)
         .toSet
-      lockedAmuletCids.map(_.contractId).toSet.subsetOf(remaining) shouldBe true
+      lockedAmuletCids.subsetOf(remaining) shouldBe true
     }
   }
 
@@ -161,69 +251,4 @@ class ExpireVestingLockTimeBasedIntegrationTest
     sv1Backend.appState.dsoStore.multiDomainAcsStore
       .listContracts(VestingLock.COMPANION)
       .futureValue
-
-  /** The `LockedAmulet` a `VestingLock` wraps is relocked by `GovernanceLock_Unlock` with
-    * `expiresAt = endTime`, so we mirror that here rather than using the generic
-    * `WalletTestUtil.createLockedAmulet` helper, which takes a relative duration.
-    */
-  private def createLockedAmuletForVesting(
-      userId: String,
-      owner: PartyId,
-      endTime: Instant,
-  )(implicit env: SpliceTestConsoleEnvironment): LockedAmulet.ContractId = {
-    val amulet = new Amulet(
-      dsoParty.toProtoPrimitive,
-      owner.toProtoPrimitive,
-      new ExpiringAmount(
-        BigDecimal(100.0).bigDecimal,
-        new Round(0L),
-        // Must be non-zero: `SvDsoStore`'s `LockedAmulet` filter derives the round of expiry by
-        // dividing the amount by this rate, and a zero rate throws out of the ingestion loop.
-        new RatePerRound(BigDecimal(0.01).bigDecimal),
-      ),
-    )
-    val lockedAmulet = new LockedAmulet(
-      amulet,
-      new TimeLock(
-        Seq(dsoParty.toProtoPrimitive).asJava,
-        endTime,
-        None.toJava,
-      ),
-    )
-    sv1Backend.participantClientWithAdminToken.ledger_api_extensions.commands
-      .submitWithResult(
-        userId = userId,
-        actAs = Seq(dsoParty, owner),
-        readAs = Seq.empty,
-        update = lockedAmulet.create(),
-      )
-      .contractId
-  }
-
-  private def createVestingLock(
-      userId: String,
-      owner: PartyId,
-      lockedAmulet: LockedAmulet.ContractId,
-      endTime: Instant,
-  )(implicit env: SpliceTestConsoleEnvironment): VestingLock.ContractId = {
-    val vestingLock = new VestingLock(
-      dsoParty.toProtoPrimitive,
-      owner.toProtoPrimitive,
-      lockedAmulet,
-      new RelTime(vestingDuration.toMillis * 1000L),
-      endTime,
-      BigDecimal(100.0).bigDecimal,
-      new VestingLockSpecification(
-        new GLK_SuperValidatorRightsOwner(sv1Name)
-      ),
-    )
-    sv1Backend.participantClientWithAdminToken.ledger_api_extensions.commands
-      .submitWithResult(
-        userId = userId,
-        actAs = Seq(dsoParty, owner),
-        readAs = Seq.empty,
-        update = vestingLock.create(),
-      )
-      .contractId
-  }
 }
