@@ -490,18 +490,6 @@ data CompatGovernanceLockOperations = CompatGovernanceLockOperations with
     -> Party
     -> Script (Optional (ContractId VestingLock))
 
-  {-
-fullToCompatLockOperations : GovernanceLockOperations -> CompatGovernanceLockOperations
-fullToCompatLockOperations ops = CompatGovernanceLockOperations with
-  governanceLock = ops.governanceLock
-  governanceUnlock = \env cid party -> do
-    now <- getTime
-    (\(Right (a, b)) -> a) <$> ops.governanceUnlock env cid None now [party]
-  vestingWithdraw = \env cid party -> do
-    now <- getTime
-    fmap snd <$> ops.vestingWithdraw env cid now [party]
--}
-
 tsv1Operations = CompatGovernanceLockOperations with
     governanceLock
     governanceUnlock
