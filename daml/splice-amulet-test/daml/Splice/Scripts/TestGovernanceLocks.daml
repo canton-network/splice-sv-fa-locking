@@ -346,7 +346,7 @@ errorIfLeft : (Show e, CanAssert m) => Either e a -> m a
 errorIfLeft (Left e) = assertFail $ "Expected success, but failed with " <> show e
 errorIfLeft (Right e) = pure e
 
--- TODO: add checking of interface-specific views to this.
+-- wishlist: add checking of interface-specific views to this.
 data GovernanceLockOperations = GovernanceLockOperations with
   governanceLock
     :  AmuletRegistryV2.AmuletRegistry
