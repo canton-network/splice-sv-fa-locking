@@ -569,7 +569,7 @@ governanceLock_transferFactoryV1_transferImpl
   -> Update V1.TransferInstructionResult
 governanceLock_transferFactoryV1_transferImpl dso actors arg = do
   let V1.TransferFactory_Transfer {expectedAdmin, transfer, extraArgs} = arg
-  checkActors actors [[transfer.sender], [transfer.sender, transfer.receiver]]
+  checkActors actors [[transfer.sender]]
 
   -- validate call to factory and retrieve context
   requireMatchExpected ("admin", arg.expectedAdmin) dso
