@@ -44,6 +44,13 @@ test_specificationFromReceiverAndReason = do
       $ Right @Text GovernanceLockSpecification with
         kind = GLK_SuperValidatorRightsOwner with
                  svName = "someSv"
+    assertEq
+      (Left "Unknown receiver or lock-subject")
+      (specificationFromReceiverAndReason featuredAppLockCanonicalParty emptyMetadata)
+    -- Re-enable after character check implementation.
+    -- assertEq
+    --  (Left "Unknown receiver or lock-subject")
+    --  (specificationFromReceiverAndReason superValidatorLockCanonicalParty $ reasonToMeta "lock-subject=invalid*supervalidator*name" emptyMetadata)
 
 -- | Fully explicit test case for lockTypeToCompatibilityPartyAndReason, to ensure that the specification lines up.
 test_lockTypeToCompatibilityPartyAndReason : Script ()
