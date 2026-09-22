@@ -244,7 +244,10 @@ class BootstrapPackageConfigIntegrationTest
         amuletConfig.developmentFundManagerBlacklist,
         amuletConfig.minDevelopmentFundMintingDelay,
         amuletConfig.amuletSwitchOverTimes,
-        amuletConfig.governanceLockConfig,
+        amuletConfig.governanceLockMinimumLockAmount,
+        amuletConfig.governanceLockSuperValidatorLockVestingDuration,
+        amuletConfig.governanceLockFeaturedAppLockVestingDuration,
+        amuletConfig.governanceLockSearchTimeGranularity,
       )
 
       val upgradeAction = new ARC_AmuletRules(
@@ -398,7 +401,10 @@ class BootstrapPackageConfigIntegrationTest
         amuletConfig.developmentFundManagerBlacklist,
         amuletConfig.minDevelopmentFundMintingDelay,
         amuletConfig.amuletSwitchOverTimes,
-        amuletConfig.governanceLockConfig,
+        amuletConfig.governanceLockMinimumLockAmount,
+        amuletConfig.governanceLockSuperValidatorLockVestingDuration,
+        amuletConfig.governanceLockFeaturedAppLockVestingDuration,
+        amuletConfig.governanceLockSearchTimeGranularity,
       )
 
       val upgradeAction = new ARC_AmuletRules(
