@@ -226,6 +226,13 @@ class DsoDelegateBasedAutomationService(
         getPeerBftScanConnection,
       )
     )
+    registerTrigger(
+      new ProvisionalFeaturedAppLockConversionTrigger(
+        config,
+        triggerContext,
+        svTaskContext,
+      )
+    )
   }
 
 }
@@ -270,5 +277,6 @@ object DsoDelegateBasedAutomationService extends AutomationServiceCompanion {
     aTrigger[BootstrapExternalPartyConfigStateInstructionTrigger],
     aTrigger[ProcessRewardsTrigger],
     aTrigger[ProcessRewardsDryRunTrigger],
+    aTrigger[ProvisionalFeaturedAppLockConversionTrigger],
   )
 }
