@@ -228,8 +228,11 @@ testTopUpWithSvRewardCouponsHappyPath = do
         round = Round 0
   let aliceWeight = 10 * 100
       aliceLockAmount = 10000.0
+      aliceBalance = 100000000.0
 
-  AmuletRegistryV2.tapFaucet registry alice 100000000.0
+  AmuletRegistryV2.tapFaucet registry alice aliceBalance
+  let aliceBalance = 100000000.0 + 1000.0 -- 1000.0 is from setupTest
+  WalletClientV2.checkUnlockedBalance alice env.instrId aliceBalance
 
   aliceLock <- governanceLockRawChoice registry alice aliceLockAmount someSvSpec
   checkLockedHolding alice aliceLock aliceLockAmount
@@ -251,33 +254,26 @@ testTopUpWithSvRewardCouponsHappyPath = do
 
   openApiChoiceContext <- AmuletRegistryV2.getExternalPartyConfigStateContext registry
   let context = openApiChoiceContext.choiceContext
-  let extraArgs = ExtraArgs with
-        meta = emptyMetadata
-        context = context with
-          values = TM.union context.values $ TM.fromList
-            [ (issuingMiningRoundContextKey, AV_ContractId $ toAnyContractId issuingMiningRoundCid)
-            , (openMiningRoundContextKey, AV_ContractId $ toAnyContractId openRoundCid)
-            ]
+      extraArgs = getExtraArgsForRounds context issuingMiningRoundCid openRoundCid
 
   -- Top up with 1 SvRewardCoupon
   let svRewardCouponPercentage = 1.0
-      (expectedAmount, _) = calculateSvRewardCouponAmounts aliceLockAmount [aliceWeight] issuingMiningRound.issuancePerSvRewardCoupon svRewardCouponPercentage
+      (expectedAmount, _) = calculateSvRewardCouponAmounts aliceLockAmount [aliceWeight] issuingMiningRound svRewardCouponPercentage
   -- Should produce no change since svRewardCoupons are the only input and 100 percent is to be topped up
   (newAliceLock, None) <-
     governanceLockTopUpRawChoice env aliceLock [] (Some []) 0.0 [svRewardAlice1] svRewardCouponPercentage alice (issuingMiningRoundDisclosure <> openRoundDisclosure) (Some extraArgs)
   newAliceLockAmount <- checkExpectedAmountFromSvRewardCoupon alice newAliceLock expectedAmount
+  WalletClientV2.checkUnlockedBalance alice env.instrId $ aliceBalance - aliceLockAmount
 
   -- Top up with another 2 SvRewardCoupons, using the last modified governanceLock
   let svRewardCouponPercentage = 0.4
-      (expectedAmount, expectedChange) = calculateSvRewardCouponAmounts newAliceLockAmount [aliceWeight, aliceWeight] issuingMiningRound.issuancePerSvRewardCoupon svRewardCouponPercentage
-  (newAliceLock2, Some changeHolding) <-
+      (expectedAmount, expectedChange) = calculateSvRewardCouponAmounts newAliceLockAmount [aliceWeight, aliceWeight] issuingMiningRound svRewardCouponPercentage
+  (newAliceLock2, Some _) <-
     governanceLockTopUpRawChoice env newAliceLock [] (Some []) 0.0 [svRewardAlice2, svRewardAlice3] svRewardCouponPercentage alice (issuingMiningRoundDisclosure <> openRoundDisclosure) (Some extraArgs)
   checkExpectedAmountFromSvRewardCoupon alice newAliceLock2 expectedAmount
-  (Some changeHolding') <- queryContractId alice changeHolding
-  let changeHoldingAmount = changeHolding'.amount.initialAmount
-  require ("Top up via SvRewardCoupons should produce change, expected: " <> show changeHoldingAmount <> ", actual: " <> show expectedChange)
-    $ changeHoldingAmount == expectedChange
+  WalletClientV2.checkUnlockedBalance alice env.instrId $ aliceBalance - aliceLockAmount + expectedChange
 
+  -- FIXME: Add test with everything
   pure ()
 
 testTopUpNegativePath : Script ()
@@ -340,13 +336,7 @@ testTopUpNegativePath = do
 
   openApiChoiceContext <- AmuletRegistryV2.getExternalPartyConfigStateContext registry
   let context = openApiChoiceContext.choiceContext
-  let extraArgs = ExtraArgs with
-        meta = emptyMetadata
-        context = context with
-          values = TM.union context.values $ TM.fromList
-            [ (issuingMiningRoundContextKey, AV_ContractId $ toAnyContractId issuingMiningRoundCid)
-            , (openMiningRoundContextKey, AV_ContractId $ toAnyContractId openRoundCid)
-            ]
+      extraArgs = getExtraArgsForRounds context issuingMiningRoundCid openRoundCid
 
   actionMustFail (expectMessageContains "'svRewardCouponPercentage' is greater than 'one'.\nsvRewardCouponPercentage: 2.0\none: 1.0") $
     submitWithTransferContext registry (actAs alice)
@@ -396,11 +386,11 @@ checkExpectedAmountFromSvRewardCoupon p lockCid expectedAmount = do
         ) $ expectedAmount == lock.amount
       pure lock.amount
 
-calculateSvRewardCouponAmounts : Decimal -> [Int] -> Decimal -> Decimal -> (Decimal, Decimal)
-calculateSvRewardCouponAmounts lockAmount svWeights issuancePerSvRewardCoupon svRewardCouponPercentage =
+calculateSvRewardCouponAmounts : Decimal -> [Int] -> IssuingMiningRound -> Decimal -> (Decimal, Decimal)
+calculateSvRewardCouponAmounts lockAmount svWeights issuingMiningRound svRewardCouponPercentage =
   let svWeightsSummed : Decimal = sum $ intToDecimal <$> svWeights
-      expectedAmount = lockAmount + (svWeightsSummed * issuancePerSvRewardCoupon * svRewardCouponPercentage)
-      expectedChange = svWeightsSummed * issuancePerSvRewardCoupon * (1.0 - svRewardCouponPercentage)
+      expectedAmount = lockAmount + (svWeightsSummed * issuingMiningRound.issuancePerSvRewardCoupon * svRewardCouponPercentage)
+      expectedChange = svWeightsSummed * issuingMiningRound.issuancePerSvRewardCoupon * (1.0 - svRewardCouponPercentage)
   in (expectedAmount, expectedChange)
 
 
@@ -523,3 +513,12 @@ governanceLockTopUpRawChoice' env cid lockInputs optHoldingInputs topUpAmount sv
   pure $ case result of
     Left e -> Left e
     Right (GovernanceLock_MergeAndTopUpResult governanceLock changeHolding) -> Right (governanceLock, changeHolding)
+
+getExtraArgsForRounds : ChoiceContext -> ContractId IssuingMiningRound -> ContractId OpenMiningRound -> ExtraArgs
+getExtraArgsForRounds context issuingMiningRoundCid openRoundCid = ExtraArgs with
+  meta = emptyMetadata
+  context = context with
+    values = TM.union context.values $ TM.fromList
+      [ (issuingMiningRoundContextKey, AV_List [AV_ContractId $ toAnyContractId issuingMiningRoundCid])
+      , (openMiningRoundContextKey, AV_ContractId $ toAnyContractId openRoundCid)
+      ]
