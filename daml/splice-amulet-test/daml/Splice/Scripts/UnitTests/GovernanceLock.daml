@@ -1,16 +1,20 @@
 module Splice.Scripts.UnitTests.GovernanceLock where
 
+import DA.Assert
 import DA.Date
 import DA.Foldable
+import DA.Optional
+import DA.TextMap qualified as TextMap
 import DA.Time
 
 import Daml.Script
 
+import Splice.Api.Token.MetadataV1
 import Splice.GovernanceLock
 import Splice.TokenStandard.Utils
 
-unitTestSearchCurrentTimeBounds : Script ()
-unitTestSearchCurrentTimeBounds = do
+test_searchCurrentTimeBounds : Script ()
+test_searchCurrentTimeBounds = do
   sequence_ $ testPasses <$> testCases
   where
     assertDeadlineExceeded' now msg compare = require msg $ now > compare
@@ -32,3 +36,39 @@ unitTestSearchCurrentTimeBounds = do
       require "one day after beforeTime must be after trueTime" $ trueTime <= (beforeTime `addRelTime` days 1)
       require "one day before afterTime must be before trueTime" $ trueTime > (beforeTime `addRelTime` days (-1))
 
+-- | Fully explicit test case for specificationFromReceiverAndReason, to ensure that the specification lines up.
+test_specificationFromReceiverAndReason : Script ()
+test_specificationFromReceiverAndReason = do
+    assertEq
+      (specificationFromReceiverAndReason (fromSome $ partyFromText "cip-0105_sv-lock::1220000000000000000000000000000000000000000000000000000000000000abcd") $ Metadata $ TextMap.singleton "splice.lfdecentralizedtrust.org/reason" "lock-subject=someSv")
+      $ Right @Text GovernanceLockSpecification with
+        kind = GLK_SuperValidatorRightsOwner with
+                 svName = "someSv"
+
+-- | Fully explicit test case for lockTypeToCompatibilityPartyAndReason, to ensure that the specification lines up.
+test_lockTypeToCompatibilityPartyAndReason : Script ()
+test_lockTypeToCompatibilityPartyAndReason = do
+    -- Fully explicit case, to ensure that the specification lines up.
+    assertEq
+      (lockTypeToCompatibilityPartyAndReason $ GLK_SuperValidatorRightsOwner "someSv")
+      (superValidatorLockCanonicalParty, "lock-subject=someSv")
+
+-- | Round-trip testing to cover the GovernanceLockKind space in the parsers
+test_governanceLockSpecificationTSv1_roundTrip : Script ()
+test_governanceLockSpecificationTSv1_roundTrip = do
+    assertRoundTrip serializeThenParse $ GovernanceLockSpecification with
+        kind = GLK_SuperValidatorRightsOwner with
+                 svName = "some-other-sv"
+    assertRoundTrip serializeThenParse $ GovernanceLockSpecification with
+        kind = GLK_FeaturedApp with
+                 provider = fromSome $ partyFromText "some-other-sv"
+    assertRoundTrip parseThenSerialize $ (featuredAppLockCanonicalParty, "lock-subject=someFA::122abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcab")
+  where
+    specificationFromReceiverAndReason' (party, reason) = specificationFromReceiverAndReason party $ Metadata $ TextMap.singleton reasonMetaKey reason
+    serializeThenParse : GovernanceLockSpecification -> Script GovernanceLockSpecification
+    serializeThenParse = specificationFromReceiverAndReason' . lockTypeToCompatibilityPartyAndReason . (.kind)
+    parseThenSerialize : (Party, Text) -> Script (Party, Text)
+    parseThenSerialize = fmap (lockTypeToCompatibilityPartyAndReason . (.kind)) . specificationFromReceiverAndReason'
+
+assertRoundTrip : (CanAssert m, Eq a, Show a) => (a -> m a) -> a -> m ()
+assertRoundTrip f a = f a >>= assertEq a
