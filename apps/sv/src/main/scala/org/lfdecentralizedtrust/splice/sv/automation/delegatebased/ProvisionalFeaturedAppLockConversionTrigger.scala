@@ -77,13 +77,15 @@ class ProvisionalFeaturedAppLockConversionTrigger(
     )
   }
 
-  // The conversion choice is consuming, so a lock already converted by another SV is simply gone.
   override protected def isStaleTask(task: Task)(implicit
       tc: TraceContext
   ): Future[Boolean] =
-    store.multiDomainAcsStore
-      .lookupContractById(GovernanceLock.COMPANION)(task.governanceLockCid)
-      .map(_.isEmpty)
+    for {
+      governanceLock <- store.multiDomainAcsStore
+        .lookupContractById(GovernanceLock.COMPANION)(task.governanceLockCid)
+      featuredAppRight <- store.multiDomainAcsStore
+        .lookupContractById(FeaturedAppRight.COMPANION)(task.featuredAppRightCid)
+    } yield governanceLock.isEmpty || featuredAppRight.isEmpty
 }
 
 object ProvisionalFeaturedAppLockConversionTrigger {
