@@ -235,11 +235,14 @@ testTopUpWithSvRewardCouponsHappyPath = do
   WalletClientV2.checkUnlockedBalance alice env.instrId aliceBalance
 
   aliceLock <- governanceLockRawChoice registry alice aliceLockAmount someSvSpec
+  aliceLock2 <- governanceLockRawChoice registry alice aliceLockAmount someSvSpec
+  aliceLock3 <- governanceLockRawChoice registry alice aliceLockAmount someSvSpec
   checkLockedHolding alice aliceLock aliceLockAmount
 
   svRewardAlice1 <- createSvRewardCoupon provider1 alice aliceWeight
   svRewardAlice2 <- createSvRewardCoupon provider1 alice aliceWeight
   svRewardAlice3 <- createSvRewardCoupon provider1 alice aliceWeight
+  svRewardAlice4 <- createSvRewardCoupon provider1 alice aliceWeight
 
   -- Advance until issuing mining round 0 is opened.
   AmuletRegistryV2.runNextIssuance dso 0.5
@@ -256,6 +259,7 @@ testTopUpWithSvRewardCouponsHappyPath = do
   let context = openApiChoiceContext.choiceContext
       extraArgs = getExtraArgsForRounds context issuingMiningRoundCid openRoundCid
 
+  let aliceBalanceWithoutInitialLocks = aliceBalance - (aliceLockAmount * 3.0)
   -- Top up with 1 SvRewardCoupon
   let svRewardCouponPercentage = 1.0
       (expectedAmount, _) = calculateSvRewardCouponAmounts aliceLockAmount [aliceWeight] issuingMiningRound svRewardCouponPercentage
@@ -263,18 +267,28 @@ testTopUpWithSvRewardCouponsHappyPath = do
   (newAliceLock, None) <-
     governanceLockTopUpRawChoice env aliceLock [] (Some []) 0.0 [svRewardAlice1] svRewardCouponPercentage alice (issuingMiningRoundDisclosure <> openRoundDisclosure) (Some extraArgs)
   newAliceLockAmount <- checkExpectedAmountFromSvRewardCoupon alice newAliceLock expectedAmount
-  WalletClientV2.checkUnlockedBalance alice env.instrId $ aliceBalance - aliceLockAmount
+  WalletClientV2.checkUnlockedBalance alice env.instrId aliceBalanceWithoutInitialLocks
 
   -- Top up with another 2 SvRewardCoupons, using the last modified governanceLock
   let svRewardCouponPercentage = 0.4
       (expectedAmount, expectedChange) = calculateSvRewardCouponAmounts newAliceLockAmount [aliceWeight, aliceWeight] issuingMiningRound svRewardCouponPercentage
   (newAliceLock2, Some _) <-
     governanceLockTopUpRawChoice env newAliceLock [] (Some []) 0.0 [svRewardAlice2, svRewardAlice3] svRewardCouponPercentage alice (issuingMiningRoundDisclosure <> openRoundDisclosure) (Some extraArgs)
-  checkExpectedAmountFromSvRewardCoupon alice newAliceLock2 expectedAmount
-  WalletClientV2.checkUnlockedBalance alice env.instrId $ aliceBalance - aliceLockAmount + expectedChange
+  newAliceLockAmount2 <- checkExpectedAmountFromSvRewardCoupon alice newAliceLock2 expectedAmount
+  WalletClientV2.checkUnlockedBalance alice env.instrId $ aliceBalanceWithoutInitialLocks + expectedChange
 
-  -- FIXME: Add test with everything
-  pure ()
+  -- Top up with all inputs used (topUpAmount, mergeLock, svRewardCoupon)
+  let svRewardCouponPercentage = 0.5
+      (_, expectedChange') = calculateSvRewardCouponAmounts newAliceLockAmount2 [aliceWeight] issuingMiningRound svRewardCouponPercentage
+      topUpAmount = 1200.0
+      expectedUnlockedBalance = aliceBalanceWithoutInitialLocks + expectedChange + expectedChange' - topUpAmount
+  (newAliceLock3, Some _) <-
+    governanceLockTopUpRawChoice env aliceLock2 [aliceLock3] None topUpAmount [svRewardAlice4] svRewardCouponPercentage alice (issuingMiningRoundDisclosure <> openRoundDisclosure) (Some extraArgs)
+
+  WalletClientV2.checkUnlockedBalance alice env.instrId expectedUnlockedBalance
+  (Some newAliceLock3') <- queryContractId alice newAliceLock3
+  (Some newAliceLock2') <- queryContractId alice newAliceLock2
+  WalletClientV2.checkBalance alice env.instrId $ expectedUnlockedBalance + newAliceLock3'.amount + newAliceLock2'.amount
 
 testTopUpNegativePath : Script ()
 testTopUpNegativePath = do
