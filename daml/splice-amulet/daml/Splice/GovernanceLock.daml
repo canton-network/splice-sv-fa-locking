@@ -295,6 +295,9 @@ template VestingLock
     specification : VestingLockSpecification
     originalLockCid : Optional AnyContractId
     meta : Metadata
+      -- ^ Metadata provided upon creation of the lock,
+      -- which can for example be used by apps and wallets to add extra
+      -- info to help the user manage their locks.
   where
     signatory dso, owner
     ensure vestingAmount > 0.0 && vestingPeriod >= aunit
