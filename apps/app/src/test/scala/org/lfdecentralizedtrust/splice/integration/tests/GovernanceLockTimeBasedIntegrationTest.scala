@@ -9,7 +9,7 @@ import org.lfdecentralizedtrust.splice.config.ConfigTransforms
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.IntegrationTestWithIsolatedEnvironment
-import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, WalletTestUtil}
+import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, TokenStandardMetadata, WalletTestUtil}
 
 import java.time.Duration
 
@@ -44,6 +44,7 @@ class GovernanceLockTimeBasedIntegrationTest
   "SV GovernanceLock created via TSv1 compatibility interface can be unlocked into a VestingLock" in {
     implicit env =>
       val lockAmount = BigDecimal(10000)
+      val lockSubject = "sv1"
 
       // Setup alice as the lock owner
       val ownerParty = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
@@ -56,7 +57,7 @@ class GovernanceLockTimeBasedIntegrationTest
         aliceValidatorBackend.participantClientWithAdminToken,
         owner,
         superValidatorLockMagicParty,
-        lockSubject = "sv1",
+        lockSubject = lockSubject,
         amount = lockAmount,
       )
 
@@ -81,6 +82,8 @@ class GovernanceLockTimeBasedIntegrationTest
         view.transfer.sender shouldBe ownerParty.toProtoPrimitive
         view.transfer.receiver shouldBe superValidatorLockMagicParty.toProtoPrimitive
         BigDecimal(view.transfer.amount) shouldBe lockAmount
+        view.transfer.meta.values
+          .get(TokenStandardMetadata.reasonMetaKey) shouldBe makeGovernanceLockSubject(lockSubject)
       }
 
       clue("Scan serves a withdraw choice context for the GovernanceLock") {
