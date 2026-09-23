@@ -1,0 +1,75 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Tests for custom unlock, substitution, and vesting controllers on governance locks.
+module Splice.Scripts.TestGovernanceLockControllers where
+
+import DA.Assert
+import DA.Foldable (forA_)
+import DA.Map qualified as Map
+import DA.Optional (isNone, isSome)
+import DA.Time
+
+import Daml.Script
+import Splice.GovernanceLock
+import Splice.Scripts.TestGovernanceLocks
+import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
+import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
+import Splice.Testing.Utils
+
+-- | Controllers from the CIP example: owner A, featured app X, staking app S.
+-- Any two of the three can unlock or substitute; S or A alone can withdraw vested funds.
+twoOfThreeSpecification : Party -> Party -> Party -> GovernanceLockSpecification
+twoOfThreeSpecification a x s = GovernanceLockSpecification with
+  kind = GLK_FeaturedApp x
+  unlockControllers = [[s, x], [s, a], [a, x]]
+  substitutionControllers = [[s, x], [s, a], [a, x]]
+  vestingControllers = [[s], [a]]
+
+testCustomControllersCreationValidation : Script ()
+testCustomControllersCreationValidation = do
+  TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+  AmuletRegistryV2.tapFaucet registry alice 50000.0
+  let spec = ownerControlledSpecification alice (GLK_FeaturedApp bob)
+  let controllerTypes =
+        [ ("unlock", \cs -> spec with unlockControllers = cs)
+        , ("substitution", \cs -> spec with substitutionControllers = cs)
+        , ("vesting", \cs -> spec with vestingControllers = cs)
+        ]
+
+  forA_ controllerTypes \(controllerType, setControllers) -> do
+    actionMustFail (expectMessageContains (controllerType <> "Controllers must not be empty")) $
+      governanceLockWithSpecRawChoice' registry alice 10000.0 (setControllers [])
+    actionMustFail (expectMessageContains (controllerType <> "Controllers must not contain an empty controller set")) $
+      governanceLockWithSpecRawChoice' registry alice 10000.0 (setControllers [[]])
+
+testCustomControllersAreObservers : Script ()
+testCustomControllersAreObservers = do
+  TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+  AmuletRegistryV2.tapFaucet registry alice 50000.0
+
+  lockCid <- governanceLockWithSpecRawChoice registry alice 50000.0 (twoOfThreeSpecification alice bob charlie)
+  forA_ [alice, bob, charlie] \party -> do
+    optLock <- queryContractId party lockCid
+    assertMsg ("controller " <> show party <> " can see the lock") (isSome optLock)
+
+  optLock <- queryContractId provider1 lockCid
+  assertMsg "a non-controller cannot see the lock" (isNone optLock)
+
+testVestingControllersAreCopiedToVestingLock : Script ()
+testVestingControllersAreCopiedToVestingLock = do
+  TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+  AmuletRegistryV2.tapFaucet registry alice 50000.0
+
+  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob)) with vestingControllers = [[charlie]]
+  lockCid <- governanceLockWithSpecRawChoice registry alice 50000.0 spec
+
+  unlockAt <- (`addRelTime` hours 1) <$> getTime
+  (Some vestingCid, None, None) <- governanceUnlockRawChoice registry lockCid None unlockAt [alice]
+
+  Some vestingLock <- queryContractId charlie vestingCid
+  vestingLock.specification.vestingControllers === [[charlie]]
+  vestingLock.pendingWithdrawApprovals === Map.empty

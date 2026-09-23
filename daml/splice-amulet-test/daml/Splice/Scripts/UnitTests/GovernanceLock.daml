@@ -16,6 +16,9 @@ import Splice.Api.Token.MetadataV1
 import Splice.GovernanceLock
 import Splice.TokenStandard.Utils
 
+testOwner : Party
+testOwner = fromSome $ partyFromText "some-owner"
+
 test_searchCurrentTimeBounds : Script ()
 test_searchCurrentTimeBounds = do
   sequence_ $ testPasses <$> testCases
@@ -48,13 +51,12 @@ test_searchCurrentTimeBounds = do
 test_specificationFromReceiverAndReason : Script ()
 test_specificationFromReceiverAndReason = do
     assertEq
-      (specificationFromReceiverAndReason (fromSome $ partyFromText "cip-0105_sv-lock::1220000000000000000000000000000000000000000000000000000000000000abcd") $ Metadata $ TextMap.singleton "splice.lfdecentralizedtrust.org/reason" "lock-subject=someSv")
-      $ Right @Text GovernanceLockSpecification with
-        kind = GLK_SuperValidatorRightsOwner with
+      (specificationFromReceiverAndReason testOwner (fromSome $ partyFromText "cip-0105_sv-lock::1220000000000000000000000000000000000000000000000000000000000000abcd") $ Metadata $ TextMap.singleton "splice.lfdecentralizedtrust.org/reason" "lock-subject=someSv")
+      $ Right @Text $ ownerControlledSpecification testOwner $ GLK_SuperValidatorRightsOwner with
                  svName = "someSv"
     assertEq
       (Left "Unknown receiver or lock-subject")
-      (specificationFromReceiverAndReason featuredAppLockCanonicalParty emptyMetadata)
+      (specificationFromReceiverAndReason testOwner featuredAppLockCanonicalParty emptyMetadata)
     -- Re-enable after character check implementation.
     -- assertEq
     --  (Left "Unknown receiver or lock-subject")
@@ -71,15 +73,13 @@ test_lockTypeToCompatibilityPartyAndReason = do
 -- | Round-trip testing to cover the GovernanceLockKind space in the parsers
 test_governanceLockSpecificationTSv1_roundTrip : Script ()
 test_governanceLockSpecificationTSv1_roundTrip = do
-    assertRoundTrip serializeThenParse $ GovernanceLockSpecification with
-        kind = GLK_SuperValidatorRightsOwner with
+    assertRoundTrip serializeThenParse $ ownerControlledSpecification testOwner $ GLK_SuperValidatorRightsOwner with
                  svName = "some-other-sv"
-    assertRoundTrip serializeThenParse $ GovernanceLockSpecification with
-        kind = GLK_FeaturedApp with
+    assertRoundTrip serializeThenParse $ ownerControlledSpecification testOwner $ GLK_FeaturedApp with
                  provider = fromSome $ partyFromText "some-other-sv"
     assertRoundTrip parseThenSerialize $ (featuredAppLockCanonicalParty, "lock-subject=someFA::122abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcab")
   where
-    specificationFromReceiverAndReason' (party, reason) = specificationFromReceiverAndReason party $ Metadata $ TextMap.singleton reasonMetaKey reason
+    specificationFromReceiverAndReason' (party, reason) = specificationFromReceiverAndReason testOwner party $ Metadata $ TextMap.singleton reasonMetaKey reason
     serializeThenParse : GovernanceLockSpecification -> Script GovernanceLockSpecification
     serializeThenParse = specificationFromReceiverAndReason' . lockTypeToCompatibilityPartyAndReason . (.kind)
     parseThenSerialize : (Party, Text) -> Script (Party, Text)
