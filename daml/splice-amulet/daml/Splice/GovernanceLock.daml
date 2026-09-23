@@ -7,7 +7,7 @@ import Prelude hiding (forA)
 import DA.Action (filterA, unless)
 import DA.Assert
 import DA.Either (isRight)
-import DA.Foldable (forA_, mapA_, toList)
+import DA.Foldable (forA_, mapA_, maximum, toList)
 import DA.Functor (($>))
 import DA.List.Total (head)
 import DA.Map (Map)
@@ -460,16 +460,21 @@ template VestingLock
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
         (requestedAt, _) <- searchCurrentTimeBounds (endTime `addRelTime` (- vestingPeriod)) state
         withdrawResult <- vestingLock_withdrawImpl (coerceContractId self) this requestedAt [owner] context
-        case withdrawResult.vestingLock of
-          Some vestingLock -> pure $ V1.TransferInstructionResult with
+        pure $ case withdrawResult of
+          VestingLock_WithdrawResult_Pending pendingLock -> V1.TransferInstructionResult with
+            output = V1.TransferInstructionResult_Pending with
+              transferInstructionCid = toInterfaceContractId pendingLock
+            senderChangeCids = []
+            meta = emptyMetadata
+          VestingLock_WithdrawResult_Completed (Some vestingLock) vested -> V1.TransferInstructionResult with
             output = V1.TransferInstructionResult_Pending with
               transferInstructionCid = toInterfaceContractId vestingLock
-            senderChangeCids = [withdrawResult.vested]
+            senderChangeCids = [vested]
             meta = emptyMetadata
-          None -> pure $ V1.TransferInstructionResult with
+          VestingLock_WithdrawResult_Completed None vested -> V1.TransferInstructionResult with
             output = V1.TransferInstructionResult_Completed with
               receiverHoldingCids = []
-            senderChangeCids = [withdrawResult.vested]
+            senderChangeCids = [vested]
             meta = emptyMetadata
       transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks cannot be updated"
 
@@ -478,16 +483,26 @@ template VestingLock
 
 
 vestingLock_withdrawImpl : ContractId VestingLock -> VestingLock -> Time -> [Party] -> ExternalPartyTransferContext -> Update VestingLock_WithdrawResult
-vestingLock_withdrawImpl _self this@(VestingLock {..}) requestedAt actors context
+vestingLock_withdrawImpl self this@(VestingLock {..}) requestedAt actors context
     = do
-        checkActors actors [[owner]] -- TODO(canton-network/splice-sv-fa-locking#39): custom controllers
         assertDeadlineExceeded "requestedAt" requestedAt
+        recorded <- vestingLock_updateWithdrawApprovals this requestedAt actors
+        case recorded of
+          Left stillPending -> do
+            pendingLock <- create this with
+              pendingWithdrawApprovals = stillPending
+              originalLockCid = Some $ fromOptional (coerceContractId self) originalLockCid
+            pure VestingLock_WithdrawResult_Pending with pendingLock
+          Right approvedRequestedAt -> vestingLock_executeWithdraw this approvedRequestedAt context
 
+vestingLock_executeWithdraw : VestingLock -> Time -> ExternalPartyTransferContext -> Update VestingLock_WithdrawResult
+vestingLock_executeWithdraw this@(VestingLock {..}) requestedAt context
+    = do
         let unvestedAmount = calculateUnvestedAmount requestedAt this
 
         case unvestedAmount of
           None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
-            pure VestingLock_WithdrawResult with
+            pure VestingLock_WithdrawResult_Completed with
               vestingLock = None
               vested = toInterfaceContractId lockedAmulet
           Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
@@ -499,7 +514,7 @@ vestingLock_withdrawImpl _self this@(VestingLock {..}) requestedAt actors contex
               vestingPeriod = endTime `subTime` requestedAt
               vestingAmount
               pendingWithdrawApprovals = Map.empty)
-            pure VestingLock_WithdrawResult with
+            pure VestingLock_WithdrawResult_Completed with
               vestingLock
               vested = toInterfaceContractId unlocked
 
@@ -513,7 +528,9 @@ data VestingLock_DsoExpireResult
   deriving (Serializable)
 
 data VestingLock_WithdrawResult
-  = VestingLock_WithdrawResult with
+  = VestingLock_WithdrawResult_Pending with
+      pendingLock : ContractId VestingLock -- ^ The re-created lock that holds the recorded approvals.
+  | VestingLock_WithdrawResult_Completed with
       vestingLock : Optional (ContractId VestingLock)
         -- ^ Contract ID of the continuing vesting lock with remaining funds.
       vested : ContractId Holding
@@ -597,6 +614,18 @@ governanceLock_updateUnlockApprovals GovernanceLock{..} unlockAmount unlockAt ac
     pendingUnlockApprovals
     (\approval -> approval.unlockAmount == unlockAmount)
   forA result (effectiveUnlockAt . fmap ((.unlockAt) . snd))
+
+-- | Updates approvals for a VestingLock withdraw
+vestingLock_updateWithdrawApprovals : VestingLock -> Time -> [Party] -> Update (Either (Map.Map Party Time) Time)
+vestingLock_updateWithdrawApprovals VestingLock{..} requestedAt actors = do
+  result <- updateApprovals
+    specification.vestingControllers
+    actors
+    requestedAt
+    pendingWithdrawApprovals
+    (const True)
+  -- Taking the latest time over all controller sets releases the most vested funds to the owner
+  pure $ fmap (maximum . fmap snd) result
 
 -- | Updates approvals to include the approval of actors and checks if the
 -- updated approvals satisfy one of the sets of controllers.

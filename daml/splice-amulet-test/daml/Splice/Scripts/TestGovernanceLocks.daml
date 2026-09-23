@@ -644,11 +644,23 @@ vestingWithdrawRawChoice'
   -> [Party]
   -> Script (Either SubmitError (ContractId V2.Holding, Optional (ContractId VestingLock)))
 vestingWithdrawRawChoice' registry cid requestedAt actors = do
-  result <- submitWithTransferContext registry (actAs actors) $ \context -> exerciseCmd cid VestingLock_Withdraw with
+  result <- vestingWithdrawRawChoiceResult registry cid requestedAt actors mempty
+  forA result \case
+    VestingLock_WithdrawResult_Completed vestingLock vested -> pure (upcast vested, vestingLock)
+    VestingLock_WithdrawResult_Pending _ -> fail "Expected a completed withdraw, but the withdraw is pending"
+
+vestingWithdrawRawChoiceResult
+  :  AmuletRegistryV2.AmuletRegistry
+  -> ContractId VestingLock
+  -> Time
+  -> [Party]
+  -> SubmitOptions
+  -> Script (Either SubmitError VestingLock_WithdrawResult)
+vestingWithdrawRawChoiceResult registry cid requestedAt actors options = do
+  submitWithTransferContext registry (actAs actors <> options) $ \context -> exerciseCmd cid VestingLock_Withdraw with
     requestedAt
     extraArgs = emptyExtraArgs with context
     actors
-  pure $ ((,) <$> upcast . (.vested) <*> (.vestingLock)) <$> result
 
 governanceLockTopUpRawChoice
   : TestEnv
