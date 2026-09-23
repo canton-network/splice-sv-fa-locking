@@ -3,11 +3,13 @@
 
 module Splice.Scripts.TestGovernanceLocks where
 
+import Prelude hiding (forA)
 import DA.Action (unless, when)
 import DA.Either
 import DA.Optional
 import DA.TextMap qualified as TM
 import DA.Time
+import DA.Traversable (forA)
 
 import Daml.Script
 import Splice.Amulet
@@ -605,12 +607,27 @@ governanceUnlockRawChoice'
   -> [Party]
   -> Script (Either SubmitError (Optional (ContractId VestingLock), Optional (ContractId GovernanceLock), Optional (ContractId Amulet)))
 governanceUnlockRawChoice' registry cid unlockAmount unlockAt actors = do
-  result <- submitWithTransferContext registry (actAs actors) $ \context -> exerciseCmd cid GovernanceLock_Unlock with
+  result <- governanceUnlockRawChoiceResult registry cid unlockAmount unlockAt actors mempty
+  forA result \case
+    GovernanceLock_UnlockResult_Completed vestingLock governanceLock unlockedAmulet ->
+      pure (vestingLock, governanceLock, unlockedAmulet)
+    GovernanceLock_UnlockResult_Pending _ ->
+      fail "Expected a completed unlock, but the unlock is pending"
+
+governanceUnlockRawChoiceResult
+  :  AmuletRegistryV2.AmuletRegistry
+  -> ContractId GovernanceLock
+  -> Optional Decimal
+  -> Time
+  -> [Party]
+  -> SubmitOptions
+  -> Script (Either SubmitError GovernanceLock_UnlockResult)
+governanceUnlockRawChoiceResult registry cid unlockAmount unlockAt actors options = do
+  submitWithTransferContext registry (actAs actors <> options) $ \context -> exerciseCmd cid GovernanceLock_Unlock with
     unlockAmount
     unlockAt
     extraArgs = emptyExtraArgs with context
     actors
-  pure $ ((,,) <$> (.vestingLock) <*> (.governanceLock) <*> (.unlockedAmulet)) <$> result
 
 vestingWithdrawRawChoice
   :  AmuletRegistryV2.AmuletRegistry
