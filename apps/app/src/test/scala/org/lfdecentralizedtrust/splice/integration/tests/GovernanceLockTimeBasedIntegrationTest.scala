@@ -10,6 +10,7 @@ import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.IntegrationTestWithIsolatedEnvironment
 import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, TokenStandardMetadata, WalletTestUtil}
+import org.lfdecentralizedtrust.splice.wallet.store.{BalanceChangeTxLogEntry, TxLogEntry}
 
 import java.time.Duration
 
@@ -17,6 +18,7 @@ class GovernanceLockTimeBasedIntegrationTest
     extends IntegrationTestWithIsolatedEnvironment
     with WalletTestUtil
     with TimeTestUtil
+    with WalletTxLogTestUtil
     with TokenStandardTest {
 
   override def environmentDefinition: SpliceEnvironmentDefinition =
@@ -210,5 +212,33 @@ class GovernanceLockTimeBasedIntegrationTest
           remainingVestingAmount
         )
       }
+
+      checkTxHistory(
+        aliceWalletClient,
+        Seq(
+          // Full VestingLock withdraw; it was already fully relocked, so nothing is returned
+          { case logEntry: BalanceChangeTxLogEntry =>
+            logEntry.transferInstructionCid shouldBe remainingVestingLockCid.contractId
+            logEntry.amount shouldBe 0
+          },
+          // Partial VestingLock withdraw; only the vested portion is returned
+          { case logEntry: BalanceChangeTxLogEntry =>
+            logEntry.transferInstructionCid shouldBe vestingLockCid.contractId
+            logEntry.amount shouldBe lockAmount - remainingVestingAmount
+          },
+          // GovernanceLock withdraw; the full amount is relocked, nothing is returned
+          { case logEntry: BalanceChangeTxLogEntry =>
+            logEntry.transferInstructionCid shouldBe governanceLockCid.contractId
+            logEntry.amount shouldBe 0
+          },
+        ),
+        ignore = {
+          case b: BalanceChangeTxLogEntry =>
+            !b.subtype.contains(
+              TxLogEntry.BalanceChangeTransactionSubtype.TransferInstruction_Withdraw.toProto
+            )
+          case _ => true
+        },
+      )
   }
 }
