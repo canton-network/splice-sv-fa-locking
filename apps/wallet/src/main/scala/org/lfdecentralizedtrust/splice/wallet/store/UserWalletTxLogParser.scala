@@ -926,43 +926,22 @@ class UserWalletTxLogParser(
 
               case (sum, _) => sum
             }
-            defer {
-              parseTrees(
-                tree,
-                tree.getChildNodeIds(exercised).asScala.toList,
-                synchronizerId,
-                ignoreUnexpectedAmuletCreateArchive = true,
-              )
-            }.map {
-              _.modifyBalanceChangeAmount(_ - relockedAmount)
-                .ensureBalanceChangeTxLogEntry(tree, endUserParty)
-                .setBalanceChangeSubtype(
-                  BalanceChangeTransactionSubtype.TransferInstruction_Withdraw,
-                  EventId.prefixedFromUpdateIdAndNodeId(tree.getUpdateId, exercised.getNodeId),
-                )
-                .setTransferInstructionCid(
-                  exercised.getContractId
-                )
-            }
+            fromTransferInstructionWithdraw(
+              tree,
+              exercised,
+              synchronizerId,
+              true,
+              _ - relockedAmount,
+            )
 
           case TransferInstruction_Withdraw(node) =>
-            defer {
-              parseTrees(
-                tree,
-                tree.getChildNodeIds(exercised).asScala.toList,
-                synchronizerId,
-                ignoreUnexpectedAmuletCreateArchive,
-              )
-            }.map {
-              _.ensureBalanceChangeTxLogEntry(tree, endUserParty)
-                .setBalanceChangeSubtype(
-                  BalanceChangeTransactionSubtype.TransferInstruction_Withdraw,
-                  EventId.prefixedFromUpdateIdAndNodeId(tree.getUpdateId, exercised.getNodeId),
-                )
-                .setTransferInstructionCid(
-                  exercised.getContractId
-                )
-            }
+            fromTransferInstructionWithdraw(
+              tree,
+              exercised,
+              synchronizerId,
+              ignoreUnexpectedAmuletCreateArchive,
+              identity,
+            )
 
           case TransferInstruction_Reject(node) =>
             defer {
@@ -1522,6 +1501,32 @@ class UserWalletTxLogParser(
       }
     )
   }
+
+  private def fromTransferInstructionWithdraw(
+      tree: Transaction,
+      exercised: ExercisedEvent,
+      synchronizerId: SynchronizerId,
+      ignoreUnexpectedAmuletCreateArchive: Boolean,
+      modifyChangeAmount: BigDecimal => BigDecimal,
+  )(implicit tc: TraceContext): Eval[State] =
+    Eval
+      .defer {
+        parseTrees(
+          tree,
+          tree.getChildNodeIds(exercised).asScala.toList,
+          synchronizerId,
+          ignoreUnexpectedAmuletCreateArchive,
+        )
+      }
+      .map {
+        _.modifyBalanceChangeAmount(modifyChangeAmount)
+          .ensureBalanceChangeTxLogEntry(tree, endUserParty)
+          .setBalanceChangeSubtype(
+            BalanceChangeTransactionSubtype.TransferInstruction_Withdraw,
+            EventId.prefixedFromUpdateIdAndNodeId(tree.getUpdateId, exercised.getNodeId),
+          )
+          .setTransferInstructionCid(exercised.getContractId)
+      }
 }
 
 object UserWalletTxLogParser {
