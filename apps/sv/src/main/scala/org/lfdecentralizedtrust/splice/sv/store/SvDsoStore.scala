@@ -754,14 +754,14 @@ trait SvDsoStore
     multiDomainAcsStore.listExpiredFromPayloadExpiry(so.SvOnboardingConfirmed.COMPANION)
 
   def listExpiredVestingLocks(
-      ignoredPartiesStore: Option[IgnoredPartiesStore]
+      unavailablePartiesStore: Option[UnavailablePartiesStore]
   ): ListExpiredContracts[
     splice.governancelock.VestingLock.ContractId,
     splice.governancelock.VestingLock,
   ] =
     multiDomainAcsStore.listExpiredFromPayloadExpiry(
       splice.governancelock.VestingLock.COMPANION,
-      ignoredPartiesStore,
+      unavailablePartiesStore,
       ignoredPartyFields = Seq("owner"),
     )
 

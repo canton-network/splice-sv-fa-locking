@@ -13,7 +13,7 @@ import org.apache.pekko.stream.Materializer
 import scala.concurrent.{ExecutionContext, Future}
 import ExpireVestingLockTrigger.{Lock, LockCid, Task, getStakeholders}
 import org.lfdecentralizedtrust.splice.store.AppStoreWithIngestion.SpliceLedgerConnectionPriority
-import org.lfdecentralizedtrust.splice.store.IgnoredPartiesStore
+import org.lfdecentralizedtrust.splice.store.UnavailablePartiesStore
 import org.lfdecentralizedtrust.splice.sv.config.SvAppBackendConfig
 import org.lfdecentralizedtrust.splice.sv.util.ContractStakeholders
 
@@ -26,7 +26,7 @@ class ExpireVestingLockTrigger(
     override protected val svConfig: SvAppBackendConfig,
     override protected val context: TriggerContext,
     override protected val svTaskContext: SvTaskBasedTrigger.Context,
-    override protected val ignoredPartiesStore: IgnoredPartiesStore,
+    override protected val unavailablePartiesStore: UnavailablePartiesStore,
 )(implicit
     override val ec: ExecutionContext,
     mat: Materializer,
@@ -34,14 +34,14 @@ class ExpireVestingLockTrigger(
 ) extends BatchedMultiDomainExpiredContractTrigger.Template[LockCid, Lock](
       svTaskContext.dsoStore.multiDomainAcsStore,
       svConfig.delegatelessAutomationExpiredVestingLockBatchSize,
-      svTaskContext.dsoStore.listExpiredVestingLocks(Some(ignoredPartiesStore)),
+      svTaskContext.dsoStore.listExpiredVestingLocks(Some(unavailablePartiesStore)),
       splice.governancelock.VestingLock.COMPANION,
       svTaskContext.vettingLookupService,
       PackageIdResolver.Package.SpliceAmulet,
       getStakeholders,
     )
     with SvTaskBasedTrigger[Task]
-    with IgnoredUnavailablePartiesGuard {
+    with UnavailablePartiesGuard {
   private val store = svTaskContext.dsoStore
 
   override def completeTaskAsDsoDelegate(task: Task, controller: String)(implicit

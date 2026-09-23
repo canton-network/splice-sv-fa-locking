@@ -106,6 +106,8 @@ trait GovernanceLockTestUtil extends TestCommon { this: HasExecutionContext =>
           specification,
           getGovernanceLockContext.toExtraArgs(),
           owner.toProtoPrimitive,
+          participantClient.ledger_api.time.get().toInstant,
+          new metadatav1.Metadata(java.util.Map.of()),
         ),
       )
       .exerciseResult
@@ -117,6 +119,7 @@ trait GovernanceLockTestUtil extends TestCommon { this: HasExecutionContext =>
     * `unlockAmount = None` unlocks the whole lock (no split, no continuing `GovernanceLock`).
     * `unlockAt` must be strictly in the future; the resulting `VestingLock.endTime` is
     * `unlockAt + vestingDurationFor specification.kind`, read off the `ExternalPartyConfigState`.
+    * No `VestingLock` is created if that vesting duration is zero.
     */
   def unlockGovernanceLock(
       participantClient: ParticipantClientReference,
@@ -127,7 +130,7 @@ trait GovernanceLockTestUtil extends TestCommon { this: HasExecutionContext =>
       actors: Seq[PartyId],
   )(implicit
       env: SpliceTestConsoleEnvironment
-  ): (VestingLock.ContractId, Option[GovernanceLock.ContractId]) = {
+  ): (Option[VestingLock.ContractId], Option[GovernanceLock.ContractId]) = {
     val result = participantClient.ledger_api_extensions.commands
       .submitWithResult(
         userId = userId,
@@ -141,6 +144,6 @@ trait GovernanceLockTestUtil extends TestCommon { this: HasExecutionContext =>
         ),
       )
       .exerciseResult
-    (result.vestingLock, result.governanceLock.toScala)
+    (result.vestingLock.toScala, result.governanceLock.toScala)
   }
 }
