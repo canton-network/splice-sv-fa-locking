@@ -59,6 +59,7 @@ import org.lfdecentralizedtrust.splice.store.{
   MiningRoundsStore,
   PageLimit,
   StoreTestBase,
+  UnavailablePartiesStore,
 }
 import org.lfdecentralizedtrust.splice.sv.store.SvDsoStore.{IdleAnsSubscription, RoundBatch}
 import org.lfdecentralizedtrust.splice.sv.store.db.DbSvDsoStore
@@ -205,7 +206,7 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
             dummyDomain.create(_)(store.multiDomainAcsStore)
           )
         } yield {
-          def cidsIgnoring(ignored: Option[IgnoredPartiesStore]) = store
+          def cidsIgnoring(ignored: Option[UnavailablePartiesStore]) = store
             .listExpiredVestingLocks(ignored)(time(3), PageLimit.tryCreate(10))(TraceContext.empty)
             .futureValue
             .map(_.contract.contractId)
@@ -215,19 +216,25 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
             party2Lock.contractId,
           )
           // An empty ignore list must not filter anything out.
-          cidsIgnoring(Some(new IgnoredPartiesStore(Set.empty))) should contain theSameElementsAs
+          cidsIgnoring(
+            Some(new InMemoryUnavailablePartiesStore(Set.empty))
+          ) should contain theSameElementsAs
             Seq(party1Lock.contractId, party2Lock.contractId)
-          cidsIgnoring(Some(new IgnoredPartiesStore(Set(party1)))) should contain theSameElementsAs
+          cidsIgnoring(
+            Some(new InMemoryUnavailablePartiesStore(Set(party1)))
+          ) should contain theSameElementsAs
             Seq(party2Lock.contractId)
-          cidsIgnoring(Some(new IgnoredPartiesStore(Set(party2)))) should contain theSameElementsAs
+          cidsIgnoring(
+            Some(new InMemoryUnavailablePartiesStore(Set(party2)))
+          ) should contain theSameElementsAs
             Seq(party1Lock.contractId)
           cidsIgnoring(
-            Some(new IgnoredPartiesStore(Set(party1, party2)))
+            Some(new InMemoryUnavailablePartiesStore(Set(party1, party2)))
           ) should be(empty)
           // The DSO party is a signatory on every lock but is not the `owner`, so ignoring it
           // must not filter anything out.
           cidsIgnoring(
-            Some(new IgnoredPartiesStore(Set(dsoParty)))
+            Some(new InMemoryUnavailablePartiesStore(Set(dsoParty)))
           ) should contain theSameElementsAs
             Seq(party1Lock.contractId, party2Lock.contractId)
         }
