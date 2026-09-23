@@ -1,7 +1,7 @@
 -- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
--- | Instruction contracts recording DSO decisions to be applied by any SV against whichever
+-- | Instruction contracts recording governance decisions to be applied by any SV against whichever
 -- contract is current at execution time.
 module Splice.DSO.Instruction where
 
@@ -22,7 +22,7 @@ template FeaturedAppUnderlockInstruction with
     dso : Party
     provider : Party
     underlocked : Bool
-      -- ^ True indicates that the DSO party observed the given provider to be underlocked.
+      -- ^ True indicates that governance parties observed the given provider to be underlocked.
       -- False indicates that they observed their recovery from underlock.
   where
     signatory dso

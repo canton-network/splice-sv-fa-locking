@@ -128,7 +128,7 @@ data AmuletConfig unit = AmuletConfig with
     governanceLockSearchTimeGranularity : Optional RelTime
       -- ^ Granularity of the governance lock fallback timepoint determination. Default: 1 day.
     governanceLockFeaturedAppLockThreshold : Optional Decimal
-      -- ^ Amount of CC a featured app must keep locked to retain its right. Default: 5M.
+      -- ^ Amount of amulet a featured app must keep locked to retain its right. Default: 5M.
     governanceLockFeaturedAppUnderlockGracePeriod : Optional RelTime
       -- ^ How long an underlocked provider has to cure before its right becomes archivable.
       --   Default: 7 days.
