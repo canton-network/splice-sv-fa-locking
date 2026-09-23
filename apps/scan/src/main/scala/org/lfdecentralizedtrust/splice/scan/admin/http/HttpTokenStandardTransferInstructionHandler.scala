@@ -3,6 +3,7 @@
 
 package org.lfdecentralizedtrust.splice.scan.admin.http
 
+import com.daml.ledger.javaapi.data.Identifier
 import com.daml.ledger.javaapi.data.codegen.ContractId
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.logging.{ErrorLoggingContext, NamedLoggerFactory, NamedLogging}
@@ -450,9 +451,9 @@ class HttpTokenStandardTransferInstructionHandler(
                 vestingLock.lockedAmulet,
                 requireLockedAmulet,
               )
-            case _ => transferInstructionNotFound(transferInstructionId)
+            case _ => transferInstructionNotFound(transferInstructionId, Some(contract.identifier))
           }
-        case None => transferInstructionNotFound(transferInstructionId)
+        case None => transferInstructionNotFound(transferInstructionId, None)
       }
   }
 
@@ -472,7 +473,7 @@ class HttpTokenStandardTransferInstructionHandler(
             transferInstructionId
           )
         )
-        .map(_.getOrElse(transferInstructionNotFound(transferInstructionId)))
+        .map(_.getOrElse(transferInstructionNotFound(transferInstructionId, None)))
       context <- util.ChoiceContextBuilder.getTwoStepTransferContext[
         v2.definitions.DisclosedContract,
         v2.definitions.ChoiceContext,
@@ -491,9 +492,17 @@ class HttpTokenStandardTransferInstructionHandler(
     } yield context
   }
 
-  private def transferInstructionNotFound[A](transferInstructionId: String): A =
+  private def transferInstructionNotFound[A](
+      transferInstructionId: String,
+      foundContractTemplateId: Option[Identifier],
+  ): A =
     throw io.grpc.Status.NOT_FOUND
-      .withDescription(s"TransferInstruction '$transferInstructionId' not found.")
+      .withDescription(
+        s"TransferInstruction '$transferInstructionId' not found." +
+          foundContractTemplateId.fold("")(templateId =>
+            s" Found contract of type $templateId but it did not match a known TransferInstruction type."
+          )
+      )
       .asRuntimeException()
 }
 
