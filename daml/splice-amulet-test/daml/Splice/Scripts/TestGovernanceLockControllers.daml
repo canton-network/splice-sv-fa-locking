@@ -6,6 +6,7 @@ module Splice.Scripts.TestGovernanceLockControllers where
 
 import DA.Assert
 import DA.Foldable (forA_)
+import DA.List (sort)
 import DA.Map qualified as Map
 import DA.Optional (isNone, isSome)
 import DA.Time
@@ -13,10 +14,12 @@ import DA.Time
 import Daml.Script
 import Splice.Amulet (Amulet, LockedAmulet)
 import Splice.Api.Token.HoldingV1 (Holding)
+import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.GovernanceLock
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
+import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 
 -- | Controllers from the CIP example: owner A, featured app X, staking app S.
@@ -304,6 +307,40 @@ testCustomControllersNonControllerWithdraw = do
   (TestEnv{..}, registry, vestingCid, unlockAt) <- setupVestingLockWithControllers (\env -> [[env.charlie], [env.alice]])
   actionMustFail (expectMessageContains "must be a controller") $
     withdrawAs registry alice vestingCid (unlockAt `addRelTime` days 15) [provider1]
+
+transferInstructionPendingParties : Party -> ContractId V1.TransferInstruction -> Script [Party]
+transferInstructionPendingParties p cid = do
+  Some view <- queryInterfaceContractId p cid
+  case view.status of
+    V1.TransferPendingInternalWorkflow{..} -> pure $ Map.keys pendingActions
+    status -> fail $ "Unexpected transfer instruction status " <> show status
+
+testCustomControllersTSv1Withdraw : Script ()
+testCustomControllersTSv1Withdraw = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+  AmuletRegistryV2.tapFaucet registry alice 20000.0
+  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob)) with
+        unlockControllers = [[alice, charlie]]
+  lockCid <- governanceLockWithSpecRawChoice registry alice 20000.0 spec
+
+  pendingParties <- transferInstructionPendingParties alice (toInterfaceContractId lockCid)
+  pendingParties === sort [alice, charlie]
+
+  -- alice withdraws the TSv1 transfer instruction
+  Some pendingInstructionCid <- WalletClientV2.withdrawTransferInstructionV1 env.registries alice (toInterfaceContractId lockCid)
+  let pendingLockCid = fromInterfaceContractId @GovernanceLock pendingInstructionCid
+  Some _ <- queryContractId alice pendingLockCid
+  pendingParties <- transferInstructionPendingParties alice pendingInstructionCid
+  pendingParties === [charlie]
+
+  -- charlie completes the unlock
+  unlockAt <- (`addRelTime` hours 1) <$> getTime
+  (Some vestingLockCid, None, None) <- expectCompletedUnlock =<< expectSuccess
+    (unlockAs registry alice pendingLockCid None unlockAt [charlie])
+
+  vestingPendingParties <- transferInstructionPendingParties alice (toInterfaceContractId vestingLockCid)
+  vestingPendingParties === sort [alice, registry.instrumentId.admin]
 
 testCustomControllersApprovalsResetOnTopUp : Script ()
 testCustomControllersApprovalsResetOnTopUp = do

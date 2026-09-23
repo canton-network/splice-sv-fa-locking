@@ -213,7 +213,11 @@ template GovernanceLock
             inputHoldingCids = []
             meta = reasonToMeta encodedReason meta
           status = V1.TransferPendingInternalWorkflow with
-            pendingActions = Map.singleton owner "withdraw transfer instruction to unlock"
+            pendingActions = Map.fromList
+              [ (p, "withdraw transfer instruction to approve unlock")
+              | p <- Set.toList $ controllersSuperset specification.unlockControllers
+              , not (Map.member p pendingUnlockApprovals)
+              ]
           meta = emptyMetadata
         where
           (receiver, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
@@ -449,7 +453,14 @@ template VestingLock
             inputHoldingCids = []
             meta = reasonToMeta encodedReason meta
           status = V1.TransferPendingInternalWorkflow with
-            pendingActions = Map.fromList [(owner, "withdraw vested amounts"), (dso, "release fully vested lock")]
+            -- `Map.fromList` keeps the last value for a duplicate key, so the "release fully vested lock" entry is appended
+            -- after the vesting controllers. If the party releasing fully vested locks is also an unapproved vesting controller,
+            -- its "release fully vested lock" action takes precedence over the generic "withdraw vested amounts" action.
+            pendingActions = Map.fromList $
+              [ (p, "withdraw vested amounts")
+              | p <- Set.toList $ controllersSuperset specification.vestingControllers
+              , not (Map.member p pendingWithdrawApprovals)
+              ] <> [(dso, "release fully vested lock")]
           meta = emptyMetadata
         where
           (receiver, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
