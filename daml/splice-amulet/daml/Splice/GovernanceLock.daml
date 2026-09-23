@@ -730,7 +730,7 @@ getSvRewardInputAmuletAndChange svRewardCouponInputs svRewardCouponPercentage ex
   result <- executeTransfer transferEventsV2EventLog rewardsConfig transferContext dso [] transfer
   let (Some changeFromSvCouponRewards) : Optional (ContractId Amulet) = result.senderChangeAmulet
 
-  amulet <- fetch changeFromSvCouponRewards
+  amulet <- fetchChecked forOwner changeFromSvCouponRewards
   let svRewardMintAllowance = amulet.amount.initialAmount * svRewardCouponPercentage
 
   pure (Some $ toInterfaceContractId changeFromSvCouponRewards, svRewardMintAllowance)
