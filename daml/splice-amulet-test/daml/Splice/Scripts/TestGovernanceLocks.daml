@@ -412,9 +412,6 @@ testTopUpNegativePath = do
         svRewardCouponPercentage = 2.0
         extraArgs
 
-testGovernanceLockProvisionalFullWithdrawRawChoices : Script ()
-testGovernanceLockProvisionalFullWithdrawRawChoices = testGovernanceLockProvisionalFullWithdrawScenario rawOperations
-
 testGovernanceLockProvisionalFullWithdrawScenario : GovernanceLockOperations -> Script ()
 testGovernanceLockProvisionalFullWithdrawScenario ops = do
   TestEnv{..} <- setupTest
@@ -483,6 +480,9 @@ testGovernanceLockProvisionalPartialWithdrawScenario ops = do
 
   -- The remaining 10k stays locked
   checkLockedHolding alice remainingLock 20000.0
+
+testGovernanceLockProvisionalFullWithdrawRawChoices : Script ()
+testGovernanceLockProvisionalFullWithdrawRawChoices = testGovernanceLockProvisionalFullWithdrawScenario rawOperations
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
