@@ -24,30 +24,21 @@ import java.time.Instant
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
-/** Scala mirrors of the `Splice.Scripts.TestGovernanceLocks` helpers, so that integration tests can
-  * build `GovernanceLock`s and `VestingLock`s through the production choices instead of
-  * hand-creating them.
-  *
-  * The correspondence is deliberate and greppable:
-  *
-  *   - [[lockForGovernance]] mirrors `governanceLockRawChoice`
-  *     (`ExternalPartyAmuletRules_LockForGovernance`),
-  *   - [[unlockGovernanceLock]] mirrors `governanceUnlockRawChoice` (`GovernanceLock_Unlock`),
-  *   - [[getGovernanceLockContext]] mirrors `submitWithTransferContext` /
-  *     `AmuletRegistryV2.getExternalPartyConfigStateContext`.
+/** Test helpers for integration tests to control governance locks using
+  * production choices rather than constructing contracts directly.
   */
 trait GovernanceLockTestUtil extends TestCommon { this: HasExecutionContext =>
 
-  /** The one-entry choice context both governance-lock choices expect.
+  /** The one-entry choice context that governance-lock choices expect.
     *
-    * `unfeaturedPaymentContextAndConfigFromChoiceContext` fails the transaction unless the context
-    * carries the `external-party-config-state` key, and `ExternalPartyConfigState` has no contract
-    * key and two active contracts at a time, so the submitter has to pick one. Neither choice
-    * checks freshness, so the newest of the pair is always fine.
+    * Govenance lock implementations fail the transaction unless in the
+    * `unfeaturedPaymentContextAndConfigFromChoiceContext` function unless the
+    * context carries the `external-party-config-state` key.
     *
-    * No disclosures are needed as long as the submission runs on the participant hosting the DSO
-    * party with `readAs = dso`: `ExternalPartyAmuletRules` and `ExternalPartyConfigState` are both
-    * `signatory dso`.
+    * No disclosures are returned in this context because disclosures are not
+    * needed as longn as the submission runs on the participant hosting the DSO
+    * party with `readAs = dso`. The governance lock choices' contracts are
+    * signed by DSO.
     */
   def getGovernanceLockContext(implicit
       env: SpliceTestConsoleEnvironment
@@ -68,10 +59,9 @@ trait GovernanceLockTestUtil extends TestCommon { this: HasExecutionContext =>
     )
   }
 
-  /** The unlocked `Amulet`s of `owner`, as the `inputs` the token-standard choices expect.
+  /** The unlocked `Amulet`s of an `owner`.
     *
-    * Mirrors `WalletClientV2.listUnlockedHoldingCidsFor`: `LockedAmulet`s are a separate template,
-    * so filtering on `Amulet` already yields only unlocked holdings.
+    * Used as the `inputs` for a choice that locks amulet for governance.
     */
   def listUnlockedHoldingCids(
       participantClient: ParticipantClientReference,
@@ -81,7 +71,7 @@ trait GovernanceLockTestUtil extends TestCommon { this: HasExecutionContext =>
       .filterJava(Amulet.COMPANION)(owner)
       .map(amulet => new holdingv1.Holding.ContractId(amulet.id.contractId))
 
-  /** Scala mirror of `TestGovernanceLocks.governanceLockRawChoice`.
+  /** Executes a choice to "lock" amulet for governance.
     *
     * Locks `amount` out of all of `owner`'s unlocked holdings. The remainder
     * comes back as a change `Amulet`.
@@ -114,12 +104,19 @@ trait GovernanceLockTestUtil extends TestCommon { this: HasExecutionContext =>
       .governanceLock
   }
 
-  /** Scala mirror of `TestGovernanceLocks.governanceUnlockRawChoice`.
+  /** Executes a choice to "unlock" a governance lock.
+    *
+    * Normally a vesting lock gets created as a result of the choice execution
+    *  that releases amulet at linear schedule over a vesting period.
     *
     * `unlockAmount = None` unlocks the whole lock (no split, no continuing `GovernanceLock`).
     * `unlockAt` must be strictly in the future; the resulting `VestingLock.endTime` is
     * `unlockAt + vestingDurationFor specification.kind`, read off the `ExternalPartyConfigState`.
-    * No `VestingLock` is created if that vesting duration is zero.
+    *
+    * `None` vesting lock is created and returned if this `GovernanceLock` was
+    * representing a provisional featured app lock---vesting duration is 0.
+    *
+    * `None` governance lock is returned if it was unlocked fully.
     */
   def unlockGovernanceLock(
       participantClient: ParticipantClientReference,

@@ -762,6 +762,9 @@ trait SvDsoStore
     multiDomainAcsStore.listExpiredFromPayloadExpiry(
       splice.governancelock.VestingLock.COMPANION,
       unavailablePartiesStore,
+      // TODO(canton-network/splice-sv-fa-locking#76): Make sure custom
+      // controllers parties are listed here as well when they are implemented
+      // in Daml.
       ignoredPartyFields = Seq("owner"),
     )
 
