@@ -16,25 +16,30 @@ import org.lfdecentralizedtrust.splice.automation.{
 import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet.FeaturedAppRight
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock.GovernanceLock
 import org.lfdecentralizedtrust.splice.store.AppStoreWithIngestion.SpliceLedgerConnectionPriority
-import org.lfdecentralizedtrust.splice.store.PageLimit
+import org.lfdecentralizedtrust.splice.store.{PageLimit, UnavailablePartiesStore}
 import org.lfdecentralizedtrust.splice.sv.config.SvAppBackendConfig
+import org.lfdecentralizedtrust.splice.sv.util.ContractStakeholders
+import org.lfdecentralizedtrust.splice.util.Contract
 
-import scala.concurrent.{ExecutionContextExecutor, Future}
+import scala.concurrent.{ExecutionContext, Future}
 
-import ProvisionalFeaturedAppLockConversionTrigger.*
+import ProvisionalFeaturedAppLockConversionTrigger.{Task, getStakeholders}
 
 /** Converts provisional featured app `GovernanceLock`s into real ones once their provider holds a
   * `FeaturedAppRight`.
   */
 class ProvisionalFeaturedAppLockConversionTrigger(
-    svConfig: SvAppBackendConfig,
+    override protected val svConfig: SvAppBackendConfig,
     override protected val context: TriggerContext,
-    svTaskContext: SvTaskBasedTrigger.Context,
+    override protected val svTaskContext: SvTaskBasedTrigger.Context,
+    override protected val unavailablePartiesStore: UnavailablePartiesStore,
 )(implicit
-    ec: ExecutionContextExecutor,
+    override val ec: ExecutionContext,
     mat: Materializer,
     tracer: Tracer,
-) extends PollingParallelTaskExecutionTrigger[Task] {
+) extends PollingParallelTaskExecutionTrigger[Task]
+    with SvTaskBasedTrigger[Task]
+    with UnavailablePartiesGuard {
 
   private val store = svTaskContext.dsoStore
 
@@ -43,54 +48,66 @@ class ProvisionalFeaturedAppLockConversionTrigger(
       .listProvisionalGovernanceLocksWithFeaturedAppRightSample(
         PageLimit.tryCreate(
           svConfig.delegatelessAutomationProvisionalFeaturedAppLockConversionSampleSize
-        )
+        ),
+        Some(unavailablePartiesStore),
       )
       .map(_.map { case (governanceLock, featuredAppRightCid) =>
-        Task(governanceLock.contractId, featuredAppRightCid)
+        Task(governanceLock, featuredAppRightCid)
       })
 
-  override protected def completeTask(task: Task)(implicit
+  override def completeTaskAsDsoDelegate(task: Task, controller: String)(implicit
       tc: TraceContext
-  ): Future[TaskOutcome] = {
-    val svParty = store.key.svParty
+  ): Future[TaskOutcome] =
+    completeWithVettedAmuletVersion(
+      getStakeholders(task.governanceLock.payload).toSet,
+      Seq(task.governanceLock.contractId.contractId),
+    )(convertLock(task, controller))
+
+  private def convertLock(task: Task, controller: String)(implicit
+      tc: TraceContext
+  ): Future[TaskOutcome] =
     for {
       dsoRules <- store.getDsoRules()
       cmd = dsoRules.exercise(
         _.exerciseDsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(
-          task.governanceLockCid,
+          task.governanceLock.contractId,
           task.featuredAppRightCid,
-          svParty.toProtoPrimitive,
+          controller,
         )
       )
       _ <- svTaskContext
         .connection(SpliceLedgerConnectionPriority.Low)
         .submit(
-          Seq(svParty),
+          Seq(store.key.svParty),
           Seq(store.key.dsoParty),
           cmd,
         )
         .noDedup
         .yieldUnit()
     } yield TaskSuccess(
-      s"Converted provisional featured app lock ${task.governanceLockCid.contractId} " +
+      s"Converted provisional featured app lock ${task.governanceLock.contractId.contractId} " +
         s"using FeaturedAppRight ${task.featuredAppRightCid.contractId}"
     )
-  }
 
   override protected def isStaleTask(task: Task)(implicit
       tc: TraceContext
   ): Future[Boolean] =
     for {
       governanceLock <- store.multiDomainAcsStore
-        .lookupContractById(GovernanceLock.COMPANION)(task.governanceLockCid)
+        .lookupContractById(GovernanceLock.COMPANION)(task.governanceLock.contractId)
       featuredAppRight <- store.multiDomainAcsStore
         .lookupContractById(FeaturedAppRight.COMPANION)(task.featuredAppRightCid)
     } yield governanceLock.isEmpty || featuredAppRight.isEmpty
 }
 
-object ProvisionalFeaturedAppLockConversionTrigger {
+object ProvisionalFeaturedAppLockConversionTrigger extends ContractStakeholders[GovernanceLock] {
+
+  override def informees(payload: GovernanceLock): Seq[String] = Seq(payload.owner)
+
+  override def dso(payload: GovernanceLock): String = payload.dso
+
   final case class Task(
-      governanceLockCid: GovernanceLock.ContractId,
+      governanceLock: Contract[GovernanceLock.ContractId, GovernanceLock],
       featuredAppRightCid: FeaturedAppRight.ContractId,
   ) extends PrettyPrinting {
 
@@ -98,7 +115,7 @@ object ProvisionalFeaturedAppLockConversionTrigger {
 
     override def pretty: Pretty[this.type] =
       prettyOfClass(
-        param("governanceLockCid", _.governanceLockCid),
+        param("governanceLockCid", _.governanceLock.contractId),
         param("featuredAppRightCid", _.featuredAppRightCid),
       )
   }

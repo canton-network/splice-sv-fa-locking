@@ -239,6 +239,7 @@ class DsoDelegateBasedAutomationService(
         config,
         triggerContext,
         svTaskContext,
+        unavailablePartiesStore,
       )
     )
   }
