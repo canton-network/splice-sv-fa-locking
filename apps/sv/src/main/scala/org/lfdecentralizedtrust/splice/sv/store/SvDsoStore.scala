@@ -1046,7 +1046,8 @@ trait SvDsoStore
   ]
 
   def listProvisionalGovernanceLocksWithFeaturedAppRightSample(
-      limit: Limit = defaultLimit
+      limit: Limit = defaultLimit,
+      unavailablePartiesStore: Option[UnavailablePartiesStore] = None,
   )(implicit tc: TraceContext): Future[
     Seq[
       (

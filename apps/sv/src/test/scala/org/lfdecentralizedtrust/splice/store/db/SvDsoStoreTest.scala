@@ -2506,6 +2506,49 @@ class DbSvDsoStoreTest
       }
     }
 
+    "respects ignored parties" in {
+      val ownerA = userParty(1)
+      val ownerB = userParty(2)
+      val providerA = userParty(3)
+      val providerB = userParty(4)
+      val lockA = governanceLock(
+        ownerA,
+        amount = BigDecimal(10),
+        kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+          providerA.toProtoPrimitive
+        ),
+      )
+      val lockB = governanceLock(
+        ownerB,
+        amount = BigDecimal(10),
+        kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+          providerB.toProtoPrimitive
+        ),
+      )
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(lockA)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(lockB)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(providerA))(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(providerB))(store.multiDomainAcsStore)
+        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()
+        resultNoOwnerA <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
+          unavailablePartiesStore = Some(new InMemoryUnavailablePartiesStore(Set(ownerA)))
+        )
+        resultNoOwners <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
+          unavailablePartiesStore = Some(new InMemoryUnavailablePartiesStore(Set(ownerA, ownerB)))
+        )
+      } yield {
+        result.map(_._1.contractId) should contain theSameElementsAs Seq(
+          lockA.contractId,
+          lockB.contractId,
+        )
+        resultNoOwnerA.map(_._1.contractId) should contain theSameElementsAs Seq(lockB.contractId)
+        resultNoOwners shouldBe empty
+      }
+    }
+
   }
 
   "listVoteRequestsReadyToBeClosed" should {

@@ -1945,7 +1945,8 @@ class DbSvDsoStore(
   }
 
   override def listProvisionalGovernanceLocksWithFeaturedAppRightSample(
-      limit: Limit = defaultLimit
+      limit: Limit = defaultLimit,
+      unavailablePartiesStore: Option[UnavailablePartiesStore] = None,
   )(implicit tc: TraceContext): Future[Seq[
     (
         Contract[
@@ -1957,6 +1958,14 @@ class DbSvDsoStore(
   ]] = waitUntilAcsIngested {
     val opName = "listProvisionalGovernanceLocksWithFeaturedAppRightSample"
     for {
+      ignoredParties <- UnavailablePartiesStore.listParties(unavailablePartiesStore)
+      filterClause =
+        if (ignoredParties.nonEmpty)
+          (sql" and " ++ notInClause(
+            "acs.create_arguments->>'owner'",
+            ignoredParties,
+          )).toActionBuilder
+        else sql""
       result <- storage.query(
         (sql"""
           select #${AcsQueries.SelectFromAcsTableResult.sqlColumnsCommaSeparated("sample.")},
@@ -1985,6 +1994,7 @@ class DbSvDsoStore(
             splice.governancelock.GovernanceLock.TEMPLATE_ID_WITH_PACKAGE_ID
           )}
               and acs.provisional_featured_app_lock_for is not null
+              """ ++ filterClause ++ sql"""
             limit 1000
           ) sample
           order by random()
