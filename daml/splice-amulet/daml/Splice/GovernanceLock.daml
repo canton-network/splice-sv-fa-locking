@@ -20,13 +20,16 @@ import Splice.Amulet
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
 import Splice.AmuletConfig (defaultGovernanceLockFeaturedAppLockVestingDuration, defaultGovernanceLockMinimumLockAmount, defaultGovernanceLockSearchTimeGranularity, defaultGovernanceLockSuperValidatorLockVestingDuration)
 import Splice.AmuletRules
+import Splice.Api.Token.AllocationV2 qualified as V2
 import Splice.Api.Token.HoldingV1 (Holding)
+import Splice.Api.Token.HoldingV2 qualified as V2
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
-import Splice.Expiry
+import Splice.Expiry hiding (maxTime)
 import Splice.Fees (relTimeToSeconds)
 import Splice.ExternalPartyConfigState
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
+import Splice.TokenStandard.Utils.Internal.Conversions (basicAccount)
 import Splice.Amulet.TokenApiUtils
 import Splice.Types
 import Splice.Util
@@ -404,6 +407,44 @@ template VestingLock
             meta = emptyMetadata
       transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks cannot be updated"
 
+    interface instance V2.Allocation for VestingLock where
+      view = V2.AllocationView with
+          originalAllocationCid = coerceContractId <$> originalLockCid
+          settlement = V2.SettlementInfo with
+            executors = [owner]
+            -- FIXME: Correct id?
+            id = cipAddressPrefix <> "VestingLockSettlement"
+              -- ^ Textual identifier of the settlement.
+            cid = None
+            meta = emptyMetadata
+          allocation = V2.AllocationSpecification with
+            admin = owner
+            authorizer = basicAccount owner
+            transferLegSides = []
+            settlementDeadline = Some maxComparableTime
+            nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName vestingAmount
+            committed = True -- FIXME: Old PR mentions to revisit for FA locks
+            -- FIXME: Correct metadata?
+            meta = reasonToMeta encodedReason meta
+          holdingCids = toInterfaceContractId lockedAmulet
+          -- FIXME: createdAt is not supposed to be endTime
+          createdAt = endTime
+          numIterations = 0
+          expiresAt = Some maxBound
+          availableActions = Map.fromList [(V2.AA_Withdraw, [[owner]])]
+          -- FIXME: should available action include AA_Custom with the second below?
+          --availableActions : Map.Map AllocationAction [[Party]] =
+          --  Map.fromList [(owner, "withdraw vested amounts"), (dso, "release fully vested lock")]
+          meta = emptyMetadata
+        where
+          (receiver, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
+      allocation_settleImpl : ContractId V2.Allocation -> V2.Allocation_Settle -> Update V2.AllocationResult = undefined
+      allocation_cancelImpl : ContractId V2.Allocation -> V2.Allocation_Cancel -> Update V2.AllocationResult = undefined
+      allocation_withdrawImpl : ContractId V2.Allocation -> V2.Allocation_Withdraw -> Update V2.AllocationResult = undefined
+
+      allocation_settleExtraObservers : V2.Allocation_Settle -> [Party] = undefined
+      allocation_cancelExtraObservers : V2.Allocation_Cancel -> [Party] = undefined
+      allocation_withdrawExtraObservers : V2.Allocation_Withdraw -> [Party] = undefined
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
@@ -662,6 +703,9 @@ lockTypeToCompatibilityPartyAndReason : GovernanceLockKind -> (Party, Text)
 lockTypeToCompatibilityPartyAndReason (GLK_FeaturedApp with provider) = (featuredAppLockCanonicalParty, "lock-subject=" <> partyToText provider)
 lockTypeToCompatibilityPartyAndReason (GLK_ProvisionalFeaturedApp with provider) = (provisionalFeaturedAppLockCanonicalParty, "lock-subject=" <> partyToText provider)
 lockTypeToCompatibilityPartyAndReason (GLK_SuperValidatorRightsOwner with svName) = (superValidatorLockCanonicalParty, "lock-subject=" <> svName)
+
+maxComparableTime : Time
+maxComparableTime = addRelTime maxTime $ microseconds (-1)
 
 instance HasCheckedFetch GovernanceLock ForOwner where
   contractGroupId GovernanceLock {..} = ForOwner with dso; owner
