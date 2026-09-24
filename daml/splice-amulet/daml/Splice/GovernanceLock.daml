@@ -108,7 +108,7 @@ template GovernanceLock
 
         (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
-        (optChangeHoldingsFromSvRewardCoupons, svRewardMintAllowance) <- getSvRewardInputAmuletAndChange
+        (holdingsFromSvRewardCoupons, svRewardMintAllowance) <- getSvRewardInputAmuletAndChange
           svRewardCouponInputs
           svRewardCouponPercentage
           extraArgs
@@ -133,7 +133,7 @@ template GovernanceLock
             allInputHoldings = toInterfaceContractId unlockedAmuletCid
               :: holdingInputs
               <> unlockedHoldingsFromMergeLocks
-              <> optionalToList optChangeHoldingsFromSvRewardCoupons
+              <> holdingsFromSvRewardCoupons
 
         ([newLockedAmulet], newChangeHolding) <- lockAmulet
           forOwner
@@ -708,8 +708,8 @@ getSvRewardInputAmuletAndChange
   -> ExtraArgs
   -> ForOwner
   -> ContractId TransferEventsV2.EventLog
-  -> Update (Optional (ContractId Holding), Decimal)
-getSvRewardInputAmuletAndChange [] _ _ _ _ = pure (None, 0.0)
+  -> Update ([ContractId Holding], Decimal)
+getSvRewardInputAmuletAndChange [] _ _ _ _ = pure ([], 0.0)
 getSvRewardInputAmuletAndChange svRewardCouponInputs svRewardCouponPercentage extraArgs forOwner transferEventsV2EventLog = do
   let dso = forOwner.dso
   (currentIssuingMiningRoundCids, openMiningRoundCid) <- getMiningRoundsFromChoiceContext extraArgs.context
@@ -737,7 +737,7 @@ getSvRewardInputAmuletAndChange svRewardCouponInputs svRewardCouponPercentage ex
   amulet <- fetchChecked forOwner changeFromSvCouponRewards
   let svRewardMintAllowance = amulet.amount.initialAmount * svRewardCouponPercentage
 
-  pure (Some $ toInterfaceContractId changeFromSvCouponRewards, svRewardMintAllowance)
+  pure ([toInterfaceContractId changeFromSvCouponRewards], svRewardMintAllowance)
 
 instance HasCheckedFetch GovernanceLock ForOwner where
   contractGroupId GovernanceLock {..} = ForOwner with dso; owner
