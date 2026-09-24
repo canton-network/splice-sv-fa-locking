@@ -66,6 +66,10 @@ class ExpireVestingLockTimeBasedIntegrationTest
   // `GovernanceLock_Unlock` is one, so the `Amulet`/`LockedAmulet` events they
   // produce come out as `"parentChoice": "none (root node)"` and `--strict`
   // rejects them.
+  //
+  // TODO(canton-network/splice-sv-fa-locking#80): Remove this "sanity check
+  // ignore", then `GovernanceLockTestUtil` is rewritten to use TSv1 choices to
+  // control the locks for tests.
   override protected lazy val sanityChecksIgnoredRootCreates: Seq[Identifier] = Seq(
     Amulet.TEMPLATE_ID_WITH_PACKAGE_ID,
     LockedAmulet.TEMPLATE_ID_WITH_PACKAGE_ID,
