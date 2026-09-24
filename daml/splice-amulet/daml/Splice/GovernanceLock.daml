@@ -130,13 +130,17 @@ template GovernanceLock
         let unlockedAmountFromMergeLocks : Decimal = sum [amt | (amt, _) <- unlockedAmountsAndHoldings]
             unlockedHoldingsFromMergeLocks : [ContractId Holding] = [holding | (_, holding) <- unlockedAmountsAndHoldings]
             newLockAmount = amount + topUpAmount + unlockedAmountFromMergeLocks + svRewardMintAllowance
+            allInputHoldings = toInterfaceContractId unlockedAmuletCid
+              :: holdingInputs
+              <> unlockedHoldingsFromMergeLocks
+              <> optionalToList optChangeHoldingsFromSvRewardCoupons
 
         ([newLockedAmulet], newChangeHolding) <- lockAmulet
           forOwner
           [(newLockAmount, lockProps)]
-          (toInterfaceContractId unlockedAmuletCid :: holdingInputs <> unlockedHoldingsFromMergeLocks <> optionalToList optChangeHoldingsFromSvRewardCoupons)
+          allInputHoldings
           context
-          $ if isSome optChangeHoldingsFromSvRewardCoupons
+          $ if svRewardMintAllowance > 0.0
               then "(includes minting and locking " <> show svRewardMintAllowance <> " SV rewards)"
               else ""
 
@@ -682,8 +686,8 @@ lockTypeToCompatibilityPartyAndReason (GLK_FeaturedApp with provider) = (feature
 lockTypeToCompatibilityPartyAndReason (GLK_ProvisionalFeaturedApp with provider) = (provisionalFeaturedAppLockCanonicalParty, "lock-subject=" <> partyToText provider)
 lockTypeToCompatibilityPartyAndReason (GLK_SuperValidatorRightsOwner with svName) = (superValidatorLockCanonicalParty, "lock-subject=" <> svName)
 
-instance HasCheckedFetch GovernanceLock ForOwner where
-  contractGroupId GovernanceLock {..} = ForOwner with dso; owner
+-- SV Reward Coupon Helpers
+---------------------------
 
 fetchAndValidateIssuingMiningRounds : [AnyValue] -> ForDso -> Update (Map Round IssuingMiningRound, Map Round (ContractId IssuingMiningRound))
 fetchAndValidateIssuingMiningRounds vals forDso = do
@@ -734,3 +738,6 @@ getSvRewardInputAmuletAndChange svRewardCouponInputs svRewardCouponPercentage ex
   let svRewardMintAllowance = amulet.amount.initialAmount * svRewardCouponPercentage
 
   pure (Some $ toInterfaceContractId changeFromSvCouponRewards, svRewardMintAllowance)
+
+instance HasCheckedFetch GovernanceLock ForOwner where
+  contractGroupId GovernanceLock {..} = ForOwner with dso; owner
