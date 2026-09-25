@@ -100,7 +100,7 @@ template GovernanceLock
       -- info to help the user manage their locks.
     pendingUnlockApprovals : Map.Map Party UnlockApproval
       -- ^ Unlock approvals recorded so far, for multi-step authorization.
-      -- Cleared by every change to the lock other than recording an approval.
+      -- Cleared when converting a provisional featured app lock to a full lock.
   where
     signatory dso, owner
     observer governanceLockKindObservers specification.kind, governanceLockControllers specification
@@ -176,16 +176,10 @@ template GovernanceLock
               then "(includes minting and locking " <> show svRewardMintAllowance <> " SV rewards)"
               else ""
 
-        newGovernanceLock <- create GovernanceLock with
-          dso
-          owner
+        newGovernanceLock <- create this with
           amount = newLockAmount
           lockedAmulet = newLockedAmulet
-          specification
           originalLockCid = Some $ fromOptional self originalLockCid
-          requestedAt
-          meta
-          pendingUnlockApprovals = Map.empty
 
         pure $ GovernanceLock_MergeAndTopUpResult with
           governanceLock = newGovernanceLock

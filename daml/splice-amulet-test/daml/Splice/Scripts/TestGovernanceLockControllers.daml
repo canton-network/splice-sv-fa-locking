@@ -342,14 +342,15 @@ testCustomControllersTSv1Withdraw = do
   vestingPendingParties <- transferInstructionPendingParties alice (toInterfaceContractId vestingLockCid)
   vestingPendingParties === sort [alice, registry.instrumentId.admin]
 
-testCustomControllersApprovalsResetOnTopUp : Script ()
-testCustomControllersApprovalsResetOnTopUp = do
+testCustomControllersApprovalsPersistOnTopUp : Script ()
+testCustomControllersApprovalsPersistOnTopUp = do
   (env@TestEnv{..}, registry, lockCid) <- setupTwoOfThreeLock
   AmuletRegistryV2.tapFaucet registry alice 10000.0
   unlockAt <- (`addRelTime` hours 1) <$> getTime
 
-  pending <- expectPendingUnlock =<< expectSuccess (unlockAs registry alice lockCid None unlockAt [charlie])
-  (toppedUp, _) <- governanceLockTopUpRawChoice env pending [] None 5000.0 [] 0.0 alice mempty None
+  pendingCid <- expectPendingUnlock =<< expectSuccess (unlockAs registry alice lockCid None unlockAt [charlie])
+  Some pending <- queryContractId alice pendingCid
+  (toppedUpCid, _) <- governanceLockTopUpRawChoice env pendingCid [] None 5000.0 [] 0.0 alice mempty None
 
-  Some lock <- queryContractId alice toppedUp
-  lock.pendingUnlockApprovals === Map.empty
+  Some toppedUp <- queryContractId alice toppedUpCid
+  toppedUp.pendingUnlockApprovals === pending.pendingUnlockApprovals
