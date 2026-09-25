@@ -1960,6 +1960,9 @@ class DbSvDsoStore(
               (sql" and " ++ notInClause(
                 "acs.create_arguments->>'owner'",
                 ignoredParties,
+              ) ++ sql" and " ++ notInClause(
+                "acs.provisional_featured_app_lock_for",
+                ignoredParties,
               )).toActionBuilder
             else sql""
           synchronizerId <- getDsoRules().map(_.domain)

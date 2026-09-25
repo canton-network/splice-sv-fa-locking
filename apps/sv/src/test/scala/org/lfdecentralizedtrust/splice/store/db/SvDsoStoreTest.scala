@@ -2550,6 +2550,12 @@ class DbSvDsoStoreTest
         resultNoOwners <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
           Some(new InMemoryUnavailablePartiesStore(Set(ownerA, ownerB)))
         )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
+        resultNoProviderA <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
+          Some(new InMemoryUnavailablePartiesStore(Set(providerA)))
+        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
+        resultNoProviders <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
+          Some(new InMemoryUnavailablePartiesStore(Set(providerA, providerB)))
+        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
       } yield {
         result.map(_.contract.contractId) should contain theSameElementsAs Seq(
           lockA.contractId,
@@ -2559,6 +2565,10 @@ class DbSvDsoStoreTest
           lockB.contractId
         )
         resultNoOwners shouldBe empty
+        resultNoProviderA.map(_.contract.contractId) should contain theSameElementsAs Seq(
+          lockB.contractId
+        )
+        resultNoProviders shouldBe empty
       }
     }
 
