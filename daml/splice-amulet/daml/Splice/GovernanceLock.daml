@@ -9,7 +9,7 @@ import DA.Assert
 import DA.Either (isRight)
 import DA.Foldable (forA_, mapA_, maximum, toList)
 import DA.Functor (($>))
-import DA.List.Total (head)
+import DA.List.Total (head, minimumOn)
 import DA.Map (Map)
 import DA.Map qualified as Map
 import DA.Optional
@@ -676,10 +676,9 @@ updateApprovals controllers actors approval approvals approvalIsValid = do
 effectiveUnlockAt : [Time] -> Update Time
 effectiveUnlockAt times = do
   futureTimes <- filterA isLedgerTimeLT times
-  case futureTimes of
-    [] -> assertFail "None of the approved unlock times is in the future"
-    t :: ts -> do
-      let earliest = foldl min t ts
+  case minimumOn identity futureTimes of
+    None -> assertFail "None of the approved unlock times is in the future"
+    Some earliest -> do
       assertDeadlineExceeded "unlockAt - 1 day" (earliest `addRelTime` days (-1))
       pure earliest
 
