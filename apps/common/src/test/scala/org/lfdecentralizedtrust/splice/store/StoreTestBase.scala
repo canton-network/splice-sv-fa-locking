@@ -538,6 +538,11 @@ abstract class StoreTestBase
     )
   }
 
+  private def lockControllers(owner: PartyId): governancelockCodegen.ControllerSpecification =
+    new governancelockCodegen.ControllerSpecification(
+      List(List(owner.toProtoPrimitive).asJava).asJava
+    )
+
   protected def governanceLock(
       owner: PartyId,
       amount: BigDecimal,
@@ -549,7 +554,7 @@ abstract class StoreTestBase
     governancelockCodegen.GovernanceLock.ContractId,
     governancelockCodegen.GovernanceLock,
   ] = {
-    val ownerOnly: util.List[util.List[String]] = List(List(owner.toProtoPrimitive).asJava).asJava
+    val controllers = lockControllers(owner)
     contract(
       identifier = governancelockCodegen.GovernanceLock.TEMPLATE_ID_WITH_PACKAGE_ID,
       contractId = new governancelockCodegen.GovernanceLock.ContractId(contractId),
@@ -560,9 +565,9 @@ abstract class StoreTestBase
         new LockedAmulet.ContractId(nextCid()),
         new governancelockCodegen.GovernanceLockSpecification(
           kind,
-          ownerOnly,
-          ownerOnly,
-          ownerOnly,
+          controllers,
+          controllers,
+          controllers,
         ),
         Optional.empty(),
         Instant.now().truncatedTo(ChronoUnit.MICROS),
@@ -579,8 +584,7 @@ abstract class StoreTestBase
       dso: PartyId = dsoParty,
       svName: String = "sv1",
       contractId: String = nextCid(),
-  ): Contract[governancelockCodegen.VestingLock.ContractId, governancelockCodegen.VestingLock] = {
-    val ownerOnly: util.List[util.List[String]] = List(List(owner.toProtoPrimitive).asJava).asJava
+  ): Contract[governancelockCodegen.VestingLock.ContractId, governancelockCodegen.VestingLock] =
     contract(
       identifier = governancelockCodegen.VestingLock.TEMPLATE_ID_WITH_PACKAGE_ID,
       contractId = new governancelockCodegen.VestingLock.ContractId(contractId),
@@ -593,14 +597,13 @@ abstract class StoreTestBase
         vestingAmount.bigDecimal,
         new governancelockCodegen.VestingLockSpecification(
           new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner(svName),
-          ownerOnly,
+          lockControllers(owner),
         ),
         Optional.empty(),
         new Metadata(util.Collections.emptyMap()),
         util.Map.of[String, Instant](),
       ),
     )
-  }
 
   protected def appRewardCoupon(
       round: Int,

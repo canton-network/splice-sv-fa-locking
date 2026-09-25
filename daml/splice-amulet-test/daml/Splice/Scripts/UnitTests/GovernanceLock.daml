@@ -97,7 +97,7 @@ test_updateApprovals = do
     x <- allocateParty "x"
     s <- allocateParty "s"
     other <- allocateParty "other"
-    let controllers = [[s, x], [s, a], [a, x]]
+    let controllers = ControllerSpecification $ [[s, x], [s, a], [a, x]]
         run : CanAssert m => [Party] -> Int -> Map.Map Party Int -> m (Either (Map.Map Party Int) (Set.Set Party))
         run actors v approvals = do
           result <- updateApprovals controllers actors v approvals (== v)

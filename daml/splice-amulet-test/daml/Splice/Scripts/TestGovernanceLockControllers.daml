@@ -27,9 +27,9 @@ import Splice.Testing.Utils
 twoOfThreeSpecification : Party -> Party -> Party -> GovernanceLockSpecification
 twoOfThreeSpecification a x s = GovernanceLockSpecification with
   kind = GLK_FeaturedApp x
-  unlockControllers = [[s, x], [s, a], [a, x]]
-  substitutionControllers = [[s, x], [s, a], [a, x]]
-  vestingControllers = [[s], [a]]
+  unlockControllers = ControllerSpecification $ [[s, x], [s, a], [a, x]]
+  substitutionControllers = ControllerSpecification $ [[s, x], [s, a], [a, x]]
+  vestingControllers = ControllerSpecification $ [[s], [a]]
 
 testCustomControllersCreationValidation : Script ()
 testCustomControllersCreationValidation = do
@@ -38,9 +38,9 @@ testCustomControllersCreationValidation = do
   AmuletRegistryV2.tapFaucet registry alice 50000.0
   let spec = ownerControlledSpecification alice (GLK_FeaturedApp bob)
   let controllerTypes =
-        [ ("unlock", \cs -> spec with unlockControllers = cs)
-        , ("substitution", \cs -> spec with substitutionControllers = cs)
-        , ("vesting", \cs -> spec with vestingControllers = cs)
+        [ ("unlock", \cs -> spec with unlockControllers = ControllerSpecification cs)
+        , ("substitution", \cs -> spec with substitutionControllers = ControllerSpecification cs)
+        , ("vesting", \cs -> spec with vestingControllers = ControllerSpecification cs)
         ]
 
   forA_ controllerTypes \(controllerType, setControllers) -> do
@@ -69,14 +69,14 @@ testVestingControllersAreCopiedToVestingLock = do
   let registry = registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry alice 50000.0
 
-  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob)) with vestingControllers = [[charlie]]
+  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob)) with vestingControllers = ControllerSpecification [[charlie]]
   lockCid <- governanceLockWithSpecRawChoice registry alice 50000.0 spec
 
   unlockAt <- (`addRelTime` hours 1) <$> getTime
   (Some vestingCid, None, None) <- governanceUnlockRawChoice registry lockCid None unlockAt [alice]
 
   Some vestingLock <- queryContractId charlie vestingCid
-  vestingLock.specification.vestingControllers === [[charlie]]
+  vestingLock.specification.vestingControllers === ControllerSpecification [[charlie]]
   vestingLock.pendingWithdrawApprovals === Map.empty
 
 submitLockChoice
@@ -200,7 +200,7 @@ testCustomControllersUnlockTimeOverAllSatisfiedSets = do
   let registry = registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry alice 50000.0
   let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob)) with
-        unlockControllers = [[charlie, bob], [alice, bob]]
+        unlockControllers = ControllerSpecification [[charlie, bob], [alice, bob]]
   lockCid <- governanceLockWithSpecRawChoice registry alice 50000.0 spec
   now <- getTime
   let aliceUnlockAt = now `addRelTime` hours 1
@@ -258,7 +258,7 @@ setupVestingLockWithControllers vestingControllersFor = do
   let registry = registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry alice 20000.0
   let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob)) with
-        vestingControllers = vestingControllersFor env
+        vestingControllers = ControllerSpecification $ vestingControllersFor env
   lockCid <- governanceLockWithSpecRawChoice registry alice 20000.0 spec
   unlockAt <- (`addRelTime` hours 1) <$> getTime
   (Some vestingCid, None, None) <- governanceUnlockRawChoice registry lockCid None unlockAt [alice]
@@ -321,7 +321,7 @@ testCustomControllersTSv1Withdraw = do
   let registry = registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry alice 20000.0
   let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob)) with
-        unlockControllers = [[alice, charlie]]
+        unlockControllers = ControllerSpecification [[alice, charlie]]
   lockCid <- governanceLockWithSpecRawChoice registry alice 20000.0 spec
 
   pendingParties <- transferInstructionPendingParties alice (toInterfaceContractId lockCid)

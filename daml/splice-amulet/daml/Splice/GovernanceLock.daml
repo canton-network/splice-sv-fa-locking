@@ -36,6 +36,13 @@ import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.Types
 import Splice.Util
 
+data ControllerSpecification = ControllerSpecification with
+    controllers : [[Party]]
+      -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
+  deriving (Eq, Show, Serializable)
+
+instance Semigroup ControllerSpecification where
+  (<>) (ControllerSpecification a) (ControllerSpecification b) = ControllerSpecification $ a <> b
 
 data GovernanceLockKind
   = GLK_FeaturedApp with
@@ -49,19 +56,19 @@ data GovernanceLockKind
 data GovernanceLockSpecification
   = GovernanceLockSpecification with
       kind : GovernanceLockKind
-      unlockControllers : [[Party]]
-        -- ^ Sets of parties that can jointly unlock the lock. The unlock happens once all parties of any one set approve it.
-      substitutionControllers : [[Party]]
-        -- ^ Sets of parties that can jointly approve a substitution.
-      vestingControllers : [[Party]]
-        -- ^ Sets of parties that can jointly withdraw vested funds once the lock is vesting. Copied to the VestingLock on unlock.
+      unlockControllers : ControllerSpecification
+        -- ^ Controllers that can unlock the lock.
+      substitutionControllers : ControllerSpecification
+        -- ^ Controllers that can approve a substitution.
+      vestingControllers : ControllerSpecification
+        -- ^ Controllers that can withdraw vested funds once the lock is vesting. Copied to the VestingLock on unlock.
   deriving (Eq, Show, Serializable)
 
 data VestingLockSpecification
   = VestingLockSpecification with
       kind : GovernanceLockKind
-      vestingControllers : [[Party]]
-        -- ^ Sets of parties that can jointly drive the return of vested funds to the owner.
+      vestingControllers : ControllerSpecification
+        -- ^ Controllers that can drive the return of vested funds to the owner.
   deriving (Eq, Show, Serializable)
 
 -- | An unlock approval recorded by one unlock controller.
@@ -75,9 +82,9 @@ data UnlockApproval = UnlockApproval with
 ownerControlledSpecification : Party -> GovernanceLockKind -> GovernanceLockSpecification
 ownerControlledSpecification owner kind = GovernanceLockSpecification with
   kind
-  unlockControllers = [[owner]]
-  substitutionControllers = [[owner]]
-  vestingControllers = [[owner]]
+  unlockControllers = ControllerSpecification [[owner]]
+  substitutionControllers = ControllerSpecification [[owner]]
+  vestingControllers = ControllerSpecification [[owner]]
 
 template GovernanceLock
   with
@@ -595,8 +602,8 @@ governanceLockKindObservers (GLK_ProvisionalFeaturedApp party) = [party]
 governanceLockKindObservers (GLK_SuperValidatorRightsOwner _) = []
 
 -- | All parties that appear in any controller set.
-allControllers : [[Party]] -> Set.Set Party
-allControllers = Set.fromList . concat
+allControllers : ControllerSpecification -> Set.Set Party
+allControllers = Set.fromList . concat . (.controllers)
 
 governanceLockControllers : GovernanceLockSpecification -> Set.Set Party
 governanceLockControllers spec = allControllers $
@@ -610,8 +617,8 @@ validateVestingLockControllers : CanAssert m => VestingLockSpecification -> m ()
 validateVestingLockControllers spec =
   validateControllers [("vesting", spec.vestingControllers)]
 
-validateControllers : CanAssert m => [(Text, [[Party]])] -> m ()
-validateControllers = mapA_ \(controllerType, controllers) -> do
+validateControllers : CanAssert m => [(Text, ControllerSpecification)] -> m ()
+validateControllers = mapA_ \(controllerType, ControllerSpecification{controllers}) -> do
   require (controllerType <> "Controllers must not be empty") (not $ null controllers)
   require (controllerType <> "Controllers must not contain an empty controller set") (all (not . null) controllers)
 
@@ -651,13 +658,13 @@ vestingLock_updateWithdrawApprovals VestingLock{..} requestedAt actors = do
 -- a still-pending Left value.
 updateApprovals
   :  (CanAssert m, Eq a)
-  => [[Party]] -- ^ The sets of controllers that can authorize the current action.
+  => ControllerSpecification -- ^ The sets of controllers that can authorize the current action.
   -> [Party] -- ^ The set of actors that have authorized the current action.
   -> a -- ^ The approval authorized by these actors.
   -> Map.Map Party a -- ^ The pre-existing set of pending approvals.
   -> (a -> Bool) -- ^ Whether an approval should be considered valid.
   -> m (Either (Map.Map Party a) [(Party, a)])
-updateApprovals controllers actors approval approvals approvalIsValid = do
+updateApprovals ControllerSpecification{controllers} actors approval approvals approvalIsValid = do
   require "actors must not be empty" (not $ null actors)
   forA_ actors $ \actor ->
     require ("actor " <> partyToText actor <> " must be a controller") (any (actor `elem`) controllers)
@@ -666,8 +673,8 @@ updateApprovals controllers actors approval approvals approvalIsValid = do
     (any (\actor -> Map.lookup actor approvals /= Some approval) actors)
   let updated = foldl (\m actor -> Map.insert actor approval m) approvals actors
       approvedBy p = optional False approvalIsValid (Map.lookup p updated)
-      satisfiedControllers = filter (all approvedBy) controllers
-  pure $ if null satisfiedControllers
+      satisfiedControllers = ControllerSpecification $ filter (all approvedBy) controllers
+  pure $ if null satisfiedControllers.controllers
     then Left updated
     else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (Set.toList $ allControllers satisfiedControllers)
 
