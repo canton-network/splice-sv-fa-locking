@@ -6,7 +6,6 @@ module Splice.GovernanceLock where
 import Prelude hiding (forA)
 import DA.Action (filterA, unless)
 import DA.Assert
-import DA.Either (isRight)
 import DA.Foldable (forA_, mapA_, maximum, toList)
 import DA.Functor (($>))
 import DA.List.Total (head, minimumOn)
@@ -105,7 +104,7 @@ template GovernanceLock
   where
     signatory dso, owner
     observer governanceLockKindObservers specification.kind, governanceLockControllers specification
-    ensure amount > 0.0 && isRight (validateGovernanceLockControllers @(Either Text) specification)
+    ensure amount > 0.0 && either error (const True) (validateGovernanceLockControllers @(Either Text) specification)
 
     choice GovernanceLock_Unlock : GovernanceLock_UnlockResult
       with
@@ -420,7 +419,7 @@ template VestingLock
   where
     signatory dso, owner
     observer allControllers specification.vestingControllers
-    ensure vestingAmount > 0.0 && vestingPeriod >= aunit && isRight (validateVestingLockControllers @(Either Text) specification)
+    ensure vestingAmount > 0.0 && vestingPeriod >= aunit && either error (const True) (validateVestingLockControllers @(Either Text) specification)
 
     choice VestingLock_Withdraw : VestingLock_WithdrawResult
       -- ^ Withdraw all funds that have vested since the last withdrawal
