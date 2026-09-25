@@ -538,16 +538,23 @@ abstract class StoreTestBase
     )
   }
 
+  private def lockControllers(owner: PartyId): governancelockCodegen.ControllerSpecification =
+    new governancelockCodegen.ControllerSpecification(
+      List(List(owner.toProtoPrimitive).asJava).asJava
+    )
+
   protected def governanceLock(
       owner: PartyId,
       amount: BigDecimal,
       dso: PartyId = dsoParty,
-      svName: String = "sv1",
+      kind: governancelockCodegen.GovernanceLockKind =
+        new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner("sv1"),
       contractId: String = nextCid(),
   ): Contract[
     governancelockCodegen.GovernanceLock.ContractId,
     governancelockCodegen.GovernanceLock,
-  ] =
+  ] = {
+    val controllers = lockControllers(owner)
     contract(
       identifier = governancelockCodegen.GovernanceLock.TEMPLATE_ID_WITH_PACKAGE_ID,
       contractId = new governancelockCodegen.GovernanceLock.ContractId(contractId),
@@ -557,13 +564,18 @@ abstract class StoreTestBase
         amount.bigDecimal,
         new LockedAmulet.ContractId(nextCid()),
         new governancelockCodegen.GovernanceLockSpecification(
-          new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner(svName)
+          kind,
+          controllers,
+          controllers,
+          controllers,
         ),
         Optional.empty(),
         Instant.now().truncatedTo(ChronoUnit.MICROS),
-        new Metadata(java.util.Collections.emptyMap()),
+        new Metadata(util.Collections.emptyMap()),
+        util.Map.of[String, governancelockCodegen.UnlockApproval](),
       ),
     )
+  }
 
   protected def vestingLock(
       owner: PartyId,
@@ -584,10 +596,12 @@ abstract class StoreTestBase
         endTime,
         vestingAmount.bigDecimal,
         new governancelockCodegen.VestingLockSpecification(
-          new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner(svName)
+          new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner(svName),
+          lockControllers(owner),
         ),
         Optional.empty(),
-        new Metadata(java.util.Collections.emptyMap()),
+        new Metadata(util.Collections.emptyMap()),
+        util.Map.of[String, Instant](),
       ),
     )
 
