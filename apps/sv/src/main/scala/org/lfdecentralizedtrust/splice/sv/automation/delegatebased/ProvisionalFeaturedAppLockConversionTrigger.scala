@@ -23,6 +23,9 @@ import ProvisionalFeaturedAppLockConversionTrigger.{Task, getStakeholders}
 
 /** Converts provisional featured app `GovernanceLock`s into real ones once their provider holds a
   * `FeaturedAppRight`.
+  *
+  * These locks don't expire. We use the expired-contract base class because it batches the locks
+  * and groups each batch by a Daml version that all the parties on those locks have vetted.
   */
 class ProvisionalFeaturedAppLockConversionTrigger(
     override protected val svConfig: SvAppBackendConfig,
@@ -61,6 +64,10 @@ class ProvisionalFeaturedAppLockConversionTrigger(
       ignoreUnresponsiveParties = true,
     )(convertLocks(task, controller))
 
+  /** The query only returns locks whose provider has a live `FeaturedAppRight`, so a missing one
+    * here means it was archived between the query and this lookup. We drop those locks rather than
+    * fail, since the whole batch goes out as a single transaction.
+    */
   private def convertLocks(task: Task, controller: String)(implicit
       tc: TraceContext
   ): Future[TaskOutcome] =
