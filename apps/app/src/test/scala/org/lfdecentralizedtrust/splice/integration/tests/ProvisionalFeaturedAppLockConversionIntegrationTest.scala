@@ -1,11 +1,9 @@
 package org.lfdecentralizedtrust.splice.integration.tests
 
 import com.digitalasset.canton.topology.PartyId
-import com.digitalasset.canton.discard.Implicits.DiscardOps
-import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet.LockedAmulet
-import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.metadatav1.Metadata
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms
+import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.{
   IntegrationTest,
@@ -14,13 +12,10 @@ import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.{
 import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.ProvisionalFeaturedAppLockConversionTrigger
 import org.lfdecentralizedtrust.splice.util.*
 
-import java.time.Instant
-import java.time.temporal.ChronoUnit
-import java.util.Optional
-
 class ProvisionalFeaturedAppLockConversionIntegrationTest
     extends IntegrationTest
     with WalletTestUtil
+    with TokenStandardTest
     with TriggerTestUtil {
 
   override def environmentDefinition: SpliceEnvironmentDefinition =
@@ -32,86 +27,85 @@ class ProvisionalFeaturedAppLockConversionIntegrationTest
         )(config)
       )
 
+  private val lockAmount = BigDecimal(10000)
+
   private def conversionTrigger(implicit env: SpliceTestConsoleEnvironment) =
     sv1Backend.dsoDelegateBasedAutomation.trigger[ProvisionalFeaturedAppLockConversionTrigger]
 
-  private def createProvisionalLock(owner: PartyId, provider: PartyId)(implicit
-      env: SpliceTestConsoleEnvironment
-  ): Unit =
-    sv1Backend.participantClientWithAdminToken.ledger_api_extensions.commands
-      .submitWithResult(
-        userId = sv1Backend.config.ledgerApiUser,
-        actAs = Seq(dsoParty, owner),
-        readAs = Seq.empty,
-        update = new governancelock.GovernanceLock(
-          dsoParty.toProtoPrimitive,
-          owner.toProtoPrimitive,
-          BigDecimal(10000).bigDecimal,
-          new LockedAmulet.ContractId("00" * 33 + "01"),
-          new governancelock.GovernanceLockSpecification(
-            new governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
-              provider.toProtoPrimitive
-            )
-          ),
-          Optional.empty(),
-          Instant.now().truncatedTo(ChronoUnit.MICROS),
-          new Metadata(java.util.Collections.emptyMap()),
-        ).create(),
-      )
-      .discard
-
-  private def locksFor(provider: PartyId)(implicit env: SpliceTestConsoleEnvironment) =
+  // Conversion archives the lock and creates a new one, so the kind is looked up by provider
+  // rather than by contract id.
+  private def lockKindFor(
+      provider: PartyId
+  )(implicit env: SpliceTestConsoleEnvironment): governancelock.GovernanceLockKind =
     sv1Backend.participantClientWithAdminToken.ledger_api_extensions.acs
       .filterJava(governancelock.GovernanceLock.COMPANION)(
         dsoParty,
         _.data.specification.kind match {
-          case k: governancelock.governancelockkind.GLK_ProvisionalFeaturedApp =>
-            k.provider == provider.toProtoPrimitive
-          case k: governancelock.governancelockkind.GLK_FeaturedApp =>
-            k.provider == provider.toProtoPrimitive
+          case kind: governancelock.governancelockkind.GLK_ProvisionalFeaturedApp =>
+            kind.provider == provider.toProtoPrimitive
+          case kind: governancelock.governancelockkind.GLK_FeaturedApp =>
+            kind.provider == provider.toProtoPrimitive
           case _ => false
         },
       )
+      .loneElement
+      .data
+      .specification
+      .kind
 
-  "convert a provisional featured app lock once the provider has a FeaturedAppRight" in {
+  private def provisionalFor(provider: PartyId): governancelock.GovernanceLockKind =
+    new governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(provider.toProtoPrimitive)
+
+  private def featuredFor(provider: PartyId): governancelock.GovernanceLockKind =
+    new governancelock.governancelockkind.GLK_FeaturedApp(provider.toProtoPrimitive)
+
+  "convert a provisional featured app lock once its provider has a FeaturedAppRight" in {
     implicit env =>
-      val provider = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
-      val owner = sv1Backend.getDsoInfo().svParty
+      val alice = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
+      val bob = onboardWalletUser(bobWalletClient, bobValidatorBackend)
+      val charlie = onboardWalletUser(charlieWalletClient, aliceValidatorBackend)
 
-      eventuallySucceeds() {
-        aliceWalletClient.selfGrantFeaturedAppRight()
-      }
+      aliceWalletClient.tap(lockAmount)
+      bobWalletClient.tap(lockAmount)
 
-      createProvisionalLock(owner, provider)
-
-      clue("the lock starts out provisional") {
-        locksFor(provider).loneElement.data.specification.kind shouldBe
-          new governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
-            provider.toProtoPrimitive
+      actAndCheck(
+        "alice locks for charlie and bob locks for alice", {
+          createGovernanceLockViaTokenStandard(
+            aliceValidatorBackend.participantClientWithAdminToken,
+            RichPartyId.local(alice),
+            provisionalFeaturedAppLockMagicParty,
+            lockSubject = charlie.toProtoPrimitive,
+            amount = lockAmount,
           )
-      }
+          createGovernanceLockViaTokenStandard(
+            bobValidatorBackend.participantClientWithAdminToken,
+            RichPartyId.local(bob),
+            provisionalFeaturedAppLockMagicParty,
+            lockSubject = alice.toProtoPrimitive,
+            amount = lockAmount,
+          )
+        },
+      )(
+        "both locks start out provisional",
+        _ => {
+          lockKindFor(charlie) shouldBe provisionalFor(charlie)
+          lockKindFor(alice) shouldBe provisionalFor(alice)
+        },
+      )
 
       setTriggersWithin(triggersToResumeAtStart = Seq(conversionTrigger)) {
-        eventually() {
-          locksFor(provider).loneElement.data.specification.kind shouldBe
-            new governancelock.governancelockkind.GLK_FeaturedApp(provider.toProtoPrimitive)
-        }
-      }
-  }
-
-  "leave a provisional lock alone when the provider has no FeaturedAppRight" in { implicit env =>
-    val provider = onboardWalletUser(bobWalletClient, bobValidatorBackend)
-    val owner = sv1Backend.getDsoInfo().svParty
-
-    createProvisionalLock(owner, provider)
-
-    setTriggersWithin(triggersToResumeAtStart = Seq(conversionTrigger)) {
-      conversionTrigger.runOnce().futureValue
-
-      locksFor(provider).loneElement.data.specification.kind shouldBe
-        new governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
-          provider.toProtoPrimitive
+        actAndCheck(
+          "charlie grants himself a FeaturedAppRight",
+          eventuallySucceeds() {
+            charlieWalletClient.selfGrantFeaturedAppRight()
+          },
+        )(
+          "charlie's lock is converted and alice's is left alone",
+          _ => {
+            lockKindFor(charlie) shouldBe featuredFor(charlie)
+            lockKindFor(alice) shouldBe provisionalFor(alice)
+          },
         )
-    }
+      }
   }
 }
