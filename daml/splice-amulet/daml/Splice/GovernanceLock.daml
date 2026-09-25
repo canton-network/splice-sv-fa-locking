@@ -97,7 +97,7 @@ template GovernanceLock
       -- Cleared by every change to the lock other than recording an approval.
   where
     signatory dso, owner
-    observer typeExtraObservers specification.kind, governanceLockControllers specification
+    observer governanceLockKindObservers specification.kind, governanceLockControllers specification
     ensure amount > 0.0 && isRight (validateGovernanceLockControllers @(Either Text) specification)
 
     choice GovernanceLock_Unlock : GovernanceLock_UnlockResult
@@ -589,10 +589,10 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
 
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 AllocationFactory in terms of above.
 
-typeExtraObservers : GovernanceLockKind -> [Party]
-typeExtraObservers (GLK_FeaturedApp party) = [party]
-typeExtraObservers (GLK_ProvisionalFeaturedApp party) = [party]
-typeExtraObservers (GLK_SuperValidatorRightsOwner _) = []
+governanceLockKindObservers : GovernanceLockKind -> [Party]
+governanceLockKindObservers (GLK_FeaturedApp party) = [party]
+governanceLockKindObservers (GLK_ProvisionalFeaturedApp party) = [party]
+governanceLockKindObservers (GLK_SuperValidatorRightsOwner _) = []
 
 -- | All parties that appear in any controller set.
 controllersSuperset : [[Party]] -> Set.Set Party
