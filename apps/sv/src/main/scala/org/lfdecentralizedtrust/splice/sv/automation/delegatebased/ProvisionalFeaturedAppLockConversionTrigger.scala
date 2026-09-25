@@ -5,6 +5,7 @@ package org.lfdecentralizedtrust.splice.sv.automation.delegatebased
 
 import com.digitalasset.canton.topology.PartyId
 import com.digitalasset.canton.tracing.TraceContext
+import com.digitalasset.canton.util.MonadUtil
 import io.opentelemetry.api.trace.Tracer
 import org.apache.pekko.stream.Materializer
 import org.lfdecentralizedtrust.splice.automation.*
@@ -65,52 +66,51 @@ class ProvisionalFeaturedAppLockConversionTrigger(
   ): Future[TaskOutcome] =
     for {
       dsoRules <- store.getDsoRules()
-      withRights <- Future.traverse(task.work.expiredContracts) { lock =>
+      locksWithRights <- MonadUtil.sequentialTraverse(task.work.expiredContracts) { lock =>
         providerOf(lock.payload) match {
           case Some(provider) =>
             store.lookupFeaturedAppRight(provider).map(_.map(right => lock -> right.contractId))
           case None => Future.successful(None)
         }
       }
-      convertible = withRights.flatten
-      outcome <-
+      convertible = locksWithRights.flatten
+      res <-
         if (convertible.isEmpty) {
           Future.successful(
-            TaskSuccess("No provisional featured app lock still has a live FeaturedAppRight")
+            TaskSuccess("No provisional featured app locks with a live FeaturedAppRight to convert")
           )
         } else {
-          val cmds = convertible.flatMap { case (lock, rightCid) =>
-            dsoRules
-              .exercise(
-                _.exerciseDsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(
-                  lock.contractId,
-                  rightCid,
-                  controller,
-                )
-              )
-              .update
-              .commands()
-              .asScala
-              .toSeq
-          }
           svTaskContext
-            .connection(SpliceLedgerConnectionPriority.Low)
+            .connection(SpliceLedgerConnectionPriority.AmuletExpiry)
             .submit(
               Seq(store.key.svParty),
               Seq(store.key.dsoParty),
-              update = cmds,
+              update = convertible.flatMap { case (lock, rightCid) =>
+                dsoRules
+                  .exercise(
+                    _.exerciseDsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(
+                      lock.contractId,
+                      rightCid,
+                      controller,
+                    )
+                  )
+                  .update
+                  .commands()
+                  .asScala
+                  .toSeq
+              },
             )
             .noDedup
             .withSynchronizerId(dsoRules.domain)
             .yieldUnit()
             .map(_ =>
               TaskSuccess(
-                s"Converted ${convertible.size} provisional featured app lock(s) of " +
-                  s"${task.work.expiredContracts.size} in batch"
+                s"converted ${convertible.size} of ${task.work.expiredContracts.size} " +
+                  s"provisional featured app locks in batch"
               )
             )
         }
-    } yield outcome
+    } yield res
 
   private def providerOf(payload: splice.governancelock.GovernanceLock): Option[PartyId] =
     payload.specification.kind match {
