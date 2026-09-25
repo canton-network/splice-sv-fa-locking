@@ -2470,15 +2470,19 @@ class DbSvDsoStoreTest
 
       for {
         store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
         _ <- dummyDomain.create(readyLock)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(readyRight)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(notReadyLock)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(confirmedLock)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(confirmedRight)(store.multiDomainAcsStore)
-        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()
+        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()(
+          CantonTimestamp.now(),
+          PageLimit.tryCreate(100),
+        )(traceContext)
       } yield {
-        result.map { case (lock, right) => (lock.contractId, right) } should
-          contain theSameElementsAs Seq((readyLock.contractId, readyRight.contractId))
+        result.map(_.contract.contractId) should
+          contain theSameElementsAs Seq(readyLock.contractId)
       }
     }
 
@@ -2496,13 +2500,16 @@ class DbSvDsoStoreTest
 
       for {
         store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
         _ <- dummyDomain.create(lock)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(right1)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(right2)(store.multiDomainAcsStore)
-        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()
+        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()(
+          CantonTimestamp.now(),
+          PageLimit.tryCreate(100),
+        )(traceContext)
       } yield {
-        result.map(_._1.contractId) should contain theSameElementsAs Seq(lock.contractId)
-        Seq(right1.contractId, right2.contractId) should contain(result.head._2)
+        result.map(_.contract.contractId) should contain theSameElementsAs Seq(lock.contractId)
       }
     }
 
@@ -2528,23 +2535,29 @@ class DbSvDsoStoreTest
 
       for {
         store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
         _ <- dummyDomain.create(lockA)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(lockB)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(featuredAppRight(providerA))(store.multiDomainAcsStore)
         _ <- dummyDomain.create(featuredAppRight(providerB))(store.multiDomainAcsStore)
-        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()
+        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()(
+          CantonTimestamp.now(),
+          PageLimit.tryCreate(100),
+        )(traceContext)
         resultNoOwnerA <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
-          unavailablePartiesStore = Some(new InMemoryUnavailablePartiesStore(Set(ownerA)))
-        )
+          Some(new InMemoryUnavailablePartiesStore(Set(ownerA)))
+        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
         resultNoOwners <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
-          unavailablePartiesStore = Some(new InMemoryUnavailablePartiesStore(Set(ownerA, ownerB)))
-        )
+          Some(new InMemoryUnavailablePartiesStore(Set(ownerA, ownerB)))
+        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
       } yield {
-        result.map(_._1.contractId) should contain theSameElementsAs Seq(
+        result.map(_.contract.contractId) should contain theSameElementsAs Seq(
           lockA.contractId,
           lockB.contractId,
         )
-        resultNoOwnerA.map(_._1.contractId) should contain theSameElementsAs Seq(lockB.contractId)
+        resultNoOwnerA.map(_.contract.contractId) should contain theSameElementsAs Seq(
+          lockB.contractId
+        )
         resultNoOwners shouldBe empty
       }
     }

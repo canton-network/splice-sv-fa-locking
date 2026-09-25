@@ -476,7 +476,7 @@ case class SvAppBackendConfig(
     // So try to unhide all in single batch and avoid race among SVs
     delegatelessAutomationUnhideRewardCouponV2BatchSize: Int = 220,
     // How many provisional featured app locks to retrieve per poll for conversion
-    delegatelessAutomationProvisionalFeaturedAppLockConversionSampleSize: Int = 50,
+    delegatelessAutomationProvisionalFeaturedAppLockConversionBatchSize: Int = 50,
     // configuration to periodically take topology snapshots
     topologySnapshotConfig: Option[PeriodicBackupDumpConfig] = None,
     bftSequencerConnection: Boolean = true,

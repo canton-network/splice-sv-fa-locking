@@ -1046,18 +1046,10 @@ trait SvDsoStore
   ]
 
   def listProvisionalGovernanceLocksWithFeaturedAppRightSample(
-      limit: Limit = defaultLimit,
-      unavailablePartiesStore: Option[UnavailablePartiesStore] = None,
-  )(implicit tc: TraceContext): Future[
-    Seq[
-      (
-          Contract[
-            splice.governancelock.GovernanceLock.ContractId,
-            splice.governancelock.GovernanceLock,
-          ],
-          splice.amulet.FeaturedAppRight.ContractId,
-      )
-    ]
+      unavailablePartiesStore: Option[UnavailablePartiesStore] = None
+  ): ListExpiredContracts[
+    splice.governancelock.GovernanceLock.ContractId,
+    splice.governancelock.GovernanceLock,
   ]
 
   def lookupFeaturedAppRight(
