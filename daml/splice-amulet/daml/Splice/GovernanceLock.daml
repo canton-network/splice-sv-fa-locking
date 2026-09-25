@@ -215,7 +215,7 @@ template GovernanceLock
           status = V1.TransferPendingInternalWorkflow with
             pendingActions = Map.fromList
               [ (p, "withdraw transfer instruction to approve unlock")
-              | p <- Set.toList $ controllersSuperset specification.unlockControllers
+              | p <- Set.toList $ allControllers specification.unlockControllers
               , not (Map.member p pendingUnlockApprovals)
               ]
           meta = emptyMetadata
@@ -412,7 +412,7 @@ template VestingLock
       -- ^ Approved `requestedAt` per vesting controller, for multi-step authorization.
   where
     signatory dso, owner
-    observer controllersSuperset specification.vestingControllers
+    observer allControllers specification.vestingControllers
     ensure vestingAmount > 0.0 && vestingPeriod >= aunit && isRight (validateVestingLockControllers @(Either Text) specification)
 
     choice VestingLock_Withdraw : VestingLock_WithdrawResult
@@ -458,7 +458,7 @@ template VestingLock
             -- its "release fully vested lock" action takes precedence over the generic "withdraw vested amounts" action.
             pendingActions = Map.fromList $
               [ (p, "withdraw vested amounts")
-              | p <- Set.toList $ controllersSuperset specification.vestingControllers
+              | p <- Set.toList $ allControllers specification.vestingControllers
               , not (Map.member p pendingWithdrawApprovals)
               ] <> [(dso, "release fully vested lock")]
           meta = emptyMetadata
@@ -595,11 +595,11 @@ governanceLockKindObservers (GLK_ProvisionalFeaturedApp party) = [party]
 governanceLockKindObservers (GLK_SuperValidatorRightsOwner _) = []
 
 -- | All parties that appear in any controller set.
-controllersSuperset : [[Party]] -> Set.Set Party
-controllersSuperset = Set.fromList . concat
+allControllers : [[Party]] -> Set.Set Party
+allControllers = Set.fromList . concat
 
 governanceLockControllers : GovernanceLockSpecification -> Set.Set Party
-governanceLockControllers spec = controllersSuperset $
+governanceLockControllers spec = allControllers $
   spec.unlockControllers <> spec.substitutionControllers <> spec.vestingControllers
 
 validateGovernanceLockControllers : CanAssert m => GovernanceLockSpecification -> m ()
@@ -669,7 +669,7 @@ updateApprovals controllers actors approval approvals approvalIsValid = do
       satisfiedControllers = filter (all approvedBy) controllers
   pure $ if null satisfiedControllers
     then Left updated
-    else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (Set.toList $ controllersSuperset satisfiedControllers)
+    else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (Set.toList $ allControllers satisfiedControllers)
 
 -- | The earliest of the approved unlock times that is still in the future.
 -- It must be no more than 24h ahead, to avoid a far-future vesting start.
