@@ -131,7 +131,16 @@ object ProvisionalFeaturedAppLockConversionTrigger
   ]
 
   override def informees(payload: splice.governancelock.GovernanceLock): Seq[String] =
-    Seq(payload.owner)
+    payload.owner +: extraObservers(payload)
+
+  private def extraObservers(payload: splice.governancelock.GovernanceLock): Seq[String] =
+    payload.specification.kind match {
+      case kind: splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp =>
+        Seq(kind.provider)
+      case kind: splice.governancelock.governancelockkind.GLK_FeaturedApp =>
+        Seq(kind.provider)
+      case _ => Seq.empty
+    }
 
   override def dso(payload: splice.governancelock.GovernanceLock): String = payload.dso
 }
