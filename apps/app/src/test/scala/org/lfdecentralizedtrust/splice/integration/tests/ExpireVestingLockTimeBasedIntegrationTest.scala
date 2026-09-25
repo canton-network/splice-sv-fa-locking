@@ -6,7 +6,6 @@ package org.lfdecentralizedtrust.splice.integration.tests
 import com.daml.ledger.javaapi.data.Identifier
 import com.digitalasset.canton.HasExecutionContext
 import com.digitalasset.canton.config.NonNegativeFiniteDuration
-import com.digitalasset.canton.config.RequireTypes.NonNegativeNumeric
 import com.digitalasset.canton.logging.SuppressionRule
 import org.slf4j.event.Level
 import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet.{Amulet, LockedAmulet}
@@ -90,9 +89,11 @@ class ExpireVestingLockTimeBasedIntegrationTest
   private val vestingDuration = Duration.ofMinutes(5)
   private val totalAdvance = Duration.ofMinutes(7)
 
-  // Enough to fund all locks plus fees out of a single tap.
-  private val lockAmount = BigDecimal(10.0)
-  private val tapAmount = BigDecimal(100.0)
+  // Same as `defaultGovernanceLockMinimumLockAmount` in Daml.
+  private val governanceLockMinimumLockAmount = BigDecimal(10000.0)
+
+  private val lockAmount = governanceLockMinimumLockAmount
+  private val tapAmount = numLocks * lockAmount
 
   override def environmentDefinition: SpliceEnvironmentDefinition =
     EnvironmentDefinition
@@ -115,15 +116,12 @@ class ExpireVestingLockTimeBasedIntegrationTest
           _.copy(delegatelessAutomationExpiredVestingLockBatchSize = batchSize)
         )(config)
       )
-      // Makes the governance lock test-sized. Without this the vesting period would be the SV
-      // default of 365 days and each lock would have to clear a 10 000 CC minimum.
+      // Makes the vesting period test-sized. Without this it would be the SV default of 365 days.
       .addConfigTransforms((_, config) =>
         ConfigTransforms.updateAllSvAppFoundDsoConfigs_(
           _.copy(
             initialGovernanceLockSuperValidatorLockVestingDuration =
-              Some(NonNegativeFiniteDuration.ofMillis(vestingDuration.toMillis)),
-            initialGovernanceLockMinimumLockAmount =
-              Some(NonNegativeNumeric.tryCreate(BigDecimal(1))),
+              Some(NonNegativeFiniteDuration.ofMillis(vestingDuration.toMillis))
           )
         )(config)
       )
