@@ -340,7 +340,7 @@ testCustomControllersTSv1Withdraw = do
     (unlockAs registry alice pendingLockCid None unlockAt [charlie])
 
   vestingPendingParties <- transferInstructionPendingParties alice (toInterfaceContractId vestingLockCid)
-  vestingPendingParties === sort [alice, registry.instrumentId.admin]
+  vestingPendingParties === [alice]
 
 testCustomControllersApprovalsPersistOnTopUp : Script ()
 testCustomControllersApprovalsPersistOnTopUp = do

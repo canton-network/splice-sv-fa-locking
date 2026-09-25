@@ -453,14 +453,11 @@ template VestingLock
             inputHoldingCids = []
             meta = reasonToMeta encodedReason meta
           status = V1.TransferPendingInternalWorkflow with
-            -- `Map.fromList` keeps the last value for a duplicate key, so the "release fully vested lock" entry is appended
-            -- after the vesting controllers. If the party releasing fully vested locks is also an unapproved vesting controller,
-            -- its "release fully vested lock" action takes precedence over the generic "withdraw vested amounts" action.
             pendingActions = Map.fromList $
               [ (p, "withdraw vested amounts")
               | p <- Set.toList $ allControllers specification.vestingControllers
               , not (Map.member p pendingWithdrawApprovals)
-              ] <> [(dso, "release fully vested lock")]
+              ]
           meta = emptyMetadata
         where
           (receiver, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
