@@ -61,7 +61,7 @@ data VestingLockSpecification
   = VestingLockSpecification with
       kind : GovernanceLockKind
       vestingControllers : [[Party]]
-        -- ^ Sets of parties that can jointly withdraw vested funds.
+        -- ^ Sets of parties that can jointly drive the return of vested funds to the owner.
   deriving (Eq, Show, Serializable)
 
 -- | An unlock approval recorded by one unlock controller.
