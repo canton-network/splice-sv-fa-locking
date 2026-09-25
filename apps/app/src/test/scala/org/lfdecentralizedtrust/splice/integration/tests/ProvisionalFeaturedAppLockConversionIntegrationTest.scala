@@ -35,9 +35,6 @@ class ProvisionalFeaturedAppLockConversionIntegrationTest
   private def conversionTrigger(implicit env: SpliceTestConsoleEnvironment) =
     sv1Backend.dsoDelegateBasedAutomation.trigger[ProvisionalFeaturedAppLockConversionTrigger]
 
-  // The lock is created directly rather than via the TSv1 two-step transfer, mirroring what the
-  // Daml script helper does. The owner must be co-signer on sv1's participant, hence the SV party.
-  // `lockedAmulet` is never dereferenced by the conversion choice, so a dangling cid is fine.
   private def createProvisionalLock(owner: PartyId, provider: PartyId)(implicit
       env: SpliceTestConsoleEnvironment
   ): Unit =
@@ -63,7 +60,6 @@ class ProvisionalFeaturedAppLockConversionIntegrationTest
       )
       .discard
 
-  // Scoped by provider so the cases in this suite stay independent of each other's leftovers.
   private def locksFor(provider: PartyId)(implicit env: SpliceTestConsoleEnvironment) =
     sv1Backend.participantClientWithAdminToken.ledger_api_extensions.acs
       .filterJava(governancelock.GovernanceLock.COMPANION)(
@@ -103,8 +99,6 @@ class ProvisionalFeaturedAppLockConversionIntegrationTest
       }
   }
 
-  // Bob deliberately never grants himself a FeaturedAppRight, so this stays independent of
-  // whatever the case above left behind.
   "leave a provisional lock alone when the provider has no FeaturedAppRight" in { implicit env =>
     val provider = onboardWalletUser(bobWalletClient, bobValidatorBackend)
     val owner = sv1Backend.getDsoInfo().svParty
@@ -112,8 +106,6 @@ class ProvisionalFeaturedAppLockConversionIntegrationTest
     createProvisionalLock(owner, provider)
 
     setTriggersWithin(triggersToResumeAtStart = Seq(conversionTrigger)) {
-      // Drive a full poll so we assert against a trigger that actually looked, not one that
-      // simply had not run yet.
       conversionTrigger.runOnce().futureValue
 
       locksFor(provider).loneElement.data.specification.kind shouldBe
