@@ -67,7 +67,7 @@ class ExpireVestingLockTimeBasedIntegrationTest
   // rejects them.
   //
   // TODO(canton-network/splice-sv-fa-locking#80): Remove this "sanity check
-  // ignore", then `GovernanceLockTestUtil` is rewritten to use TSv1 choices to
+  // ignore" when `GovernanceLockTestUtil` is rewritten to use TSv1 choices to
   // control the locks for tests.
   override protected lazy val sanityChecksIgnoredRootCreates: Seq[Identifier] = Seq(
     Amulet.TEMPLATE_ID_WITH_PACKAGE_ID,
@@ -150,11 +150,17 @@ class ExpireVestingLockTimeBasedIntegrationTest
     // `sv1`'s SV party is also a wallet party, so a `UserWalletService` gets
     // instantiated for this party with `DbUserWalletStore`
     // with `UserWalletTxLogParser`. And the parser runs over the transactions
-    // created by this test. But `apps/wallet` has no governance-lock handling
-    // at all. So, it logs an "Unexpected amulet archive event" error because
-    // `executeExternalPartyTransfer` function is used inside `GovernanceLock`
-    // rather than a known choice exercise like `AmuletRules_Transfer`. So the
-    // parser never sees a node it recognizes.
+    // created by this test.
+    //
+    // Commit 6ec1ff60499512b3e612b70d9071e7f9b07ae546 updated
+    // `UserWalletTxLogParser` to handle `TransferInstruction_Withdraw`
+    // implemented by `GovernanceLock` and `VestingLock` templates. But
+    // `GovernanceLockTestUtil` uses
+    // `ExternalPartyAmuletRules_LockForGovernance` and `GovernanceLock_Unlock`.
+    //
+    // TODO(canton-network/splice-sv-fa-locking#80): Remove this log supression
+    // when `GovernanceLockTestUtil` is rewritten to use TSv1 choices to control
+    // the locks for tests.
     val (vestingLocks, _) = loggerFactory.assertEventuallyLogsSeq(
       SuppressionRule.LevelAndAbove(Level.ERROR)
     )(
@@ -206,7 +212,7 @@ class ExpireVestingLockTimeBasedIntegrationTest
     }
 
     // `listExpiredFromPayloadExpiry` uses a strict `expires_at < now`, so we step strictly past
-    // `endTime` rather than exactly onto it. A single advance, kept under one round tick.
+    // `endTime` rather than exactly onto it.
     advanceTime(totalAdvance)
 
     clue("The locks stay put while the trigger is paused") {
