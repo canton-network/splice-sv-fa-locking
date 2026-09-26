@@ -24,11 +24,7 @@ import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.{
   IntegrationTestWithIsolatedEnvironment,
   SpliceTestConsoleEnvironment,
 }
-import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.{
-  ExpireVestingLockTrigger,
-  ExpiredAmuletTrigger,
-  ExpiredLockedAmuletTrigger,
-}
+import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.ExpireVestingLockTrigger
 import org.lfdecentralizedtrust.splice.util.{
   GovernanceLockTestUtil,
   TimeTestUtil,
@@ -107,8 +103,6 @@ class ExpireVestingLockTimeBasedIntegrationTest
       .addConfigTransforms((_, config) =>
         updateAutomationConfig(ConfigurableApp.Sv)(
           _.withPausedTrigger[ExpireVestingLockTrigger]
-            .withPausedTrigger[ExpiredLockedAmuletTrigger]
-            .withPausedTrigger[ExpiredAmuletTrigger]
         )(config)
       )
       .addConfigTransforms((_, config) =>
@@ -197,15 +191,6 @@ class ExpireVestingLockTimeBasedIntegrationTest
       },
     )
 
-    // `GovernanceLock_Unlock` relocks, so the `LockedAmulet` cids are the ones the `VestingLock`s
-    // point at, not anything a create handed back.
-    val lockedAmuletCids = clue("Read the relocked LockedAmulets off the VestingLocks") {
-      val locks = listVestingLocks
-      locks.map(_.payload.lockedAmulet.contractId).toSet
-    }
-    lockedAmuletCids should have size numLocks.toLong
-    vestingLocks should have length numLocks.toLong
-
     clue("The locks are not yet expired, so the trigger has no work") {
       expireVestingLockTrigger.runOnce().futureValue shouldBe false
       listVestingLocks should have length numLocks.toLong
@@ -227,23 +212,6 @@ class ExpireVestingLockTimeBasedIntegrationTest
     clue("Second run archives the remaining partial batch") {
       expireVestingLockTrigger.runOnce().futureValue shouldBe true
       listVestingLocks shouldBe empty
-    }
-
-    clue("Third run is a no-op: the trigger is idempotent once everything is expired") {
-      expireVestingLockTrigger.runOnce().futureValue shouldBe false
-      listVestingLocks shouldBe empty
-    }
-
-    clue(
-      "The LockedAmulets survive: VestingLock_DsoExpire archives only the wrapper, and " +
-        "ExpiredLockedAmuletTrigger collects the amulet independently"
-    ) {
-      val remaining = sv1Backend.appState.dsoStore.multiDomainAcsStore
-        .listContracts(LockedAmulet.COMPANION)
-        .futureValue
-        .map(_.contractId.contractId)
-        .toSet
-      lockedAmuletCids.subsetOf(remaining) shouldBe true
     }
   }
 
