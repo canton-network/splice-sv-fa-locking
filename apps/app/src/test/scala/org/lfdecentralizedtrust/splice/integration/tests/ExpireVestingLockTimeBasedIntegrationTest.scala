@@ -9,10 +9,7 @@ import com.digitalasset.canton.config.NonNegativeFiniteDuration
 import com.digitalasset.canton.logging.SuppressionRule
 import org.slf4j.event.Level
 import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet.{Amulet, LockedAmulet}
-import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock.{
-  GovernanceLockSpecification,
-  VestingLock,
-}
+import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock.VestingLock
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock.governancelockkind.GLK_SuperValidatorRightsOwner
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms.{
@@ -94,12 +91,7 @@ class ExpireVestingLockTimeBasedIntegrationTest
   override def environmentDefinition: SpliceEnvironmentDefinition =
     EnvironmentDefinition
       .simpleTopology1SvWithSimTime(this.getClass.getSimpleName)
-      // Keeps `CollectRewardsAndMergeAmuletsTrigger` from merging the tapped `Amulet`s in the
-      // background: they are the `inputs` to `ExternalPartyAmuletRules_LockForGovernance`, and a
-      // merge landing between listing and submitting would archive them under us.
       .withoutAutomaticRewardsCollectionAndAmuletMerging
-      // The trigger under test is driven explicitly via `runOnce()`, and we assert that the
-      // `LockedAmulet` survives `VestingLock` expiry, so the amulet expiry triggers stay paused.
       .addConfigTransforms((_, config) =>
         updateAutomationConfig(ConfigurableApp.Sv)(
           _.withPausedTrigger[ExpireVestingLockTrigger]
@@ -166,7 +158,7 @@ class ExpireVestingLockTimeBasedIntegrationTest
               sv1UserId,
               sv1Party,
               lockAmount,
-              new GovernanceLockSpecification(new GLK_SuperValidatorRightsOwner(sv1Name)),
+              ownerControlledSpecification(sv1Party, new GLK_SuperValidatorRightsOwner(sv1Name)),
             )
             unlockGovernanceLock(
               participant,

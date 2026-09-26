@@ -10,9 +10,15 @@ import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.holdingv1
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.metadatav1
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.metadatav1.AnyContract
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock.{
+  ControllerSpecification,
   GovernanceLock,
+  GovernanceLockKind,
   GovernanceLockSpecification,
   VestingLock,
+}
+import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock.governancelock_unlockresult.{
+  GovernanceLock_UnlockResult_Completed,
+  GovernanceLock_UnlockResult_Pending,
 }
 import org.lfdecentralizedtrust.splice.console.ParticipantClientReference
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.{
@@ -70,6 +76,19 @@ trait GovernanceLockTestUtil extends TestCommon { this: HasExecutionContext =>
     participantClient.ledger_api_extensions.acs
       .filterJava(Amulet.COMPANION)(owner)
       .map(amulet => new holdingv1.Holding.ContractId(amulet.id.contractId))
+
+  /** A specification where `owner` alone controls unlock, substitution and
+    * vesting.
+    */
+  def ownerControlledSpecification(
+      owner: PartyId,
+      kind: GovernanceLockKind,
+  ): GovernanceLockSpecification = {
+    val controllers = new ControllerSpecification(
+      List(List(owner.toProtoPrimitive).asJava).asJava
+    )
+    new GovernanceLockSpecification(kind, controllers, controllers, controllers)
+  }
 
   /** Executes a choice to "lock" amulet for governance.
     *
@@ -141,6 +160,12 @@ trait GovernanceLockTestUtil extends TestCommon { this: HasExecutionContext =>
         ),
       )
       .exerciseResult
-    (result.vestingLock.toScala, result.governanceLock.toScala)
+    result match {
+      case completed: GovernanceLock_UnlockResult_Completed =>
+        (completed.vestingLock.toScala, completed.governanceLock.toScala)
+      case pending: GovernanceLock_UnlockResult_Pending =>
+        fail(s"Unlock by $actors is still pending further approvals on ${pending.pendingLock}")
+      case other => fail(s"Unexpected GovernanceLock_Unlock result: $other")
+    }
   }
 }
