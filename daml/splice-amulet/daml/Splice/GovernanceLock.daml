@@ -24,6 +24,7 @@ import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
 import Splice.AmuletConfig (governanceLockFeaturedAppLockVestingDuration, governanceLockMinimumLockAmount, governanceLockSearchTimeGranularity, governanceLockSuperValidatorLockVestingDuration)
 import Splice.AmuletRules
 import Splice.Api.Token.AllocationV2 qualified as V2
+import Splice.Api.Token.AllocationInstructionV2 qualified as V2
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.HoldingV2 qualified as V2
 import Splice.Api.Token.MetadataV1
@@ -284,6 +285,7 @@ template GovernanceLock
       allocation_settleImpl _ _ = assertFail "Allocations representing governance locks cannot be accepted"
       allocation_cancelImpl _ _ = assertFail "Allocations representing governance locks cannot be accepted"
       allocation_withdrawImpl self arg@V2.Allocation_Withdraw{..} = do
+        -- FIXME: Specify unlock amount from metadata if exists
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
         (_, unlockAt) <- searchCurrentTimeBounds requestedAt state
         unlockResult <- governanceLock_unlockImpl (coerceContractId self) this None unlockAt [owner] context state
@@ -689,6 +691,11 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
     pendingUnlockApprovals = Map.empty
   pure $ (governanceLock, changeHolding)
 
+governanceMetadataKeys : Metadata -> Set.Set Text
+governanceMetadataKeys meta = Set.fromList $ fst <$> TextMap.toList ( TextMap.filterWithKey ( \_ a -> cipMetaPrefix `Text.isPrefixOf` a ) meta.values )
+
+isGovernanceAllocationArgument V2.AllocationFactory_Allocate{extraArgs = ExtraArgs { meta }} = not ( Set.null $ governanceMetadataKeys meta )
+
   -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 AllocationFactory in terms of above.
 
 governanceLockKindObservers : GovernanceLockKind -> [Party]
@@ -910,6 +917,20 @@ unlockAtMetaKey = cipMetaPrefix <> "unlock-at"
 -- Encoded as microseconds since the epoch.
 withdrawAtMetaKey = cipMetaPrefix <> "withdraw-at"
 
+lockTypeMetaKey = cipMetaPrefix <> "lock-type"
+
+lockTypeMetaKeyValue_SV = "SV"
+
+lockTypeMetaKeyValue_FA = "FA"
+
+lockTypeMetaKeyValue_ProvisionalFA = "ProvisionalFA"
+
+lockSubjectMetaKey = cipMetaPrefix <> "lock-subject"
+
+unlockAmountMetaKey = cipMetaPrefix <> "unlock-amount"
+
+controllerKeys = [unlockControllersMetaKey, substitutionControllersMetaKey, vestingControllersMetaKey]
+
 -- | Metadata key that sets the `unlockControllers` of a `GovernanceLock`.
 unlockControllersMetaKey = cipMetaPrefix <> "unlock-controllers"
 
@@ -919,19 +940,39 @@ substitutionControllersMetaKey = cipMetaPrefix <> "substitution-controllers"
 -- | Metadata key that sets the `vestingControllers` of a `GovernanceLock`.
 vestingControllersMetaKey = cipMetaPrefix <> "vesting-controllers"
 
+governanceLockKeys = Set.fromList $ lockTypeMetaKey :: lockSubjectMetaKey :: controllerKeys
+
 controllerSpecificationFromMeta : Text -> Metadata -> Optional ControllerSpecification
 controllerSpecificationFromMeta field meta =
     ControllerSpecification <$> tryPartiesFromText <$> TextMap.lookup field meta.values
   where
     tryPartiesFromText : Text -> [[Party]]
-    tryPartiesFromText = fmap (fmap tryPartyFromText . Text.splitOn ",") . Text.splitOn ";"
+    tryPartiesFromText = fmap (fmap (\p -> tryPartyFromText (errorMsg p) p) . Text.splitOn ",") . Text.splitOn ";"
 
-    tryPartyFromText : Text -> Party
-    tryPartyFromText p = fromOptional (error $ "Invalid party in metadata field '" <> field <> "': " <> p) (partyFromText p)
+    errorMsg p = "Invalid party in metadata field '" <> field <> "': " <> p
+
+tryPartyFromText : Text -> Text -> Party
+tryPartyFromText errorMsg p = fromOptional (error errorMsg) (partyFromText p)
 
 controllerSpecificationFromMetaOrOwner : Text -> Metadata -> Party -> ControllerSpecification
 controllerSpecificationFromMetaOrOwner field meta owner =
   fromOptional (ControllerSpecification [[owner]]) $ controllerSpecificationFromMeta field meta
+
+lockTypeAndSubjectToGovernanceLockKind : CanAssert m => Text -> Text -> m GovernanceLockKind
+lockTypeAndSubjectToGovernanceLockKind lockTypeValue lockSubject
+  | checkLockType lockTypeMetaKeyValue_SV = pure $ GLK_SuperValidatorRightsOwner with svName = lockSubject
+  | checkLockType lockTypeMetaKeyValue_FA = pure $ GLK_FeaturedApp with provider = tryPartyFromText errorMsg lockSubject
+  | checkLockType lockTypeMetaKeyValue_ProvisionalFA = pure $ GLK_ProvisionalFeaturedApp with provider = tryPartyFromText errorMsg lockSubject
+  | otherwise = error errorMsg
+  where
+    errorMsg = "Invalid lockTypeMetaKeyValue in metadata field '" <> lockTypeValue
+    checkLockType = (==) lockTypeValue
+
+checkGovernanceMetadataKeys : (CanAssert m) => Set.Set Text -> Metadata -> m ()
+checkGovernanceMetadataKeys knownKeys =
+  require ("Only known metadata keys are supplied under " <> cipMetaPrefix)
+    . (`Set.isSubsetOf` knownKeys)
+    . governanceMetadataKeys
 
 -- TSv1 support
 -- ============
@@ -1002,6 +1043,12 @@ lockTypeToCompatibilityPartyAndReason (GLK_SuperValidatorRightsOwner with svName
 
 maxComparableTime : Time
 maxComparableTime = addRelTime maxTime $ microseconds (-1)
+
+requireSome : CanAssert m => Text -> Optional a -> m a
+requireSome msg a =
+  case a of
+    None -> assertFail $ "The requirement '" <> msg <> "' was not met."
+    Some a -> pure a
 
 -- SV Reward Coupon Helpers
 ---------------------------

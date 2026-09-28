@@ -9,6 +9,7 @@ import DA.Assert
 import DA.Foldable (forA_)
 import DA.Optional
 import qualified DA.TextMap as TextMap
+import qualified DA.Map as Map
 import DA.Time
 
 import Splice.Api.Token.MetadataV1
@@ -479,6 +480,8 @@ amulet_allocationFactoryV2_allocateImpl
   -> ContractId V2.AllocationFactory
   -> V2.AllocationFactory_Allocate
   -> Update V2.AllocationInstructionResult
+amulet_allocationFactoryV2_allocateImpl _ _self arg
+  | isGovernanceAllocationArgument arg = governanceAllocateImpl arg
 amulet_allocationFactoryV2_allocateImpl externalAmuletRules _self arg = do
   let netTransferAmount = netAmuletCreditAmount arg.allocation.authorizer arg.allocation.transferLegSides
   outputFundingAmount <- validateAmuletNextIterationFunding arg.allocation.nextIterationFunding
@@ -627,3 +630,42 @@ requireExpectedAdminMatch expected actual =   require ("Expected admin " <> show
 
 instance HasCheckedFetch ExternalPartyAmuletRules ForDso where
   contractGroupId ExternalPartyAmuletRules{..} = ForDso dso
+
+governanceAllocateImpl : V2.AllocationFactory_Allocate -> Update V2.AllocationInstructionResult
+governanceAllocateImpl alloc@V2.AllocationFactory_Allocate{..} = do
+  let meta = alloc.allocation.meta
+      owner = regularAccountOwner allocation.authorizer
+      dso = alloc.allocation.admin
+  lockSubject <- requireSome ("has a " <> lockSubjectMetaKey <> " field in metadata") $ TextMap.lookup lockSubjectMetaKey meta.values
+  lockType <- requireSome ("has a " <> lockTypeMetaKey <> " field in metadata") $ TextMap.lookup lockTypeMetaKey meta.values
+  kind <- lockTypeAndSubjectToGovernanceLockKind lockType lockSubject
+
+  checkGovernanceMetadataKeys governanceLockKeys meta
+  let governanceLockSpecification = GovernanceLockSpecification with
+        kind
+        unlockControllers = controllerSpecificationFromMetaOrOwner unlockControllersMetaKey meta owner
+        substitutionControllers = controllerSpecificationFromMetaOrOwner substitutionControllersMetaKey meta owner
+        vestingControllers = controllerSpecificationFromMetaOrOwner vestingControllersMetaKey meta owner
+      Some [ (_, amount) ] = TextMap.toList <$> allocation.nextIterationFunding
+
+  (optLockedAmulet, senderChangeCids, _, meta) <-
+    amulet_allocationFactoryV2_allocateImplCore (ExternalPartyAmuletRules dso) alloc amount
+
+  lockedAmulet <- requireSome ("FundingAmount needs to be greater than or equal to 0.0, we got:  " <> show amount) optLockedAmulet
+
+  now <- getTime
+  allocationCid <- fmap toInterfaceContractId $ create GovernanceLock with
+    dso
+    owner
+    amount
+    lockedAmulet
+    specification = governanceLockSpecification
+    originalLockCid = None
+    requestedAt = now
+    meta
+    pendingUnlockApprovals = Map.empty
+
+  pure V2.AllocationInstructionResult with
+      authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, map upcast senderChangeCids)]
+      output = V2.AllocationInstructionResult_Completed with allocationCid
+      meta
