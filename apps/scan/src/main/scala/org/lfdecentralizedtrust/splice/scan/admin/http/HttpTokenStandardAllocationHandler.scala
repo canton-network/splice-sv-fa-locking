@@ -3,7 +3,8 @@
 
 package org.lfdecentralizedtrust.splice.scan.admin.http
 
-import cats.data.OptionT
+import com.daml.ledger.javaapi.data.Identifier
+import com.daml.ledger.javaapi.data.codegen.ContractId
 import com.digitalasset.canton.logging.{ErrorLoggingContext, NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.time.Clock
 import com.digitalasset.canton.topology.PartyId
@@ -14,6 +15,7 @@ import org.lfdecentralizedtrust.splice.codegen.java.splice.amuletallocation as a
 import org.lfdecentralizedtrust.splice.codegen.java.splice.amuletallocationv2
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.allocationv2
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.metadatav1
+import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock
 import org.lfdecentralizedtrust.splice.scan.config.TokenStandardConfig
 import org.lfdecentralizedtrust.splice.scan.store.ScanStore
 import org.lfdecentralizedtrust.splice.scan.util
@@ -21,7 +23,7 @@ import org.lfdecentralizedtrust.splice.store.ChoiceContextContractFetcher
 import org.lfdecentralizedtrust.splice.util.{AmuletConfigSchedule, Contract, DarResourcesUtil}
 import org.lfdecentralizedtrust.tokenstandard.allocation.{v1, v2}
 
-import java.time.ZoneOffset
+import java.time.{Instant, ZoneOffset}
 import scala.concurrent.{ExecutionContext, Future}
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
@@ -298,41 +300,20 @@ class HttpTokenStandardAllocationHandler(
   )(implicit
       tc: TraceContext
   ): Future[ChoiceContext] = {
-    for {
-      (lockedAmulet, expiry) <- OptionT(
-        contractFetcher
-          .lookupContractById(amuletallocationv2.AmuletAllocationV2.COMPANION)(
-            new amuletallocationv2.AmuletAllocationV2.ContractId(
-              allocationId
-            )
-          )
-      ).map(alloc =>
-        (alloc.payload.lockedAmulet.toScala, alloc.payload.allocation.settlementDeadline)
-      ).orElse(
-        OptionT(
-          contractFetcher
-            .lookupContractById(amuletallocationv1.AmuletAllocation.COMPANION)(
-              new amuletallocationv1.AmuletAllocation.ContractId(
-                allocationId
-              )
-            )
-        ).map(alloc => (Some(alloc.payload.lockedAmulet), alloc.payload.expiresAt))
-      ).value
-        .map(
-          _.getOrElse(
-            throw io.grpc.Status.NOT_FOUND
-              .withDescription(s"AmuletAllocation '$allocationId' not found.")
-              .asRuntimeException()
-          )
-        )
-      context <- util.ChoiceContextBuilder.getTwoStepTransferContext[
+    def description(type_ : String): String = s"$type_ '$allocationId'"
+
+    def getAmuletAllocationContext(
+        lockedAmulet: Option[LockedAmulet.ContractId],
+        expiry: Option[Instant],
+    ) =
+      util.ChoiceContextBuilder.getTwoStepTransferContext[
         DisclosedContract,
         ChoiceContext,
         Builder,
       ](
-        s"AmuletAllocationV2 '$allocationId'",
+        description("AmuletAllocationV2"),
         lockedAmulet,
-        expiry.toScala,
+        expiry,
         requireLockedAmulet,
         featuredProvider =
           None, // Not required. Featured app rights are used in bulk, and will go once CIP-104 is live
@@ -341,8 +322,67 @@ class HttpTokenStandardAllocationHandler(
         clock,
         activeSynchronizerId => newBuilder(activeSynchronizerId),
       )
-    } yield context
+
+    def getGovernanceLockContext(
+        tpe: String,
+        lockedAmuletId: LockedAmulet.ContractId,
+        requireLockedAmulet: Boolean,
+    ) =
+      util.ChoiceContextBuilder.getGovernanceLockContext[
+        DisclosedContract,
+        ChoiceContext,
+        Builder,
+      ](
+        description(tpe),
+        lockedAmuletId,
+        requireLockedAmulet,
+        store,
+        contractFetcher,
+        clock,
+        newBuilder,
+      )
+
+    contractFetcher
+      .lookupGenericContractById(new ContractId(allocationId))
+      .flatMap {
+        case Some(contract) =>
+          contract.payload match {
+            case alloc: amuletallocationv2.AmuletAllocationV2 =>
+              getAmuletAllocationContext(
+                alloc.lockedAmulet.toScala,
+                alloc.allocation.settlementDeadline.toScala,
+              )
+            case alloc: amuletallocationv1.AmuletAllocation =>
+              getAmuletAllocationContext(Some(alloc.lockedAmulet), alloc.expiresAt.toScala)
+            case governanceLock: governancelock.GovernanceLock =>
+              getGovernanceLockContext("GovernanceLock", governanceLock.lockedAmulet, true)
+            case vestingLock: governancelock.VestingLock =>
+              // A partial withdrawal (< endTime) unlocks the LockedAmulet, so it is required.
+              // A full withdrawal (>= endTime) returns the holding directly, so doesn't need it.
+              val requireLockedAmulet = clock.now.toInstant.isBefore(vestingLock.endTime)
+              getGovernanceLockContext(
+                "VestingLock",
+                vestingLock.lockedAmulet,
+                requireLockedAmulet,
+              )
+            case _ => allocationNotFound(allocationId, Some(contract.identifier))
+          }
+        case None => allocationNotFound(allocationId, None)
+      }
   }
+
+  private def allocationNotFound[A](
+      allocationId: String,
+      foundContractTemplateId: Option[Identifier],
+  ): A =
+    throw io.grpc.Status.NOT_FOUND
+      .withDescription(
+        s"Allocation '$allocationId' not found." +
+          foundContractTemplateId.fold("")(templateId =>
+            s" Found contract of type $templateId but it did not match a known Allocation type."
+          )
+      )
+      .asRuntimeException()
 }
 
 object HttpTokenStandardAllocationHandler {
