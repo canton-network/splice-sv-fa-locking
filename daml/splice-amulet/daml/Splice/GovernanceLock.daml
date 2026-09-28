@@ -910,6 +910,29 @@ unlockAtMetaKey = cipMetaPrefix <> "unlock-at"
 -- Encoded as microseconds since the epoch.
 withdrawAtMetaKey = cipMetaPrefix <> "withdraw-at"
 
+-- | Metadata key that sets the `unlockControllers` of a `GovernanceLock`.
+unlockControllersMetaKey = cipMetaPrefix <> "unlock-controllers"
+
+-- | Metadata key that sets the `substitutionControllers` of a `GovernanceLock`.
+substitutionControllersMetaKey = cipMetaPrefix <> "substitution-controllers"
+
+-- | Metadata key that sets the `vestingControllers` of a `GovernanceLock`.
+vestingControllersMetaKey = cipMetaPrefix <> "vesting-controllers"
+
+controllerSpecificationFromMeta : Text -> Metadata -> Optional ControllerSpecification
+controllerSpecificationFromMeta field meta =
+    ControllerSpecification <$> tryPartiesFromText <$> TextMap.lookup field meta.values
+  where
+    tryPartiesFromText : Text -> [[Party]]
+    tryPartiesFromText = fmap (fmap tryPartyFromText . Text.splitOn ",") . Text.splitOn ";"
+
+    tryPartyFromText : Text -> Party
+    tryPartyFromText p = fromOptional (error $ "Invalid party in metadata field '" <> field <> "': " <> p) (partyFromText p)
+
+controllerSpecificationFromMetaOrOwner : Text -> Metadata -> Party -> ControllerSpecification
+controllerSpecificationFromMetaOrOwner field meta owner =
+  fromOptional (ControllerSpecification [[owner]]) $ controllerSpecificationFromMeta field meta
+
 -- TSv1 support
 -- ============
 
