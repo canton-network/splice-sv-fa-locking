@@ -3,8 +3,6 @@
 
 package org.lfdecentralizedtrust.splice.scan.admin.http
 
-import com.daml.ledger.javaapi.data.Identifier
-import com.daml.ledger.javaapi.data.codegen.ContractId
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.logging.{ErrorLoggingContext, NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.time.Clock
@@ -39,15 +37,16 @@ import scala.jdk.CollectionConverters.*
 import scala.util.{Failure, Success, Try}
 
 class HttpTokenStandardTransferInstructionHandler(
-    store: ScanStore,
-    contractFetcher: ChoiceContextContractFetcher,
-    clock: Clock,
+    protected val store: ScanStore,
+    protected val contractFetcher: ChoiceContextContractFetcher,
+    protected val clock: Clock,
     protected val loggerFactory: NamedLoggerFactory,
 )(implicit
     ec: ExecutionContext,
     tracer: Tracer,
 ) extends v1.Handler[TraceContext]
     with v2.Handler[TraceContext]
+    with HttpTokenStandardHandlerHelper
     with Spanning
     with NamedLogging {
 
@@ -398,63 +397,31 @@ class HttpTokenStandardTransferInstructionHandler(
   ): Future[v1.definitions.ChoiceContext] = {
     val newBuilder = new V1ChoiceContextBuilder(_, excludeDebugFields)
 
-    def description(type_ : String): String = s"$type_ '$transferInstructionId'"
-
-    def getGovernanceLockContext(
-        tpe: String,
-        lockedAmuletId: splice.amulet.LockedAmulet.ContractId,
-        requireLockedAmulet: Boolean,
-    ) =
-      util.ChoiceContextBuilder.getGovernanceLockContext[
+    getTokenStandardWithGovernanceLockChoiceContext[
+      v1.definitions.DisclosedContract,
+      v1.definitions.ChoiceContext,
+      V1ChoiceContextBuilder,
+    ](
+      "TransferInstruction",
+      transferInstructionId,
+      new V1ChoiceContextBuilder(_, excludeDebugFields),
+    ) { case amuletInstr: splice.amulettransferinstruction.AmuletTransferInstruction =>
+      util.ChoiceContextBuilder.getTwoStepTransferContext[
         v1.definitions.DisclosedContract,
         v1.definitions.ChoiceContext,
         V1ChoiceContextBuilder,
       ](
-        description(tpe),
-        lockedAmuletId,
+        s"AmuletTransferInstruction '$transferInstructionId'",
+        Some(amuletInstr.lockedAmulet),
+        Some(amuletInstr.transfer.executeBefore),
         requireLockedAmulet,
+        None,
         store,
         contractFetcher,
         clock,
         newBuilder,
       )
-
-    contractFetcher
-      .lookupGenericContractById(new ContractId(transferInstructionId))
-      .flatMap {
-        case Some(contract) =>
-          contract.payload match {
-            case amuletInstr: splice.amulettransferinstruction.AmuletTransferInstruction =>
-              util.ChoiceContextBuilder.getTwoStepTransferContext[
-                v1.definitions.DisclosedContract,
-                v1.definitions.ChoiceContext,
-                V1ChoiceContextBuilder,
-              ](
-                description("AmuletTransferInstruction"),
-                Some(amuletInstr.lockedAmulet),
-                Some(amuletInstr.transfer.executeBefore),
-                requireLockedAmulet,
-                None,
-                store,
-                contractFetcher,
-                clock,
-                newBuilder,
-              )
-            case governanceLock: splice.governancelock.GovernanceLock =>
-              getGovernanceLockContext("GovernanceLock", governanceLock.lockedAmulet, true)
-            case vestingLock: splice.governancelock.VestingLock =>
-              // A partial withdrawal (< endTime) unlocks the LockedAmulet, so it is required.
-              // A full withdrawal (>= endTime) returns the holding directly, so doesn't need it.
-              val requireLockedAmulet = clock.now.toInstant.isBefore(vestingLock.endTime)
-              getGovernanceLockContext(
-                "VestingLock",
-                vestingLock.lockedAmulet,
-                requireLockedAmulet,
-              )
-            case _ => transferInstructionNotFound(transferInstructionId, Some(contract.identifier))
-          }
-        case None => transferInstructionNotFound(transferInstructionId, None)
-      }
+    }
   }
 
   private def getTransferInstructionChoiceContextV2(
@@ -473,7 +440,7 @@ class HttpTokenStandardTransferInstructionHandler(
             transferInstructionId
           )
         )
-        .map(_.getOrElse(transferInstructionNotFound(transferInstructionId, None)))
+        .map(_.getOrElse(tokenStandardNotFound("TransferInstruction", transferInstructionId, None)))
       context <- util.ChoiceContextBuilder.getTwoStepTransferContext[
         v2.definitions.DisclosedContract,
         v2.definitions.ChoiceContext,
@@ -491,19 +458,6 @@ class HttpTokenStandardTransferInstructionHandler(
       )
     } yield context
   }
-
-  private def transferInstructionNotFound[A](
-      transferInstructionId: String,
-      foundContractTemplateId: Option[Identifier],
-  ): A =
-    throw io.grpc.Status.NOT_FOUND
-      .withDescription(
-        s"TransferInstruction '$transferInstructionId' not found." +
-          foundContractTemplateId.fold("")(templateId =>
-            s" Found contract of type $templateId but it did not match a known TransferInstruction type."
-          )
-      )
-      .asRuntimeException()
 }
 
 object HttpTokenStandardTransferInstructionHandler {
