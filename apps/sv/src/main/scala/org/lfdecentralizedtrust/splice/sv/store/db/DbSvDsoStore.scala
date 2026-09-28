@@ -1963,7 +1963,10 @@ class DbSvDsoStore(
               ) ++ sql" and " ++ notInClause(
                 "acs.provisional_featured_app_lock_for",
                 ignoredParties,
-              )).toActionBuilder
+              ) ++
+                sql" and not (jsonb_path_query_array(acs.create_arguments, '$$.specification.*.controllers[*][*]') ??| ${ignoredParties
+                    .map(p => lengthLimited(p.toProtoPrimitive))
+                    .toArray: Array[String2066]})").toActionBuilder
             else sql""
           synchronizerId <- getDsoRules().map(_.domain)
           result <- storage.query(
