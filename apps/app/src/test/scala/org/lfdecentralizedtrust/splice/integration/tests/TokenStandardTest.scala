@@ -224,6 +224,9 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
   def makeGovernanceLockSubject(lockSubject: String): String =
     s"lock-subject=$lockSubject"
 
+  val governanceLockUnlockAtMetaKey = "cip-0105/unlock-at"
+  val vestingLockWithdrawAtMetaKey = "cip-0105/withdraw-at"
+
   def createGovernanceLockViaTokenStandard(
       participant: ParticipantClientReference,
       owner: RichPartyId,
@@ -259,6 +262,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       participant: ParticipantClientReference,
       owner: RichPartyId,
       governanceLockCid: transferinstructionv1.TransferInstruction.ContractId,
+      meta: Map[String, String] = Map.empty,
   )(implicit env: SpliceTestConsoleEnvironment): Option[
     (
         transferinstructionv1.TransferInstruction.ContractId,
@@ -267,7 +271,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
   ] =
     actAndCheck(
       "the owner unlocks the GovernanceLock",
-      withdrawTransferInstruction(participant, owner, governanceLockCid),
+      withdrawTransferInstruction(participant, owner, governanceLockCid, meta = meta),
     )(
       "a VestingLock is not the pending TransferInstruction",
       _ =>
@@ -339,6 +343,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       receiver: RichPartyId,
       instructionCid: transferinstructionv1.TransferInstruction.ContractId,
       expectedTimeBounds: Option[(CantonTimestamp, CantonTimestamp)] = None,
+      meta: Map[String, String] = Map.empty,
   )(implicit
       env: SpliceTestConsoleEnvironment
   ) = {
@@ -350,7 +355,9 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       .submitJavaExternalOrLocal(
         receiver,
         commands = instructionCid
-          .exerciseTransferInstruction_Withdraw(choiceContext.toExtraArgs())
+          .exerciseTransferInstruction_Withdraw(
+            choiceContext.toExtraArgs(new metadatav1.Metadata(meta.asJava))
+          )
           .commands()
           .asScala
           .toSeq,
