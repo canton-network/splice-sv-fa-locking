@@ -259,22 +259,30 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       participant: ParticipantClientReference,
       owner: RichPartyId,
       governanceLockCid: transferinstructionv1.TransferInstruction.ContractId,
-  )(implicit
-      env: SpliceTestConsoleEnvironment
-  ): Option[transferinstructionv1.TransferInstruction.ContractId] = {
-    withdrawTransferInstruction(participant, owner, governanceLockCid)
-    listTransferInstructions(participant, owner.partyId).collect {
-      case (cid, view)
-          if view.originalInstructionCid.toScala.exists(
-            _.contractId == governanceLockCid.contractId
-          ) =>
-        cid
-    } match {
-      case Seq() => None
-      case Seq(vestingLockCid) => Some(vestingLockCid)
-      case many => fail(s"Expected at most one VestingLock for $governanceLockCid, got $many")
-    }
-  }
+  )(implicit env: SpliceTestConsoleEnvironment): Option[
+    (
+        transferinstructionv1.TransferInstruction.ContractId,
+        transferinstructionv1.TransferInstructionView,
+    )
+  ] =
+    actAndCheck(
+      "the owner unlocks the GovernanceLock",
+      withdrawTransferInstruction(participant, owner, governanceLockCid),
+    )(
+      "a VestingLock is not the pending TransferInstruction",
+      _ =>
+        listTransferInstructions(participant, owner.partyId).collect {
+          case t @ (_, view)
+              if view.originalInstructionCid.toScala.exists(
+                _.contractId == governanceLockCid.contractId
+              ) =>
+            t
+        } match {
+          case Seq() => None
+          case Seq(vestingLockCid) => Some(vestingLockCid)
+          case many => fail(s"Expected at most one VestingLock for $governanceLockCid, got $many")
+        },
+    )._2
 
   def acceptTransferInstruction(
       participant: ParticipantClientReference,
