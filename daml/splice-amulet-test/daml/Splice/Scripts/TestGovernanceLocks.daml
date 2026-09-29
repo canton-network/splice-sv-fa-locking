@@ -522,6 +522,7 @@ testSubstitution_governanceLock = do
               proposer = bob
               amount
               inputHoldingCids = map downcast inputHoldingCids
+              newControllers = governanceOwnerSubstitutedLockControllers bob
               extraArgs = emptyExtraArgs with context
         errorIfLeft result
 
@@ -559,6 +560,7 @@ testSubstitution_governanceLock = do
         proposer = bob
         amount = testLockAmount - testSubstAmount
         inputHoldingCids = map downcast inputHoldingCids
+        newControllers = governanceOwnerSubstitutedLockControllers bob
         extraArgs = emptyExtraArgs with context
   errorIfLeft result
 

@@ -85,6 +85,9 @@ ownerControlledSpecification owner kind = GovernanceLockSpecification with
   substitutionControllers = ControllerSpecification [[owner]]
   vestingControllers = ControllerSpecification [[owner]]
 
+ownerControlledSingleSpecification : Party -> ControllerSpecification
+ownerControlledSingleSpecification owner = ControllerSpecification [[owner]]
+
 template GovernanceLock
   with
     dso : Party
@@ -733,6 +736,30 @@ data SubstitutedLockSpecification
       vestingSpecification : VestingLockSpecification
   deriving (Eq, Show, Serializable)
 
+data SubstitutedLockControllers
+  = SLC_Governance with
+      unlockControllers : ControllerSpecification
+        -- ^ Controllers that can unlock the lock.
+      substitutionControllers : ControllerSpecification
+        -- ^ Controllers that can approve a substitution.
+      vestingControllers : ControllerSpecification
+        -- ^ Controllers that can withdraw vested funds once the lock is vesting. Copied to the VestingLock on unlock.
+  | SLC_Vesting with
+      vestingControllers : ControllerSpecification
+        -- ^ Controllers that can drive the return of vested funds to the owner.
+  deriving (Eq, Show, Serializable)
+
+
+governanceOwnerSubstitutedLockControllers : Party -> SubstitutedLockControllers
+governanceOwnerSubstitutedLockControllers owner = SLC_Governance with
+  unlockControllers = ControllerSpecification [[owner]]
+  substitutionControllers = ControllerSpecification [[owner]]
+  vestingControllers = ControllerSpecification [[owner]]
+vestingOwnerSubstitutedLockControllers : Party -> SubstitutedLockControllers
+vestingOwnerSubstitutedLockControllers owner = SLC_Vesting with
+  vestingControllers = ControllerSpecification [[owner]]
+
+
 data SubstitutedLock = SubstitutedLock with
     owner : Party
     specification : SubstitutedLockSpecification
@@ -751,6 +778,7 @@ template SubstitutionProposal with
     proposer : Party -- ^ Party that proposed the substitution
     amount : Decimal -- ^ Amount being substituted
     lockedAmulet : ContractId LockedAmulet -- ^ Amulet providing the funds
+    newControllers : SubstitutedLockControllers
   where
     signatory dso, proposer
     observer substitutedLock.owner
@@ -843,6 +871,7 @@ data CreateSubstitutionProposalArgs = CreateSubstitutionProposalArgs with
     proposer : Party -- ^ Party that proposed the substitution
     amount : Decimal -- ^ Amount being substituted
     inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
+    newControllers : SubstitutedLockControllers
     extraArgs : ExtraArgs
   deriving (Eq, Show, Serializable)
 
@@ -863,6 +892,7 @@ createSubstitutionProposal CreateSubstitutionProposalArgs {..} = do
     proposer
     amount
     lockedAmulet
+    newControllers
   pure $ (proposal, changeHolding)
 
 
