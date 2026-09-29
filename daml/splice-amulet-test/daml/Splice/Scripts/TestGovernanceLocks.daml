@@ -15,6 +15,8 @@ import DA.Traversable (forA)
 import Daml.Script
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils (issuingMiningRoundContextKey, openMiningRoundContextKey)
+import Splice.Api.Token.AllocationInstructionV2 qualified as V2
+import Splice.Api.Token.AllocationV2 qualified as V2
 import Splice.Api.Token.HoldingV2 qualified as V2
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
@@ -23,6 +25,7 @@ import Splice.GovernanceLock
 import Splice.Round
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
+import Splice.Testing.TokenStandard.RegistryApiV2 qualified as RegistryApiV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 import Splice.TokenStandard.Utils
@@ -120,6 +123,9 @@ testGovernanceLockHappyPathScenario ops = do
 testGovernanceLockCompatHappyPathTSv1 : Script ()
 testGovernanceLockCompatHappyPathTSv1 = testGovernanceLockCompatHappyPathScenario tsv1Operations
 
+testGovernanceLockCompatHappyPathTSv2 : Script ()
+testGovernanceLockCompatHappyPathTSv2 = testGovernanceLockCompatHappyPathScenario tsv2Operations
+
 testGovernanceLockCompatHappyPathScenario : CompatGovernanceLockOperations -> Script ()
 testGovernanceLockCompatHappyPathScenario ops = do
   env@TestEnv{..} <- setupTest
@@ -161,10 +167,13 @@ testGovernanceLockCompatHappyPathScenario ops = do
   WalletClientV2.checkHoldingWithAmountExists alice registry.instrumentId 60000.0
 
 testGovernanceLockCompatTimesFromMetaTSv1 : Script ()
-testGovernanceLockCompatTimesFromMetaTSv1 = testGovernanceLockCompatTimesFromMetaTSv1Scenario tsv1Operations
+testGovernanceLockCompatTimesFromMetaTSv1 = testGovernanceLockCompatTimesFromMetaScenario tsv1Operations
 
-testGovernanceLockCompatTimesFromMetaTSv1Scenario : CompatGovernanceLockOperations -> Script ()
-testGovernanceLockCompatTimesFromMetaTSv1Scenario ops = do
+testGovernanceLockCompatTimesFromMetaTSv2 : Script ()
+testGovernanceLockCompatTimesFromMetaTSv2 = testGovernanceLockCompatTimesFromMetaScenario tsv2Operations
+
+testGovernanceLockCompatTimesFromMetaScenario : CompatGovernanceLockOperations -> Script ()
+testGovernanceLockCompatTimesFromMetaScenario ops = do
   env@TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
       someFaKind = GLK_FeaturedApp bob
@@ -478,6 +487,9 @@ testGovernanceLockProvisionalFullWithdrawScenario ops = do
 testGovernanceLockCompatProvisionalFullWithdrawTSv1 : Script ()
 testGovernanceLockCompatProvisionalFullWithdrawTSv1 = testGovernanceLockCompatProvisionalFullWithdrawScenario tsv1Operations
 
+testGovernanceLockCompatProvisionalFullWithdrawTSv2 : Script ()
+testGovernanceLockCompatProvisionalFullWithdrawTSv2 = testGovernanceLockCompatProvisionalFullWithdrawScenario tsv2Operations
+
 testGovernanceLockCompatProvisionalFullWithdrawScenario : CompatGovernanceLockOperations -> Script ()
 testGovernanceLockCompatProvisionalFullWithdrawScenario ops = do
   env@TestEnv{..} <- setupTest
@@ -783,22 +795,6 @@ data CompatGovernanceLockOperations = CompatGovernanceLockOperations with
     -> Metadata
     -> Script (Either SubmitError (Optional (ContractId VestingLock)))
 
-withdrawTransferInstructionV1
-  :  forall t1 t2. (HasToInterface t1 V1.TransferInstruction, HasFromInterface t2 V1.TransferInstruction)
-  => TestEnv
-  -> ContractId t1
-  -> Party
-  -> Metadata
-  -> Script (Either SubmitError (Optional (ContractId t2)))
-withdrawTransferInstructionV1 env cid actor meta = do
-  result <- submitWithTransferContext env.registriesEnv.amuletV2 (actAs actor)
-    \context -> exerciseCmd (toInterfaceContractId @V1.TransferInstruction cid) V1.TransferInstruction_Withdraw with extraArgs = ExtraArgs with context; meta
-  pure $ fmap
-    (\case
-      V1.TransferInstructionResult_Pending cid -> Some $ fromInterfaceContractId @t2 cid
-      _ -> None)
-    ((.output) <$> result)
-
 tsv1Operations = CompatGovernanceLockOperations with
     governanceLock
     optGovernanceUnlock
@@ -809,6 +805,17 @@ tsv1Operations = CompatGovernanceLockOperations with
     optGovernanceUnlock = withdrawTransferInstructionV1
     governanceUnlock env cid actor meta = ((<$>) fromSome) <$> optGovernanceUnlock env cid actor meta
     vestingWithdraw = withdrawTransferInstructionV1
+
+tsv2Operations = CompatGovernanceLockOperations with
+    governanceLock
+    optGovernanceUnlock
+    governanceUnlock
+    vestingWithdraw
+  where
+    governanceLock = governanceLockV2
+    optGovernanceUnlock = withdrawAllocationV2
+    governanceUnlock env cid actor meta = ((<$>) fromSome) <$> optGovernanceUnlock env cid actor meta
+    vestingWithdraw = withdrawAllocationV2
 
 governanceLockV1 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockV1 env owner amount kind = do
@@ -836,6 +843,82 @@ governanceLockV1 env owner amount kind = do
     extraArgs = emptyExtraArgs
   optContractId <- WalletClientV2.transferV1 env.registries owner $ transfer
   pure $ optionalToEither (UnknownError "Unexpected none in lock[") $ fromInterfaceContractId <$> optContractId
+
+governanceLockV2 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Script (Either SubmitError (ContractId GovernanceLock))
+governanceLockV2 env owner amount kind = do
+  now <- getTime
+  inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
+  let (lockType, lockSubject) = governanceLockKindToLockTypeAndSubject kind
+      lockMeta = Metadata $ TM.fromList [(lockTypeMetaKey, lockType), (lockSubjectMetaKey, lockSubject)]
+  enrichedChoice <- RegistryApiV2.getAllocationFactory env.registriesEnv.amuletV2 V2.AllocationFactory_Allocate with
+    settlement = V2.SettlementInfo with
+      executors = [owner]
+      id = cipAddressPrefix <> "GovernanceLockSettlement"
+      cid = None
+      meta = emptyMetadata
+    allocation = V2.AllocationSpecification with
+      admin = env.instrId.admin
+      authorizer = basicAccount owner
+      transferLegSides = []
+      settlementDeadline = None
+      nextIterationFunding = Some $ TM.singleton env.instrId.id amount
+      committed = True
+      meta = lockMeta
+    requestedAt = now
+    inputHoldingCids = inputs
+    extraArgs = emptyExtraArgs with meta = lockMeta
+    actors = [owner]
+  result <- trySubmit (actAs owner <> discloseMany' enrichedChoice.disclosures) $
+    exerciseCmd enrichedChoice.factoryCid enrichedChoice.arg
+  forA result \r -> case r.output of
+    V2.AllocationInstructionResult_Completed allocationCid -> do
+      let lockCid = fromInterfaceContractId @GovernanceLock allocationCid
+      -- Fail loudly if the allocation factory did not take the governance lock code path.
+      optLock <- queryContractId owner lockCid
+      when (isNone optLock) $
+        fail $ "Expected allocation " <> show allocationCid <> " to be a GovernanceLock"
+      pure lockCid
+    output -> fail $ "Expected a completed allocation, but got " <> show output
+
+withdrawViaTokenStandard
+  :  forall i c r o t1 t2. (Choice i c r, HasField "output" r o, HasToInterface t1 i, HasFromInterface t2 i)
+  => ([Party] -> ExtraArgs -> c)
+  -> (o -> Optional (ContractId i))
+  -> TestEnv
+  -> ContractId t1
+  -> Party
+  -> Metadata
+  -> Script (Either SubmitError (Optional (ContractId t2)))
+withdrawViaTokenStandard choice getCid env cid actor meta = do
+  result <- submitWithTransferContext env.registriesEnv.amuletV2 (actAs actor)
+    \context -> exerciseCmd (toInterfaceContractId @i cid) $ choice [actor] ExtraArgs with context; meta
+  pure $ (fmap (fromInterfaceContractId @t2) . getCid . (.output)) <$> result
+
+withdrawTransferInstructionV1
+  :  forall t1 t2. (HasToInterface t1 V1.TransferInstruction, HasFromInterface t2 V1.TransferInstruction)
+  => TestEnv
+  -> ContractId t1
+  -> Party
+  -> Metadata
+  -> Script (Either SubmitError (Optional (ContractId t2)))
+withdrawTransferInstructionV1 = withdrawViaTokenStandard
+  (\_ extraArgs -> V1.TransferInstruction_Withdraw with extraArgs)
+  (\case
+    V1.TransferInstructionResult_Pending cid -> Some cid
+    _ -> None)
+
+withdrawAllocationV2
+  :  forall t1 t2. (HasToInterface t1 V2.Allocation, HasFromInterface t2 V2.Allocation)
+  => TestEnv
+  -> ContractId t1
+  -> Party
+  -> Metadata
+  -> Script (Either SubmitError (Optional (ContractId t2)))
+withdrawAllocationV2 = withdrawViaTokenStandard
+  (\actors extraArgs -> V2.Allocation_Withdraw with actors; extraArgs)
+  (\case
+    V2.AllocationResult_Pending cid -> Some cid
+    _ -> None)
 
 getExtraArgsForRounds : ChoiceContext -> ContractId IssuingMiningRound -> ContractId OpenMiningRound -> ExtraArgs
 getExtraArgsForRounds context issuingMiningRoundCid openRoundCid = ExtraArgs with

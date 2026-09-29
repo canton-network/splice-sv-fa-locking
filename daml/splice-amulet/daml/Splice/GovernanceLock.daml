@@ -979,6 +979,11 @@ lockTypeAndSubjectToGovernanceLockKind lockTypeValue lockSubject
     invalidPartyErrorMsg = "Invalid party in " <> lockSubjectMetaKey <> " metadata field for lock type '" <> lockTypeValue <> "': " <> lockSubject
     checkLockType = (==) lockTypeValue
 
+governanceLockKindToLockTypeAndSubject : GovernanceLockKind -> (Text, Text)
+governanceLockKindToLockTypeAndSubject (GLK_SuperValidatorRightsOwner with svName) = (lockTypeMetaKeyValue_SV, svName)
+governanceLockKindToLockTypeAndSubject (GLK_FeaturedApp with provider) = (lockTypeMetaKeyValue_FA, partyToText provider)
+governanceLockKindToLockTypeAndSubject (GLK_ProvisionalFeaturedApp with provider) = (lockTypeMetaKeyValue_ProvisionalFA, partyToText provider)
+
 checkGovernanceMetadataKeys : (CanAssert m) => Set.Set Text -> Metadata -> m ()
 checkGovernanceMetadataKeys knownKeys =
   require ("Only known metadata keys are supplied under " <> cipMetaPrefix)
