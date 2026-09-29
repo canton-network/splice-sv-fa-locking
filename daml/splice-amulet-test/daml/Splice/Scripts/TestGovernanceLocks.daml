@@ -25,7 +25,6 @@ import Splice.GovernanceLock
 import Splice.Round
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
-import Splice.Testing.TokenStandard.RegistryApiV2 qualified as RegistryApiV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 import Splice.TokenStandard.Utils
@@ -846,39 +845,25 @@ governanceLockV1 env owner amount kind = do
 
 governanceLockV2 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockV2 env owner amount kind = do
-  now <- getTime
-  inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
   let (lockType, lockSubject) = governanceLockKindToLockTypeAndSubject kind
       lockMeta = Metadata $ TM.fromList [(lockTypeMetaKey, lockType), (lockSubjectMetaKey, lockSubject)]
-  enrichedChoice <- RegistryApiV2.getAllocationFactory env.registriesEnv.amuletV2 V2.AllocationFactory_Allocate with
-    settlement = V2.SettlementInfo with
-      executors = [owner]
-      id = cipAddressPrefix <> "GovernanceLockSettlement"
-      cid = None
-      meta = emptyMetadata
-    allocation = V2.AllocationSpecification with
-      admin = env.instrId.admin
-      authorizer = basicAccount owner
-      transferLegSides = []
-      settlementDeadline = None
-      nextIterationFunding = Some $ TM.singleton env.instrId.id amount
-      committed = True
-      meta = lockMeta
-    requestedAt = now
-    inputHoldingCids = inputs
-    extraArgs = emptyExtraArgs with meta = lockMeta
-    actors = [owner]
-  result <- trySubmit (actAs owner <> discloseMany' enrichedChoice.disclosures) $
-    exerciseCmd enrichedChoice.factoryCid enrichedChoice.arg
-  forA result \r -> case r.output of
-    V2.AllocationInstructionResult_Completed allocationCid -> do
-      let lockCid = fromInterfaceContractId @GovernanceLock allocationCid
-      -- Fail loudly if the allocation factory did not take the governance lock code path.
-      optLock <- queryContractId owner lockCid
-      when (isNone optLock) $
-        fail $ "Expected allocation " <> show allocationCid <> " to be a GovernanceLock"
-      pure lockCid
-    output -> fail $ "Expected a completed allocation, but got " <> show output
+      settlementInfo = V2.SettlementInfo with
+        executors = [owner]
+        id = cipAddressPrefix <> "GovernanceLockSettlement"
+        cid = None
+        meta = emptyMetadata
+      allocation = V2.AllocationSpecification with
+        admin = env.instrId.admin
+        authorizer = basicAccount owner
+        transferLegSides = []
+        settlementDeadline = None
+        nextIterationFunding = Some $ TM.singleton env.instrId.id amount
+        committed = True
+        meta = lockMeta
+  result <- WalletClientV2.allocateV2 env.registries owner settlementInfo allocation
+  pure $ case result.output of
+    V2.AllocationInstructionResult_Completed cid -> Right $ fromInterfaceContractId cid
+    o -> Left $ UnknownError $ "Unexpected AllocationInstructionResult: " <> show o
 
 withdrawViaTokenStandard
   :  forall i c r o t1 t2. (Choice i c r, HasField "output" r o, HasToInterface t1 i, HasFromInterface t2 i)
