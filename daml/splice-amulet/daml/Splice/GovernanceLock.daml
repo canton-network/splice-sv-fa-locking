@@ -298,7 +298,7 @@ template GovernanceLock
             authorizerHoldingCids = case unlockResult.unlockedAmulet of
               Some unlockedAmulet -> TextMap.singleton amuletInstrumentIdName [coerceContractId unlockedAmulet]
               None -> TextMap.empty
-            meta = emptyMetadata
+            meta = simpleHoldingTxMeta TxKind_Unlock (Some "unlock governance lock") None
 
       allocation_settleExtraObservers _ = observer this
       allocation_cancelExtraObservers _ = observer this
@@ -601,7 +601,7 @@ template VestingLock
               allocationCid = toInterfaceContractId vestingLock
             None -> V2.AllocationResult_Withdrawn
           authorizerHoldingCids = TextMap.singleton amuletInstrumentIdName [upcast withdrawResult.vested]
-          meta = emptyMetadata
+          meta = simpleHoldingTxMeta TxKind_Unlock (Some "withdraw vested amount") None
 
       allocation_settleExtraObservers _ = observer this
       allocation_cancelExtraObservers _ = observer this
