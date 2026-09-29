@@ -214,6 +214,45 @@ testGovernanceLockCompatTimesFromMetaScenario ops = do
   WalletClientV2.checkHoldingWithAmountExists alice registry.instrumentId 20000.0
   checkLockedHolding alice newVestingLock 60000.0
 
+-- | Only TSv2 supports setting the unlock amount, as TSv1 always unlocks the full amount.
+testGovernanceLockCompatPartialUnlockFromMetaTSv2 : Script ()
+testGovernanceLockCompatPartialUnlockFromMetaTSv2 = do
+  env@TestEnv{..} <- setupTest
+  let ops = tsv2Operations
+      registry = registriesEnv.amuletV2
+      someFaKind = GLK_FeaturedApp bob
+      unlockAmountMeta amount = Metadata $ TM.fromList [(unlockAmountMetaKey, amount)]
+
+  AmuletRegistryV2.tapFaucet registry alice 30000.0
+
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 30000.0 someFaKind
+
+  -- The unlock amount must be a valid decimal
+  actionMustFail (expectMessageContains "Invalid decimal in cip-0105/unlock-amount metadata field: 'not-a-decimal'") $
+    ops.governanceUnlock env aliceLock alice (unlockAmountMeta "not-a-decimal")
+
+  -- The unlock amount must not exceed the locked amount
+  actionMustFail (expectMessageContains "'unlockAmount' is greater than 'amount'") $
+    ops.governanceUnlock env aliceLock alice (unlockAmountMeta "40000.0")
+
+  -- Both the unlocked and the remaining amount must meet the minimum lock amount
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $
+    ops.governanceUnlock env aliceLock alice (unlockAmountMeta "25000.0")
+
+  -- Unlock 10k of the 30k, which starts vesting 10k and keeps 20k locked
+  aliceVesting <- expectSuccess $ ops.governanceUnlock env aliceLock alice (unlockAmountMeta "10000.0")
+
+  Some vestingLock <- queryContractId alice aliceVesting
+  vestingLock.vestingAmount === 10000.0
+  vestingLock.specification.kind === someFaKind
+  checkLockedHolding alice aliceVesting 10000.0
+
+  -- The original lock is replaced by a lock with the remaining 20k
+  [(remainingLockCid, remainingLock)] <- query @GovernanceLock alice
+  remainingLock.amount === 20000.0
+  remainingLock.specification.kind === someFaKind
+  checkLockedHolding alice remainingLockCid 20000.0
+
 testGovernanceLockMinimumLocksLockUnlockWithdraw : Script ()
 testGovernanceLockMinimumLocksLockUnlockWithdraw = testGovernanceLockMinimumLocksLockUnlockWithdrawScenario rawOperations
 
