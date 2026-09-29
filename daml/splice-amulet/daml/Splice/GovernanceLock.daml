@@ -230,9 +230,7 @@ template GovernanceLock
       transferInstruction_withdrawImpl self arg = do
           let V1.TransferInstruction_Withdraw {..} = arg
           (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-          unlockAt <- case timeFromMeta unlockAtMetaKey extraArgs.meta of
-            Some unlockAt -> pure unlockAt
-            None -> snd <$> searchCurrentTimeBounds requestedAt state
+          unlockAt <- getUnlockAtTime requestedAt extraArgs.meta state
           -- Need to call the body of unlock directly to avoid double consumption.
           unlockResult <- governanceLock_unlockImpl (coerceContractId self) this None unlockAt [owner] context state
           pure $ case unlockResult of
@@ -287,7 +285,7 @@ template GovernanceLock
       allocation_withdrawImpl self arg@V2.Allocation_Withdraw{..} = do
         -- FIXME: Specify unlock amount from metadata if exists
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-        (_, unlockAt) <- searchCurrentTimeBounds requestedAt state
+        unlockAt <- getUnlockAtTime requestedAt extraArgs.meta state
         unlockResult <- governanceLock_unlockImpl (coerceContractId self) this None unlockAt [owner] context state
         pure $ V2.AllocationResult with
             output = case unlockResult.vestingLock of
@@ -302,7 +300,7 @@ template GovernanceLock
       allocation_settleExtraObservers _ = observer this
       allocation_cancelExtraObservers _ = observer this
       allocation_withdrawExtraObservers _ = observer this
-  -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
+
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
 
@@ -431,6 +429,17 @@ searchCurrentTimeBounds_impl isTimeGE assertDeadlineExceeded' assertWithinDeadli
          else Left (seek + 1, nextBasis)
     seekToGranularity seek = convertMicrosecondsToRelTime $ 2 ^ seek * convertRelTimeToMicroseconds granularity
 
+getUnlockAtTime : Time -> Metadata -> ExternalPartyConfigState -> Update Time
+getUnlockAtTime requestedAt meta state =
+  case timeFromMeta unlockAtMetaKey meta of
+    Some unlockAt -> pure unlockAt
+    None -> snd <$> searchCurrentTimeBounds requestedAt state
+
+getWithdrawRequestedAtTime : Time -> RelTime -> Metadata -> ExternalPartyConfigState -> Update Time
+getWithdrawRequestedAtTime endTime vestingPeriod meta state =
+  case timeFromMeta withdrawAtMetaKey meta of
+    Some withdrawAt -> pure withdrawAt
+    None -> fst <$> searchCurrentTimeBounds (endTime `addRelTime` (- vestingPeriod)) state
 
 data GovernanceLock_UnlockResult
   = GovernanceLock_UnlockResult_Pending with
@@ -523,9 +532,7 @@ template VestingLock
       transferInstruction_withdrawImpl self arg = do
         let V1.TransferInstruction_Withdraw {..} = arg
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-        requestedAt <- case timeFromMeta withdrawAtMetaKey extraArgs.meta of
-          Some withdrawAt -> pure withdrawAt
-          None -> fst <$> searchCurrentTimeBounds (endTime `addRelTime` (- vestingPeriod)) state
+        requestedAt <- getWithdrawRequestedAtTime endTime vestingPeriod extraArgs.meta state
         withdrawResult <- vestingLock_withdrawImpl (coerceContractId self) this requestedAt [owner] context
         pure $ case withdrawResult of
           VestingLock_WithdrawResult_Pending pendingLock -> V1.TransferInstructionResult with
@@ -580,7 +587,7 @@ template VestingLock
       allocation_cancelImpl _ _ = assertFail "Allocations representing vesting locks cannot be accepted"
       allocation_withdrawImpl self arg@V2.Allocation_Withdraw{..} = do
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-        (requestedAt, _) <- searchCurrentTimeBounds (endTime `addRelTime` (- vestingPeriod)) state
+        requestedAt <- getWithdrawRequestedAtTime endTime vestingPeriod extraArgs.meta state
         withdrawResult <- vestingLock_withdrawImpl (coerceContractId self) this requestedAt [owner] context
         pure $ V2.AllocationResult with
           output = case withdrawResult.vestingLock of
@@ -593,7 +600,7 @@ template VestingLock
       allocation_settleExtraObservers _ = observer this
       allocation_cancelExtraObservers _ = observer this
       allocation_withdrawExtraObservers _ = observer this
-  -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 Allocation interface on above. Most fields of the view are generated, as they are constants or specific presentations of the above.
+
   -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
 
@@ -695,8 +702,6 @@ governanceMetadataKeys : Metadata -> Set.Set Text
 governanceMetadataKeys meta = Set.fromList $ fst <$> TextMap.toList ( TextMap.filterWithKey ( \_ a -> cipMetaPrefix `Text.isPrefixOf` a ) meta.values )
 
 isGovernanceAllocationArgument V2.AllocationFactory_Allocate{extraArgs = ExtraArgs { meta }} = not ( Set.null $ governanceMetadataKeys meta )
-
-  -- TODO(canton-network/splice-sv-fa-locking#39): implement V2 AllocationFactory in terms of above.
 
 governanceLockKindObservers : GovernanceLockKind -> [Party]
 governanceLockKindObservers (GLK_FeaturedApp party) = [party]
