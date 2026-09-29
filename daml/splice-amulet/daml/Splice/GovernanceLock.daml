@@ -699,7 +699,7 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
   pure $ (governanceLock, changeHolding)
 
 governanceMetadataKeys : Metadata -> Set.Set Text
-governanceMetadataKeys meta = Set.fromList $ fst <$> TextMap.toList ( TextMap.filterWithKey ( \_ a -> cipMetaPrefix `Text.isPrefixOf` a ) meta.values )
+governanceMetadataKeys meta = Set.fromList $ fst <$> TextMap.toList ( TextMap.filterWithKey ( \a _ -> cipMetaPrefix `Text.isPrefixOf` a ) meta.values )
 
 isGovernanceAllocationArgument V2.AllocationFactory_Allocate{extraArgs = ExtraArgs { meta }} = not ( Set.null $ governanceMetadataKeys meta )
 
