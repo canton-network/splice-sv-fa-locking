@@ -972,11 +972,11 @@ controllerSpecificationFromMetaOrOwner field meta owner =
 lockTypeAndSubjectToGovernanceLockKind : CanAssert m => Text -> Text -> m GovernanceLockKind
 lockTypeAndSubjectToGovernanceLockKind lockTypeValue lockSubject
   | checkLockType lockTypeMetaKeyValue_SV = pure $ GLK_SuperValidatorRightsOwner with svName = lockSubject
-  | checkLockType lockTypeMetaKeyValue_FA = pure $ GLK_FeaturedApp with provider = tryPartyFromText errorMsg lockSubject
-  | checkLockType lockTypeMetaKeyValue_ProvisionalFA = pure $ GLK_ProvisionalFeaturedApp with provider = tryPartyFromText errorMsg lockSubject
-  | otherwise = error errorMsg
+  | checkLockType lockTypeMetaKeyValue_FA = pure $ GLK_FeaturedApp with provider = tryPartyFromText invalidPartyErrorMsg lockSubject
+  | checkLockType lockTypeMetaKeyValue_ProvisionalFA = pure $ GLK_ProvisionalFeaturedApp with provider = tryPartyFromText invalidPartyErrorMsg lockSubject
+  | otherwise = error $ "Invalid value in " <> lockTypeMetaKey <> " metadata field: '" <> lockTypeValue <> "'"
   where
-    errorMsg = "Invalid lockTypeMetaKeyValue in metadata field '" <> lockTypeValue
+    invalidPartyErrorMsg = "Invalid party in " <> lockSubjectMetaKey <> " metadata field for lock type '" <> lockTypeValue <> "': " <> lockSubject
     checkLockType = (==) lockTypeValue
 
 checkGovernanceMetadataKeys : (CanAssert m) => Set.Set Text -> Metadata -> m ()
