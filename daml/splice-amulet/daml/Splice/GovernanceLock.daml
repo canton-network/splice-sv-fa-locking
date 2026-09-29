@@ -707,7 +707,7 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
 governanceMetadataKeys : Metadata -> Set.Set Text
 governanceMetadataKeys meta = Set.fromList $ fst <$> TextMap.toList ( TextMap.filterWithKey ( \a _ -> cipMetaPrefix `Text.isPrefixOf` a ) meta.values )
 
-isGovernanceAllocationArgument V2.AllocationFactory_Allocate{extraArgs = ExtraArgs { meta }} = not ( Set.null $ governanceMetadataKeys meta )
+isGovernanceAllocationArgument V2.AllocationFactory_Allocate{allocation} = not ( Set.null $ governanceMetadataKeys allocation.meta )
 
 governanceLockKindObservers : GovernanceLockKind -> [Party]
 governanceLockKindObservers (GLK_FeaturedApp party) = [party]
