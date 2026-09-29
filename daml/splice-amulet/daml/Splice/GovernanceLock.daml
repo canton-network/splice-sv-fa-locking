@@ -963,7 +963,7 @@ controllerSpecificationFromMeta field meta =
     errorMsg p = "Invalid party in metadata field '" <> field <> "': " <> p
 
 tryPartyFromText : Text -> Text -> Party
-tryPartyFromText errorMsg p = fromOptional (error errorMsg) (partyFromText p)
+tryPartyFromText errorMsg p = fromSomeNote errorMsg (partyFromText p)
 
 controllerSpecificationFromMetaOrOwner : Text -> Metadata -> Party -> ControllerSpecification
 controllerSpecificationFromMetaOrOwner field meta owner =
