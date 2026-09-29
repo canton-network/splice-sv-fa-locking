@@ -26,7 +26,6 @@ import Splice.AmuletRules
 import Splice.Api.Token.AllocationV2 qualified as V2
 import Splice.Api.Token.AllocationInstructionV2 qualified as V2
 import Splice.Api.Token.HoldingV1 (Holding)
-import Splice.Api.Token.HoldingV2 qualified as V2
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferEventsV2 as TransferEventsV2
@@ -35,7 +34,7 @@ import Splice.Fees (relTimeToSeconds)
 import Splice.ExternalPartyConfigState
 import Splice.Round
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
-import Splice.TokenStandard.Utils.Internal.Conversions (basicAccount, timeFromMeta)
+import Splice.TokenStandard.Utils.Internal.Conversions (timeFromMeta)
 import Splice.Types
 import Splice.Util
 
@@ -279,10 +278,10 @@ template GovernanceLock
           --  Map.fromList [(owner, "withdraw vested amounts"), (dso, "release fully vested lock")]
           meta = emptyMetadata
         where
-          (receiver, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
+          (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
       allocation_settleImpl _ _ = assertFail "Allocations representing governance locks cannot be accepted"
       allocation_cancelImpl _ _ = assertFail "Allocations representing governance locks cannot be accepted"
-      allocation_withdrawImpl self arg@V2.Allocation_Withdraw{..} = do
+      allocation_withdrawImpl self V2.Allocation_Withdraw{..} = do
         -- `Allocation_Withdraw` is nonconsuming so we need to archive here
         -- `governanceLock_unlockImpl` creates a new `GovernanceLock` or `VestingLock` when necessary
         potentiallyUnsafeArchive self
@@ -591,7 +590,7 @@ template VestingLock
           --  Map.fromList [(owner, "withdraw vested amounts"), (dso, "release fully vested lock")]
           meta = emptyMetadata
         where
-          (receiver, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
+          (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
       allocation_settleImpl _ _ = assertFail "Allocations representing vesting locks cannot be accepted"
       allocation_cancelImpl _ _ = assertFail "Allocations representing vesting locks cannot be accepted"
       allocation_withdrawImpl self arg@V2.Allocation_Withdraw{..} = do
