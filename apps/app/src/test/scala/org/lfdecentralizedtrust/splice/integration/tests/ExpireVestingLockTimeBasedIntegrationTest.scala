@@ -22,6 +22,7 @@ import org.lfdecentralizedtrust.splice.sv.config.InitialGovernanceLockConfig
 import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, TriggerTestUtil, WalletTestUtil}
 
 import java.time.Duration
+import scala.jdk.OptionConverters.*
 
 /** Covers `ExpireVestingLockTrigger`: batched archival of fully vested
   * `VestingLock`s.
@@ -42,7 +43,7 @@ class ExpireVestingLockTimeBasedIntegrationTest
     with WalletTestUtil
     with TimeTestUtil
     with TriggerTestUtil
-    with TokenStandardTest {
+    with GovernanceLockTokenStandardTest {
 
   private val batchSize = 2
   private val numLocks = 3
@@ -117,18 +118,20 @@ class ExpireVestingLockTimeBasedIntegrationTest
     actAndCheck(
       s"Lock and unlock $numLocks times, vesting until $endTime", {
         (1 to numLocks).map { _ =>
-          val governanceLock = createGovernanceLockViaTokenStandard(
+          val governanceLock = tsv1Operations.createGovernanceLock(
             participant,
             owner,
             superValidatorLockMagicParty,
             lockSubject = sv1Name,
             amount = lockAmount,
           )
-          unlockGovernanceLockViaTokenStandard(
+          tsv1Operations.unlockGovernanceLock(
             participant,
             owner,
             governanceLock,
             meta = Map(governanceLockUnlockAtMetaKey -> unlockAt.toMicros.toString),
+            isValid =
+              _.originalInstructionCid.toScala.exists(_.contractId == governanceLock.contractId),
           )
         }
       },

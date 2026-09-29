@@ -3,25 +3,38 @@
 
 package org.lfdecentralizedtrust.splice.integration.tests
 
+import com.daml.ledger.javaapi
+import com.daml.ledger.javaapi.data.codegen.ContractId
 import com.digitalasset.canton.config.NonNegativeFiniteDuration
+import com.digitalasset.canton.topology.PartyId
 import org.lfdecentralizedtrust.splice.codegen.java.splice.{amulet as amuletCodegen, governancelock}
+import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.{
+  allocationv2,
+  transferinstructionv1,
+}
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
-import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.IntegrationTestWithIsolatedEnvironment
+import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.{
+  IntegrationTestWithIsolatedEnvironment,
+  SpliceTestConsoleEnvironment,
+}
 import org.lfdecentralizedtrust.splice.sv.config.InitialGovernanceLockConfig
 import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, TokenStandardMetadata, WalletTestUtil}
 import org.lfdecentralizedtrust.splice.wallet.store.{BalanceChangeTxLogEntry, TxLogEntry}
+import org.scalatest.Assertion
 
 import java.time.Duration
 import java.time.temporal.ChronoUnit
+import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
 
 class GovernanceLockTimeBasedIntegrationTest
     extends IntegrationTestWithIsolatedEnvironment
     with WalletTestUtil
     with TimeTestUtil
     with WalletTxLogTestUtil
-    with TokenStandardTest {
+    with GovernanceLockTokenStandardTest {
 
   override def environmentDefinition: SpliceEnvironmentDefinition =
     EnvironmentDefinition
@@ -40,28 +53,35 @@ class GovernanceLockTimeBasedIntegrationTest
         )(config)
       )
 
-  private def matchSVKind(kind: governancelock.GovernanceLockKind): Unit =
-    kind match {
-      case _: governancelock.governancelockkind.GLK_SuperValidatorRightsOwner =>
-      case other => fail(s"Expected GLK_SuperValidatorRightsOwner kind, found: $other")
-    }
+  private val lockAmount = BigDecimal(10000)
+  private val expectedRemainingLockAmount = lockAmount / 4 * 3
+  private val lockParty = superValidatorLockMagicParty
+  private val lockSubject = "sv1"
 
-  "SV GovernanceLock created via TSv1 compatibility interface can be unlocked into a VestingLock" in {
-    implicit env =>
-      val lockAmount = BigDecimal(10000)
-      val lockSubject = "sv1"
+  private def checkLockKind(kind: governancelock.GovernanceLockKind): Assertion =
+    kind shouldBe a[governancelock.governancelockkind.GLK_SuperValidatorRightsOwner]
 
+  private def testTokenStandardCompat[CId <: ContractId[?], View](
+      ops: GovernanceLockTokenStandardOps[CId, View]
+  )(
+      checkGovernanceLockView: SpliceTestConsoleEnvironment => (View, PartyId) => Assertion,
+      checkVestingLockView: SpliceTestConsoleEnvironment => (
+          View,
+          PartyId,
+          BigDecimal,
+      ) => Assertion,
+  ) =
+    s"GovernanceLock TSv${ops.version} compatibility" in { implicit env =>
       // Setup alice as the lock owner
       val ownerParty = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
       val owner = RichPartyId.local(ownerParty)
 
       aliceWalletClient.tap(lockAmount)
 
-      // Create the governance lock via a transfer to the magic party
-      val governanceLockCid = createGovernanceLockViaTokenStandard(
+      val governanceLockCid = ops.createGovernanceLock(
         aliceValidatorBackend.participantClientWithAdminToken,
         owner,
-        superValidatorLockMagicParty,
+        lockParty,
         lockSubject = lockSubject,
         amount = lockAmount,
       )
@@ -75,25 +95,23 @@ class GovernanceLockTimeBasedIntegrationTest
             )
             .loneElement
             .data
-        matchSVKind(governanceLock.specification.kind)
+        checkLockKind(governanceLock.specification.kind)
       }
 
       clue("the GovernanceLock is as a pending TransferInstruction to the magic party") {
-        val (cid, view) = listTransferInstructions(
-          aliceValidatorBackend.participantClientWithAdminToken,
-          ownerParty,
-        ).loneElement
+        val (cid, view) = ops
+          .list(
+            aliceValidatorBackend.participantClientWithAdminToken,
+            ownerParty,
+          )
+          .loneElement
         cid.contractId shouldBe governanceLockCid.contractId
-        view.transfer.sender shouldBe ownerParty.toProtoPrimitive
-        view.transfer.receiver shouldBe superValidatorLockMagicParty.toProtoPrimitive
-        BigDecimal(view.transfer.amount) shouldBe lockAmount
-        view.transfer.meta.values
-          .get(TokenStandardMetadata.reasonMetaKey) shouldBe makeGovernanceLockSubject(lockSubject)
+        checkGovernanceLockView(env)(view, ownerParty)
       }
 
       clue("Scan serves a withdraw choice context for the GovernanceLock") {
-        sv1ScanBackend
-          .getTransferInstructionWithdrawContext(governanceLockCid)
+        ops
+          .getWithdrawContext(governanceLockCid)
           .disclosedContracts should not be empty
       }
 
@@ -102,12 +120,15 @@ class GovernanceLockTimeBasedIntegrationTest
 
       // Withdraw the governance lock; it's relocked as a VestingLock and funds remain locked
       val unlockAt = getLedgerTime.plusSeconds(1)
-      val (vestingLockCid, vestingLockView) = unlockGovernanceLockViaTokenStandard(
-        aliceValidatorBackend.participantClientWithAdminToken,
-        owner,
-        governanceLockCid,
-        Map(governanceLockUnlockAtMetaKey -> unlockAt.toMicros.toString),
-      ).value
+
+      val (vestingLockCid, vestingLockView) = ops
+        .unlockGovernanceLock(
+          aliceValidatorBackend.participantClientWithAdminToken,
+          owner,
+          governanceLockCid,
+          Map(governanceLockUnlockAtMetaKey -> unlockAt.toMicros.toString),
+        )
+        .value
       val vestingLock =
         aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
           .filterJava(governancelock.VestingLock.COMPANION)(
@@ -117,86 +138,61 @@ class GovernanceLockTimeBasedIntegrationTest
           .loneElement
           .data
       vestingLockCid.contractId should not be governanceLockCid.contractId
-      vestingLockView.transfer.sender shouldBe ownerParty.toProtoPrimitive
-      vestingLockView.transfer.receiver shouldBe superValidatorLockMagicParty.toProtoPrimitive
-      matchSVKind(vestingLock.specification.kind)
+      checkVestingLockView(env)(vestingLockView, ownerParty, lockAmount)
+      checkLockKind(vestingLock.specification.kind)
       vestingLock.endTime
         .minus(vestingLock.vestingPeriod.microseconds, ChronoUnit.MICROS) shouldBe
         unlockAt.toInstant
 
       clue("Scan serves a withdraw choice context for the VestingLock") {
-        sv1ScanBackend
-          .getTransferInstructionWithdrawContext(vestingLockCid)
+        ops
+          .getWithdrawContext(vestingLockCid)
           .disclosedContracts should not be empty
       }
 
       clue("the amulet remains locked while vesting") {
-        aliceWalletClient.balance().lockedQty should beAround(lockAmount)
+        aliceWalletClient.balance().lockedQty shouldBe lockAmount
       }
 
       // Advance part of the way into the 2 minute vesting period and withdraw with an explicit
       // withdraw time of 30 seconds into the vesting period
       advanceTime(Duration.ofSeconds(31))
 
-      val (_, (remainingVestingLockCid, remainingVestingAmount)) = actAndCheck(
-        "the owner withdraws the VestingLock mid-vesting",
-        withdrawTransferInstruction(
+      val (remainingVestingLockCid, remainingVestingLockView) = ops
+        .withdrawVestingLock(
           aliceValidatorBackend.participantClientWithAdminToken,
           owner,
           vestingLockCid,
-          meta = Map(vestingLockWithdrawAtMetaKey -> unlockAt.plusSeconds(30).toMicros.toString),
-        ),
-      )(
-        "a new VestingLock remains with half of the total vesting amount",
-        _ => {
-          val (cid, view) = listTransferInstructions(
-            aliceValidatorBackend.participantClientWithAdminToken,
+          Map(vestingLockWithdrawAtMetaKey -> unlockAt.plusSeconds(30).toMicros.toString),
+        )
+        .value
+      val remainingVestingLock =
+        aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
+          .filterJava(governancelock.VestingLock.COMPANION)(
             ownerParty,
-          ).loneElement
-          val remainingVestingLock =
-            aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-              .filterJava(governancelock.VestingLock.COMPANION)(
-                ownerParty,
-                predicate = _.id.contractId == cid.contractId,
-              )
-              .loneElement
-              .data
-          cid.contractId should not be vestingLockCid.contractId
-          view.transfer.sender shouldBe ownerParty.toProtoPrimitive
-          view.transfer.receiver shouldBe superValidatorLockMagicParty.toProtoPrimitive
-          matchSVKind(remainingVestingLock.specification.kind)
-          val remainingVestingAmount = BigDecimal(remainingVestingLock.vestingAmount)
-          // The explicit withdraw time vests exactly 1/4 of the total lock amount
-          val expectedLockAmount = lockAmount / 4 * 3
-          remainingVestingAmount shouldBe expectedLockAmount
-          aliceWalletClient.balance().lockedQty shouldBe expectedLockAmount
-          (cid, remainingVestingAmount)
-        },
-      )
+            predicate = _.id.contractId == remainingVestingLockCid.contractId,
+          )
+          .loneElement
+          .data
+      remainingVestingLockCid.contractId should not be vestingLockCid.contractId
+      checkVestingLockView(env)(remainingVestingLockView, ownerParty, expectedRemainingLockAmount)
+      checkLockKind(remainingVestingLock.specification.kind)
+      val remainingVestingAmount = BigDecimal(remainingVestingLock.vestingAmount)
+      remainingVestingAmount shouldBe expectedRemainingLockAmount
+      aliceWalletClient.balance().lockedQty shouldBe expectedRemainingLockAmount
 
       // Advance past the end of the vesting period and withdraw with an explicit withdraw time of
       // the exact end of the vesting period
       advanceTime(Duration.ofSeconds(90))
 
-      actAndCheck(
-        "the owner withdraws the fully-vested VestingLock",
-        withdrawTransferInstruction(
-          aliceValidatorBackend.participantClientWithAdminToken,
-          owner,
-          remainingVestingLockCid,
-          meta = Map(vestingLockWithdrawAtMetaKey -> unlockAt.plusSeconds(120).toMicros.toString),
-        ),
-      )(
-        "the VestingLock is archived and no pending TransferInstruction remains",
-        _ => {
-          listTransferInstructions(
-            aliceValidatorBackend.participantClientWithAdminToken,
-            ownerParty,
-          ) shouldBe empty
-          aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-            .filterJava(governancelock.VestingLock.COMPANION)(ownerParty, _ => true) shouldBe empty
-        },
-      )
+      ops.withdrawVestingLock(
+        aliceValidatorBackend.participantClientWithAdminToken,
+        owner,
+        remainingVestingLockCid,
+        Map(vestingLockWithdrawAtMetaKey -> unlockAt.plusSeconds(120).toMicros.toString),
+      ) shouldBe None
+      aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
+        .filterJava(governancelock.VestingLock.COMPANION)(ownerParty, _ => true) shouldBe empty
 
       clue("the only LockedAmulet of the owner is the expired LockedAmulet of the vesting lock") {
         val now = getLedgerTime.toInstant
@@ -206,9 +202,7 @@ class GovernanceLockTimeBasedIntegrationTest
             .loneElement
             .data
         remainingLock.lock.expiresAt.isAfter(now) shouldBe false
-        BigDecimal(remainingLock.amulet.amount.initialAmount) should beAround(
-          remainingVestingAmount
-        )
+        BigDecimal(remainingLock.amulet.amount.initialAmount) shouldBe remainingVestingAmount
       }
 
       checkTxHistory(
@@ -222,7 +216,7 @@ class GovernanceLockTimeBasedIntegrationTest
           // Partial VestingLock withdraw; only the vested portion is returned
           { case logEntry: BalanceChangeTxLogEntry =>
             logEntry.transferInstructionCid shouldBe vestingLockCid.contractId
-            logEntry.amount shouldBe lockAmount - remainingVestingAmount
+            logEntry.amount shouldBe lockAmount - expectedRemainingLockAmount
           },
           // GovernanceLock withdraw; the full amount is relocked, nothing is returned
           { case logEntry: BalanceChangeTxLogEntry =>
@@ -238,5 +232,53 @@ class GovernanceLockTimeBasedIntegrationTest
           case _ => true
         },
       )
+    }
+
+  private def checkTransferInstructionView(
+      view: transferinstructionv1.TransferInstructionView,
+      ownerParty: PartyId,
+      expectedAmount: BigDecimal,
+  ): Assertion = {
+    view.transfer.sender shouldBe ownerParty.toProtoPrimitive
+    view.transfer.receiver shouldBe lockParty.toProtoPrimitive
+    BigDecimal(view.transfer.amount) shouldBe expectedAmount
+    view.transfer.meta.values
+      .get(TokenStandardMetadata.reasonMetaKey) shouldBe makeLockSubject(lockSubject)
   }
+
+  testTokenStandardCompat(tsv1Operations)(
+    _ => checkTransferInstructionView(_, _, lockAmount),
+    _ => checkTransferInstructionView,
+  )
+
+  private def checkAllocationView(
+      view: allocationv2.AllocationView,
+      ownerParty: PartyId,
+      expectedAmount: BigDecimal,
+  )(implicit env: SpliceTestConsoleEnvironment): Assertion = {
+    view.settlement.id shouldBe lockTypeForMagicParty(lockParty)
+    view.settlement.executors.asScala shouldBe Seq(dsoParty.toProtoPrimitive)
+    view.allocation.authorizer.owner.toScala shouldBe Some(ownerParty.toProtoPrimitive)
+    view.allocation.transferLegSides.asScala shouldBe empty
+    view.allocation.committed shouldBe false
+    view.allocation.meta.values
+      .get(TokenStandardMetadata.reasonMetaKey) shouldBe makeLockSubject(lockSubject)
+    view.holdingCids.asScala should have size 1
+    view.availableActions.asScala.view
+      .mapValues(_.asScala.map(_.asScala.toSeq).toSeq)
+      .toMap shouldBe
+      Map(
+        new allocationv2.allocationaction.AA_Withdraw(javaapi.data.Unit.getInstance()) ->
+          Seq(Seq(ownerParty.toProtoPrimitive))
+      )
+    val nextIterationFunding = view.allocation.nextIterationFunding.toScala.value.asScala.toMap
+    nextIterationFunding.size shouldBe 1
+    nextIterationFunding.keys.head shouldBe "Amulet"
+    BigDecimal(nextIterationFunding.values.head) shouldBe expectedAmount
+  }
+
+  testTokenStandardCompat(tsv2Operations)(
+    implicit env => checkAllocationView(_, _, lockAmount),
+    implicit env => checkAllocationView,
+  )
 }

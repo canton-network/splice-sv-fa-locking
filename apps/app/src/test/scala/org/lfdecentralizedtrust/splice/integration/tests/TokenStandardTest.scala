@@ -8,8 +8,11 @@ import com.digitalasset.canton.topology.PartyId
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.allocationrequestv1.AllocationRequestView
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.transferinstructionv1.TransferInstruction
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.{
+  allocationinstructionv2,
   allocationv1,
+  allocationv2,
   holdingv1,
+  holdingv2,
   metadatav1,
   transferinstructionv1,
 }
@@ -27,7 +30,7 @@ import org.lfdecentralizedtrust.splice.wallet.admin.api.client.commands.HttpWall
 import org.lfdecentralizedtrust.tokenstandard.transferinstruction
 
 import java.time.temporal.ChronoUnit
-import java.time.Duration
+import java.time.{Duration, Instant}
 import java.util.UUID
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
@@ -144,6 +147,118 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
     (factory, senderHoldingCids)
   }
 
+  def executeAllocationViaTokenStandardV2(
+      participant: ParticipantClientReference,
+      authorizer: RichPartyId,
+      settlement: allocationv2.SettlementInfo,
+      transferLegSides: Seq[allocationv2.TransferLegSide],
+      settlementDeadline: Option[Instant] = None,
+      nextIterationFunding: Option[Map[String, BigDecimal]] = None,
+      committed: Boolean = false,
+      allocationMeta: Map[String, String] = Map.empty,
+      extraArgsMeta: Map[String, String] = Map.empty,
+      expectedTimeBounds: Option[(CantonTimestamp, CantonTimestamp)] = None,
+      advanceTimeBeforeExecute: Option[Duration] = None,
+  )(implicit
+      env: SpliceTestConsoleEnvironment
+  ) =
+    actAndCheck(
+      s"Instructing allocation for settlement ${settlement.id} via token standard v2 by $authorizer", {
+        val (factoryChoice, authorizerHoldingCids) = allocateViaTokenStandardV2Commands(
+          participant,
+          authorizer.partyId,
+          settlement,
+          transferLegSides,
+          settlementDeadline,
+          nextIterationFunding,
+          committed,
+          allocationMeta,
+          extraArgsMeta,
+        )
+        participant.ledger_api_extensions.commands
+          .submitJavaExternalOrLocal(
+            authorizer,
+            commands = factoryChoice.factoryId
+              .exerciseAllocationFactory_Allocate(factoryChoice.args)
+              .commands
+              .asScala
+              .toSeq,
+            disclosedContracts = factoryChoice.disclosedContracts,
+            expectedTimeBounds = expectedTimeBounds,
+            advanceTimeBeforeExecute = advanceTimeBeforeExecute,
+          )
+        authorizerHoldingCids.headOption
+      },
+    )(
+      // Prepared tx execution does not wait for the tx being committed.
+      // We thus wait here, as otherwise multiple allocation commands will use the same input holdings.
+      // Allocations that need no funding have no input holdings, so there is nothing to wait for.
+      "Wait until we see at least one of the input holdings being consumed",
+      trackingHoldingCid =>
+        trackingHoldingCid.foreach { holdingCid =>
+          participant.ledger_api.event_query
+            .by_contract_id(holdingCid.contractId, requestingParties = Seq(authorizer.partyId))
+            .archived should not be empty withClue "archived holding"
+        },
+    )
+
+  def allocateViaTokenStandardV2Commands(
+      participant: ParticipantClientReference,
+      authorizer: PartyId,
+      settlement: allocationv2.SettlementInfo,
+      transferLegSides: Seq[allocationv2.TransferLegSide],
+      settlementDeadline: Option[Instant] = None,
+      nextIterationFunding: Option[Map[String, BigDecimal]] = None,
+      committed: Boolean = false,
+      allocationMeta: Map[String, String] = Map.empty,
+      extraArgsMeta: Map[String, String] = Map.empty,
+  )(implicit
+      env: SpliceTestConsoleEnvironment
+  ): (
+      FactoryChoiceWithDisclosures[
+        allocationinstructionv2.AllocationFactory.ContractId,
+        allocationinstructionv2.AllocationFactory_Allocate,
+      ],
+      Seq[holdingv2.Holding.ContractId],
+  ) = {
+    val now = env.environment.clock.now.toInstant
+    def unlocked(optLock: java.util.Optional[holdingv1.Lock]): Boolean =
+      optLock.toScala.forall(lock => lock.expiresAt.toScala.exists(t => t.isBefore(now)))
+    // Only allocations that send funds or reserve funding for the next iteration need input holdings.
+    val needsFunding =
+      transferLegSides.exists(_.side == allocationv2.TransferSide.SENDERSIDE) ||
+        nextIterationFunding.exists(_.values.exists(_ > 0))
+    val authorizerHoldingCids =
+      if (needsFunding)
+        listHoldings(participant, authorizer).collect {
+          case (holdingCid, holding)
+              if holding.owner == authorizer.toProtoPrimitive && unlocked(holding.lock) =>
+            new holdingv2.Holding.ContractId(holdingCid.contractId)
+        }
+      else Seq.empty
+    val choiceArgs = new allocationinstructionv2.AllocationFactory_Allocate(
+      settlement,
+      new allocationv2.AllocationSpecification(
+        dsoParty.toProtoPrimitive,
+        new holdingv2.Account(Some(authorizer.toProtoPrimitive).toJava, None.toJava, ""),
+        transferLegSides.asJava,
+        settlementDeadline.toJava,
+        nextIterationFunding.map(_.view.mapValues(_.bigDecimal).toMap.asJava).toJava,
+        committed,
+        new metadatav1.Metadata(allocationMeta.asJava),
+      ),
+      now,
+      authorizerHoldingCids.asJava,
+      new metadatav1.ExtraArgs(
+        emptyExtraArgs.context,
+        new metadatav1.Metadata(extraArgsMeta.asJava),
+      ),
+      List(authorizer.toProtoPrimitive).asJava,
+    )
+    val factory = sv1ScanBackend.getAllocationFactoryV2(choiceArgs)
+    (factory, authorizerHoldingCids)
+  }
+
   def listHoldings(
       participantClient: ParticipantClientReference,
       party: PartyId,
@@ -213,81 +328,34 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
     })
   }
 
-  private def makeLockMagicParty(kind: String): PartyId =
-    PartyId.tryFromProtoPrimitive(
-      s"cip-0105_$kind::1220000000000000000000000000000000000000000000000000000000000000abcd"
-    )
-
-  val superValidatorLockMagicParty = makeLockMagicParty("sv-lock")
-  val featuredAppLockMagicParty = makeLockMagicParty("fa-lock")
-  val provisionalFeaturedAppLockMagicParty = makeLockMagicParty("provisional-fa-lock")
-
-  def makeGovernanceLockSubject(lockSubject: String): String =
-    s"lock-subject=$lockSubject"
-
-  val governanceLockUnlockAtMetaKey = "cip-0105/unlock-at"
-  val vestingLockWithdrawAtMetaKey = "cip-0105/withdraw-at"
-
-  def createGovernanceLockViaTokenStandard(
-      participant: ParticipantClientReference,
-      owner: RichPartyId,
-      lockParty: PartyId,
-      lockSubject: String,
-      amount: BigDecimal,
-  )(implicit
-      env: SpliceTestConsoleEnvironment
-  ): transferinstructionv1.TransferInstruction.ContractId = {
-    // `owner` may already have pending instructions to `lockParty` (earlier
-    // `GovernanceLock`s or `VestingLock`s), so only look at the new one.
-    val existingInstructionCids =
-      listTransferInstructions(participant, owner.partyId).map(_._1).toSet
-    executeTransferViaTokenStandard(
-      participant,
-      owner,
-      lockParty,
-      amount,
-      transferinstruction.v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer,
-      description = Some(makeGovernanceLockSubject(lockSubject)),
-    )
-    listTransferInstructions(participant, owner.partyId).collect {
-      case (cid, view)
-          if view.transfer.receiver == lockParty.toProtoPrimitive &&
-            !existingInstructionCids.contains(cid) =>
-        cid
-    }.loneElement
+  def listAllocationsV2(
+      participantClient: ParticipantClientReference,
+      party: PartyId,
+  ): Seq[(allocationv2.Allocation.ContractId, allocationv2.AllocationView)] = {
+    val allocations =
+      participantClient.ledger_api.state.acs.of_party(
+        party = party,
+        filterInterfaces = Seq(allocationv2.Allocation.TEMPLATE_ID).map(templateId =>
+          TemplateId(
+            templateId.getPackageId,
+            templateId.getModuleName,
+            templateId.getEntityName,
+          )
+        ),
+      )
+    allocations.map(alloc => {
+      val allocViewRaw = (alloc.event.interfaceViews.head.viewValue
+        .getOrElse(throw new RuntimeException("expected an interface view to be present")))
+      val allocView = allocationv2.AllocationView
+        .valueDecoder()
+        .decode(
+          javaapi.data.DamlRecord.fromProto(
+            v2.value.Record.toJavaProto(allocViewRaw)
+          )
+        )
+      (new allocationv2.Allocation.ContractId(alloc.contractId), allocView)
+    })
   }
-
-  /** Fully unlocks a governance lock by withdrawing its transfer instruction.
-    */
-  def unlockGovernanceLockViaTokenStandard(
-      participant: ParticipantClientReference,
-      owner: RichPartyId,
-      governanceLockCid: transferinstructionv1.TransferInstruction.ContractId,
-      meta: Map[String, String] = Map.empty,
-  )(implicit env: SpliceTestConsoleEnvironment): Option[
-    (
-        transferinstructionv1.TransferInstruction.ContractId,
-        transferinstructionv1.TransferInstructionView,
-    )
-  ] =
-    actAndCheck(
-      "the owner unlocks the GovernanceLock",
-      withdrawTransferInstruction(participant, owner, governanceLockCid, meta = meta),
-    )(
-      "a VestingLock is not the pending TransferInstruction",
-      _ =>
-        listTransferInstructions(participant, owner.partyId).collect {
-          case t @ (_, view)
-              if view.originalInstructionCid.toScala.exists(
-                _.contractId == governanceLockCid.contractId
-              ) =>
-            t
-        } match {
-          case Seq() => None
-          case Seq(vestingLockCid) => Some(vestingLockCid)
-          case many => fail(s"Expected at most one VestingLock for $governanceLockCid, got $many")
-        },
-    )._2
 
   def acceptTransferInstruction(
       participant: ParticipantClientReference,
@@ -358,6 +426,32 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
         commands = instructionCid
           .exerciseTransferInstruction_Withdraw(
             choiceContext.toExtraArgs(new metadatav1.Metadata(meta.asJava))
+          )
+          .commands()
+          .asScala
+          .toSeq,
+        disclosedContracts = choiceContext.disclosedContracts,
+        expectedTimeBounds = expectedTimeBounds,
+      )
+  }
+
+  def withdrawAllocationV2(
+      participant: ParticipantClientReference,
+      authorizer: RichPartyId,
+      allocationCid: allocationv2.Allocation.ContractId,
+      expectedTimeBounds: Option[(CantonTimestamp, CantonTimestamp)] = None,
+      meta: Map[String, String] = Map.empty,
+  )(implicit env: SpliceTestConsoleEnvironment) = {
+    val choiceContext = sv1ScanBackend.getAllocationV2WithdrawContext(allocationCid)
+    participant.ledger_api_extensions.commands
+      .submitJavaExternalOrLocal(
+        authorizer,
+        commands = allocationCid
+          .exerciseAllocation_Withdraw(
+            new allocationv2.Allocation_Withdraw(
+              java.util.List.of(authorizer.partyId.toProtoPrimitive),
+              choiceContext.toExtraArgs(new metadatav1.Metadata(meta.asJava)),
+            )
           )
           .commands()
           .asScala
