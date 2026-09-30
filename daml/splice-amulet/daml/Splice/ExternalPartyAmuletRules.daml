@@ -653,7 +653,6 @@ governanceAllocateImpl alloc@V2.AllocationFactory_Allocate{..} = do
 
   lockedAmulet <- requireSome ("FundingAmount needs to be greater than or equal to 0.0, we got:  " <> show amount) optLockedAmulet
 
-  now <- getTime
   allocationCid <- fmap toInterfaceContractId $ create GovernanceLock with
     dso
     owner
@@ -661,7 +660,7 @@ governanceAllocateImpl alloc@V2.AllocationFactory_Allocate{..} = do
     lockedAmulet
     specification = governanceLockSpecification
     originalLockCid = None
-    requestedAt = now
+    requestedAt
     meta
     pendingUnlockApprovals = Map.empty
 

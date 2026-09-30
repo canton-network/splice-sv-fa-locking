@@ -252,20 +252,19 @@ template GovernanceLock
       view = V2.AllocationView with
           originalAllocationCid = coerceContractId <$> originalLockCid
           settlement = V2.SettlementInfo with
-            executors = [owner]
-            -- FIXME: Correct id?
-            id = cipAddressPrefix <> "GovernanceLockSettlement"
+            executors = [dso]
+            id = governanceLockKindToPartyHint specification.kind
               -- ^ Textual identifier of the settlement.
             cid = None
             meta = emptyMetadata
           allocation = V2.AllocationSpecification with
-            admin = owner
+            admin = dso
             authorizer = basicAccount owner
             transferLegSides = []
             settlementDeadline = Some maxComparableTime
             -- FIXME: Should we specify nextIterationFunding?
             nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName amount
-            committed = True -- FIXME: Old PR mentions to revisit for FA locks
+            committed = False
             -- FIXME: Correct metadata?
             meta = reasonToMeta encodedReason meta
           holdingCids = [toInterfaceContractId lockedAmulet]
@@ -279,8 +278,8 @@ template GovernanceLock
           meta = emptyMetadata
         where
           (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
-      allocation_settleImpl _ _ = assertFail "Allocations representing governance locks cannot be accepted"
-      allocation_cancelImpl _ _ = assertFail "Allocations representing governance locks cannot be accepted"
+      allocation_settleImpl _ _ = assertFail "Allocations representing governance locks cannot be settled"
+      allocation_cancelImpl _ _ = assertFail "Allocations representing governance locks cannot be cancelled"
       allocation_withdrawImpl self V2.Allocation_Withdraw{..} = do
         -- `Allocation_Withdraw` is nonconsuming so we need to archive here
         -- `governanceLock_unlockImpl` creates a new `GovernanceLock` or `VestingLock` when necessary
@@ -564,19 +563,18 @@ template VestingLock
       view = V2.AllocationView with
           originalAllocationCid = coerceContractId <$> originalLockCid
           settlement = V2.SettlementInfo with
-            executors = [owner]
-            -- FIXME: Correct id?
-            id = cipAddressPrefix <> "VestingLockSettlement"
+            executors = [dso]
+            id = governanceLockKindToPartyHint specification.kind
               -- ^ Textual identifier of the settlement.
             cid = None
             meta = emptyMetadata
           allocation = V2.AllocationSpecification with
-            admin = owner
+            admin = dso
             authorizer = basicAccount owner
             transferLegSides = []
             settlementDeadline = Some maxComparableTime
             nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName vestingAmount
-            committed = True -- FIXME: Old PR mentions to revisit for FA locks
+            committed = False
             -- FIXME: Correct metadata?
             meta = reasonToMeta encodedReason meta
           holdingCids = [toInterfaceContractId lockedAmulet]
@@ -593,7 +591,7 @@ template VestingLock
           (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
       allocation_settleImpl _ _ = assertFail "Allocations representing vesting locks cannot be accepted"
       allocation_cancelImpl _ _ = assertFail "Allocations representing vesting locks cannot be accepted"
-      allocation_withdrawImpl self arg@V2.Allocation_Withdraw{..} = do
+      allocation_withdrawImpl self V2.Allocation_Withdraw{..} = do
         -- `Allocation_Withdraw` is nonconsuming so we need to archive here
         -- `vestingLock_withdrawImpl` creates a new `VestingLock` when necessary
         potentiallyUnsafeArchive self
@@ -1045,6 +1043,11 @@ specificationFromReceiverAndReason owner receiver meta = do
         Some (tag, subject) | tag == provisionalFeaturedAppLockTag, Some subject <- partyFromText subject -> pure $ ownerControlledSpecification owner $ GLK_ProvisionalFeaturedApp with
           provider = subject
         _ -> assertFail "Unknown receiver or lock-subject"
+
+governanceLockKindToPartyHint : GovernanceLockKind -> Text
+governanceLockKindToPartyHint (GLK_FeaturedApp _) = cipAddressPrefix <> featuredAppLockTag
+governanceLockKindToPartyHint (GLK_ProvisionalFeaturedApp _) = cipAddressPrefix <> provisionalFeaturedAppLockTag
+governanceLockKindToPartyHint (GLK_SuperValidatorRightsOwner _) = cipAddressPrefix <> superValidatorLockTag
 
 makeCanonicalParty : Text -> Party
 makeCanonicalParty tag = fromSome $ partyFromText $ cipAddressPrefix <> tag <> magicNamespace
