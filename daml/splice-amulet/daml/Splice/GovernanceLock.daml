@@ -576,8 +576,7 @@ template VestingLock
             committed = False
             meta = reasonToMeta encodedReason meta
           holdingCids = [toInterfaceContractId lockedAmulet]
-          -- FIXME: createdAt is not supposed to be endTime
-          createdAt = endTime
+          createdAt = endTime `addRelTime` (- vestingPeriod)
           numIterations = 0
           expiresAt = Some maxBound
           availableActions = Map.fromList [(V2.AA_Withdraw, specification.vestingControllers.controllers)]
