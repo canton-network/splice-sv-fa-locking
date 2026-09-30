@@ -256,7 +256,6 @@ template GovernanceLock
           settlement = V2.SettlementInfo with
             executors = [dso]
             id = fst $ governanceLockKindToTypeAndSubject specification.kind
-              -- ^ Textual identifier of the settlement.
             cid = None
             meta = emptyMetadata
           allocation = V2.AllocationSpecification with
@@ -564,7 +563,6 @@ template VestingLock
           settlement = V2.SettlementInfo with
             executors = [dso]
             id = fst $ governanceLockKindToTypeAndSubject specification.kind
-              -- ^ Textual identifier of the settlement.
             cid = None
             meta = emptyMetadata
           allocation = V2.AllocationSpecification with
