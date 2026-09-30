@@ -145,7 +145,7 @@ template ExternalPartyAmuletRules
         meta : Metadata
       controller owner
       do
-        (governanceLock, changeHolding) <- governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner requestedAt meta
+        (_, governanceLock, changeHolding) <- governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner requestedAt meta
         pure $ ExternalPartyAmuletRules_LockForGovernanceResult with
           governanceLock
           changeHolding

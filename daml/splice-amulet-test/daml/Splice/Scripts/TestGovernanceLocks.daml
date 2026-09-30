@@ -887,7 +887,7 @@ governanceLockV2 env owner amount kind = do
   let (lockType, lockSubject) = governanceLockKindToTypeAndSubject kind
       lockMeta = Metadata $ TM.fromList [(lockSubjectMetaKey, lockSubject)]
       settlementInfo = V2.SettlementInfo with
-        executors = [owner]
+        executors = [env.instrId.admin]
         id = lockType
         cid = None
         meta = emptyMetadata
@@ -895,9 +895,9 @@ governanceLockV2 env owner amount kind = do
         admin = env.instrId.admin
         authorizer = basicAccount owner
         transferLegSides = []
-        settlementDeadline = None
+        settlementDeadline = Some maxComparableTime
         nextIterationFunding = Some $ TM.singleton env.instrId.id amount
-        committed = True
+        committed = False
         meta = lockMeta
   result <- WalletClientV2.allocateV2 env.registries owner settlementInfo allocation
   pure $ case result.output of

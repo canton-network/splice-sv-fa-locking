@@ -266,7 +266,6 @@ template GovernanceLock
             settlementDeadline = Some maxComparableTime
             nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName amount
             committed = False
-            -- FIXME: Correct metadata?
             meta = reasonToMeta encodedReason meta
           holdingCids = [toInterfaceContractId lockedAmulet]
           createdAt = requestedAt
@@ -575,7 +574,6 @@ template VestingLock
             settlementDeadline = Some maxComparableTime
             nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName vestingAmount
             committed = False
-            -- FIXME: Correct metadata?
             meta = reasonToMeta encodedReason meta
           holdingCids = [toInterfaceContractId lockedAmulet]
           -- FIXME: createdAt is not supposed to be endTime
@@ -682,7 +680,7 @@ governanceLock_lockForGovernance_impl
  -> Party
  -> Time
  -> Metadata
- -> Update (ContractId GovernanceLock, Optional (ContractId Amulet))
+ -> Update (GovernanceLock, ContractId GovernanceLock, Optional (ContractId Amulet))
 governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner requestedAt meta = do
   assertWithinDeadline "requestedAt + 1 day" $ requestedAt `addRelTime` days 1
   validateGovernanceLockControllers specification
@@ -692,22 +690,21 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
         context = describeGovernanceSpecification specification
         expiresAt = maxBound
   ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] inputs context ""
-  governanceLock <- create GovernanceLock with
-    dso
-    owner
-    amount
-    lockedAmulet
-    specification
-    requestedAt
-    originalLockCid = None
-    meta
-    pendingUnlockApprovals = Map.empty
-  pure $ (governanceLock, changeHolding)
+  let governanceLock = GovernanceLock with
+        dso
+        owner
+        amount
+        lockedAmulet
+        specification
+        requestedAt
+        originalLockCid = None
+        meta
+        pendingUnlockApprovals = Map.empty
+  governanceLockCid <- create governanceLock
+  pure (governanceLock, governanceLockCid, changeHolding)
 
-governanceMetadataKeys : Metadata -> Set.Set Text
-governanceMetadataKeys meta = Set.fromList $ fst <$> TextMap.toList ( TextMap.filterWithKey ( \a _ -> cipMetaPrefix `Text.isPrefixOf` a ) meta.values )
-
-isGovernanceAllocationArgument V2.AllocationFactory_Allocate{allocation} = not ( Set.null $ governanceMetadataKeys allocation.meta )
+isGovernanceAllocationArgument V2.AllocationFactory_Allocate{allocation} =
+  not (TextMap.null . (.values) $ filterGovernanceMetadataKeys allocation.meta)
 
 governanceLockKindObservers : GovernanceLockKind -> [Party]
 governanceLockKindObservers (GLK_FeaturedApp party) = [party]
@@ -943,7 +940,7 @@ substitutionControllersMetaKey = cipMetaPrefix <> "substitution-controllers"
 -- | Metadata key that sets the `vestingControllers` of a `GovernanceLock`.
 vestingControllersMetaKey = cipMetaPrefix <> "vesting-controllers"
 
-governanceLockKeys = Set.fromList [lockSubjectMetaKey, unlockControllersMetaKey, substitutionControllersMetaKey, vestingControllersMetaKey]
+knownGovernanceMetaKeys = Set.fromList [lockSubjectMetaKey, unlockControllersMetaKey, substitutionControllersMetaKey, vestingControllersMetaKey]
 
 getOptionalMetadata : Text -> Metadata -> Optional Text
 getOptionalMetadata key meta = TextMap.lookup key meta.values
@@ -954,11 +951,8 @@ getRequiredMetadata key meta =
     Some v -> pure v
     None -> assertFail $ "Missing metadata field '" <> key <> "'"
 
-checkGovernanceMetadataKeys : (CanAssert m) => Set.Set Text -> Metadata -> m ()
-checkGovernanceMetadataKeys knownKeys =
-  require ("Only known metadata keys are supplied under " <> cipMetaPrefix)
-    . (`Set.isSubsetOf` knownKeys)
-    . governanceMetadataKeys
+filterGovernanceMetadataKeys : Metadata -> Metadata
+filterGovernanceMetadataKeys meta = Metadata $ TextMap.filterWithKey (\k _ -> Set.member k knownGovernanceMetaKeys) meta.values
 
 -- TSv1 support
 -- ============
@@ -998,7 +992,7 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg = do
 
   specification <- specificationFromReceiverAndReason transfer.sender transfer.receiver transfer.meta
 
-  (lockCid, changeCid) <- governanceLock_lockForGovernance_impl expectedAdmin transfer.amount transfer.inputHoldingCids specification extraArgs transfer.sender transfer.requestedAt transfer.meta
+  (_, lockCid, changeCid) <- governanceLock_lockForGovernance_impl expectedAdmin transfer.amount transfer.inputHoldingCids specification extraArgs transfer.sender transfer.requestedAt transfer.meta
   pure $ V1.TransferInstructionResult with
     output = V1.TransferInstructionResult_Pending with
       transferInstructionCid = toInterfaceContractId $ lockCid
@@ -1011,25 +1005,25 @@ governanceLock_allocationFactoryV2_allocateImpl dso V2.AllocationFactory_Allocat
   ensureBasicAccount "allocation.authorizer" allocation.authorizer
   let owner = regularAccountOwner allocation.authorizer
   checkActors actors [[owner]]
-  require' ("allocation.transferLegSides", allocation.transferLegSides) isEqualR ("empty list", [])
-  ensureNoAccountMeta "allocation" "authorizer" allocation.meta
   assertDeadlineExceeded "requestedAt" requestedAt
 
-  specification <- parseGovernanceLockSpecification settlement.id allocation.meta owner
-  amount <- case TextMap.toList <$> allocation.nextIterationFunding of
-    Some [(instrumentId, amount)] -> do
-      requireMatchExpected ("nextIterationFunding.instrumentId", instrumentId) amuletInstrumentIdName
-      pure amount
-    Some v@(_ :: _) -> assertFail $ "Expected exactly one nextIterationFunding value, got: " <> show v
-    _ -> assertFail $ "Expected exactly one nextIterationFunding value, got none"
+  specification <- assertParsed "GovernanceLockSpecification" governanceLockSpecificationParser (settlement.id, allocation.meta, owner)
+  amount <- assertParsed "allocation.nextIterationFunding" fundingAmountParser allocation.nextIterationFunding
 
-  (lockCid, changeCid) <- governanceLock_lockForGovernance_impl
-    dso amount (fmap downcast inputHoldingCids) specification extraArgs owner requestedAt allocation.meta
+  let filteredMeta = filterGovernanceMetadataKeys allocation.meta
+  (lock, lockCid, changeCid) <- governanceLock_lockForGovernance_impl
+    dso amount (fmap downcast inputHoldingCids) specification extraArgs owner requestedAt filteredMeta
+
+  let lockAlloc = view $ toInterface @V2.Allocation lock
+      (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
+      expectedMeta = reasonToMeta encodedReason filteredMeta
+  require' ("lock settlement", lockAlloc.settlement) isEqualR ("input settlement", settlement)
+  require' ("lock allocation", lockAlloc.allocation) isEqualR ("input allocation", allocation with meta = expectedMeta)
 
   pure V2.AllocationInstructionResult with
     authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, fmap toInterfaceContractId $ optionalToList changeCid)]
     output = V2.AllocationInstructionResult_Completed with allocationCid = toInterfaceContractId lockCid
-    meta = emptyMetadata
+    meta = simpleHoldingTxMeta TxKind_MergeSplit (Some "lock for governance") None
 
 governanceLockKindFromTypeAndSubject : CanAssert m => Text -> Text -> m GovernanceLockKind
 governanceLockKindFromTypeAndSubject type_ subject
@@ -1080,6 +1074,12 @@ type ControllerSpecificationParser = Parser (Metadata, Party) ControllerSpecific
 runParser : Parser i o -> i -> Validation Text o
 runParser (Parser f) input = f input
 
+assertParsed : CanAssert m => Text -> Parser i o -> i -> m o
+assertParsed parsedType parser input =
+  case runParser parser input of
+    Errors errors -> assertFail $ "Errors parsing " <> parsedType <> ":\n\n" <> Text.intercalate "\n" (NonEmpty.toList errors)
+    Success output -> pure output
+
 controllersParser : Text -> ControllerSpecificationParser
 controllersParser key =
     Parser \(meta, owner) ->
@@ -1112,12 +1112,12 @@ governanceLockSpecificationParser = Parser \(type_, meta, owner) ->
   runParser substitutionControllersParser (meta, owner) <*>
   runParser vestingControllersParser (meta, owner)
 
-parseGovernanceLockSpecification : CanAssert m => Text -> Metadata -> Party -> m GovernanceLockSpecification
-parseGovernanceLockSpecification type_ meta owner = do
-  checkGovernanceMetadataKeys governanceLockKeys meta
-  case runParser governanceLockSpecificationParser (type_, meta, owner) of
-    Errors errors -> assertFail $ "Errors parsing GovernanceLockSpecification:\n\n" <> Text.intercalate "\n" (NonEmpty.toList errors)
-    Success output -> pure output
+fundingAmountParser : Parser (Optional (TextMap.TextMap Decimal)) Decimal
+fundingAmountParser = Parser \m ->
+  case TextMap.toList <$> m of
+    Some [(instrumentId, amount)] | instrumentId == amuletInstrumentIdName -> ok amount
+    Some v@(_ :: _) -> invalid $ "Expected exactly one " <> amuletInstrumentIdName <> " value, got: " <> show v
+    _ -> invalid $ "Expected exactly one " <> amuletInstrumentIdName <> " value, got none"
 
 -- SV Reward Coupon Helpers
 ---------------------------
