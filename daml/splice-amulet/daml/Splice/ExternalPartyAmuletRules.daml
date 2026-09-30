@@ -9,7 +9,6 @@ import DA.Assert
 import DA.Foldable (forA_)
 import DA.Optional
 import qualified DA.TextMap as TextMap
-import qualified DA.Map as Map
 import DA.Time
 
 import Splice.Api.Token.MetadataV1
@@ -480,8 +479,8 @@ amulet_allocationFactoryV2_allocateImpl
   -> ContractId V2.AllocationFactory
   -> V2.AllocationFactory_Allocate
   -> Update V2.AllocationInstructionResult
-amulet_allocationFactoryV2_allocateImpl _ _self arg
-  | isGovernanceAllocationArgument arg = governanceAllocateImpl arg
+amulet_allocationFactoryV2_allocateImpl externalAmuletRules _self arg
+  | isGovernanceAllocationArgument arg = governanceLock_allocationFactoryV2_allocateImpl externalAmuletRules.dso arg
 amulet_allocationFactoryV2_allocateImpl externalAmuletRules _self arg = do
   let netTransferAmount = netAmuletCreditAmount arg.allocation.authorizer arg.allocation.transferLegSides
   outputFundingAmount <- validateAmuletNextIterationFunding arg.allocation.nextIterationFunding
@@ -621,7 +620,6 @@ amulet_allocationFactoryV1_allocateImpl externalAmuletRules _self arg = do
     output = V1.AllocationInstructionResult_Completed with allocationCid
     meta
 
-
 -- Utilities
 ------------
 
@@ -630,37 +628,3 @@ requireExpectedAdminMatch expected actual =   require ("Expected admin " <> show
 
 instance HasCheckedFetch ExternalPartyAmuletRules ForDso where
   contractGroupId ExternalPartyAmuletRules{..} = ForDso dso
-
-governanceAllocateImpl : V2.AllocationFactory_Allocate -> Update V2.AllocationInstructionResult
-governanceAllocateImpl alloc@V2.AllocationFactory_Allocate{..} = do
-  let owner = regularAccountOwner allocation.authorizer
-      dso = alloc.allocation.admin
-
-  specification <- parseGovernanceLockSpecification settlement.id allocation.meta owner
-  amount <- case TextMap.toList <$> allocation.nextIterationFunding of
-    Some [(_, amount)] -> pure amount
-    Some v@(_ :: _) -> assertFail $ "Expected exactly one nextIterationFunding value, got: " <> show v
-    _ -> assertFail $ "Expected exactly one nextIterationFunding value, got none"
-
-  (optLockedAmulet, senderChangeCids, _, meta) <-
-    amulet_allocationFactoryV2_allocateImplCore (ExternalPartyAmuletRules dso) alloc amount
-
-  lockedAmulet <- case optLockedAmulet of
-    Some a -> pure a
-    None -> assertFail $ "FundingAmount must be greater than or equal to 0.0, we got: " <> show amount
-
-  allocationCid <- fmap toInterfaceContractId $ create GovernanceLock with
-    dso
-    owner
-    amount
-    lockedAmulet
-    specification
-    originalLockCid = None
-    requestedAt
-    meta
-    pendingUnlockApprovals = Map.empty
-
-  pure V2.AllocationInstructionResult with
-      authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, map upcast senderChangeCids)]
-      output = V2.AllocationInstructionResult_Completed with allocationCid
-      meta

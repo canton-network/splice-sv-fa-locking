@@ -1005,6 +1005,32 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg = do
     senderChangeCids = optionalToList $ toInterfaceContractId <$> changeCid
     meta = emptyMetadata
 
+governanceLock_allocationFactoryV2_allocateImpl : Party -> V2.AllocationFactory_Allocate -> Update V2.AllocationInstructionResult
+governanceLock_allocationFactoryV2_allocateImpl dso V2.AllocationFactory_Allocate{..} = do
+  requireMatchExpected ("admin", allocation.admin) dso
+  ensureBasicAccount "allocation.authorizer" allocation.authorizer
+  let owner = regularAccountOwner allocation.authorizer
+  checkActors actors [[owner]]
+  require' ("allocation.transferLegSides", allocation.transferLegSides) isEqualR ("empty list", [])
+  ensureNoAccountMeta "allocation" "authorizer" allocation.meta
+  assertDeadlineExceeded "requestedAt" requestedAt
+
+  specification <- parseGovernanceLockSpecification settlement.id allocation.meta owner
+  amount <- case TextMap.toList <$> allocation.nextIterationFunding of
+    Some [(instrumentId, amount)] -> do
+      requireMatchExpected ("nextIterationFunding.instrumentId", instrumentId) amuletInstrumentIdName
+      pure amount
+    Some v@(_ :: _) -> assertFail $ "Expected exactly one nextIterationFunding value, got: " <> show v
+    _ -> assertFail $ "Expected exactly one nextIterationFunding value, got none"
+
+  (lockCid, changeCid) <- governanceLock_lockForGovernance_impl
+    dso amount (fmap downcast inputHoldingCids) specification extraArgs owner requestedAt allocation.meta
+
+  pure V2.AllocationInstructionResult with
+    authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, fmap toInterfaceContractId $ optionalToList changeCid)]
+    output = V2.AllocationInstructionResult_Completed with allocationCid = toInterfaceContractId lockCid
+    meta = emptyMetadata
+
 governanceLockKindFromTypeAndSubject : CanAssert m => Text -> Text -> m GovernanceLockKind
 governanceLockKindFromTypeAndSubject type_ subject
   | checkType featuredAppLockType = GLK_FeaturedApp <$> parseProvider
