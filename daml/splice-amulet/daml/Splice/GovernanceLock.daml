@@ -701,7 +701,7 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
   pure (governanceLock, governanceLockCid, changeHolding)
 
 isGovernanceAllocationArgument V2.AllocationFactory_Allocate{allocation} =
-  not (TextMap.null . (.values) $ filterGovernanceMetadataKeys allocation.meta)
+  not (TextMap.null . (.values) $ keepGovernanceMetadataKeys allocation.meta)
 
 governanceLockKindObservers : GovernanceLockKind -> [Party]
 governanceLockKindObservers (GLK_FeaturedApp party) = [party]
@@ -948,8 +948,15 @@ getRequiredMetadata key meta =
     Some v -> pure v
     None -> assertFail $ "Missing metadata field '" <> key <> "'"
 
-filterGovernanceMetadataKeys : Metadata -> Metadata
-filterGovernanceMetadataKeys meta = Metadata $ TextMap.filterWithKey (\k _ -> Set.member k knownGovernanceMetaKeys) meta.values
+filterGovernanceMetadataKeys : (Text -> Set.Set Text -> Bool) -> Metadata -> Metadata
+filterGovernanceMetadataKeys isKeyValid meta =
+  Metadata $ TextMap.filterWithKey (\k _ -> isKeyValid k knownGovernanceMetaKeys) meta.values
+
+keepGovernanceMetadataKeys : Metadata -> Metadata
+keepGovernanceMetadataKeys = filterGovernanceMetadataKeys Set.member
+
+removeGovernanceMetadataKeys : Metadata -> Metadata
+removeGovernanceMetadataKeys = filterGovernanceMetadataKeys \k -> not . Set.member k
 
 -- TSv1 support
 -- ============
@@ -1007,7 +1014,7 @@ governanceLock_allocationFactoryV2_allocateImpl dso V2.AllocationFactory_Allocat
   specification <- assertParsed "GovernanceLockSpecification" governanceLockSpecificationParser (settlement.id, allocation.meta, owner)
   amount <- assertParsed "allocation.nextIterationFunding" fundingAmountParser allocation.nextIterationFunding
 
-  let filteredMeta = filterGovernanceMetadataKeys allocation.meta
+  let filteredMeta = removeGovernanceMetadataKeys allocation.meta
   (lock, lockCid, changeCid) <- governanceLock_lockForGovernance_impl
     dso amount (fmap downcast inputHoldingCids) specification extraArgs owner requestedAt filteredMeta
 
