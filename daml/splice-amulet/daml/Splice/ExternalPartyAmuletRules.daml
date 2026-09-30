@@ -633,32 +633,28 @@ instance HasCheckedFetch ExternalPartyAmuletRules ForDso where
 
 governanceAllocateImpl : V2.AllocationFactory_Allocate -> Update V2.AllocationInstructionResult
 governanceAllocateImpl alloc@V2.AllocationFactory_Allocate{..} = do
-  let meta = alloc.allocation.meta
-      owner = regularAccountOwner allocation.authorizer
+  let owner = regularAccountOwner allocation.authorizer
       dso = alloc.allocation.admin
-  lockSubject <- requireSome ("has a " <> lockSubjectMetaKey <> " field in metadata") $ TextMap.lookup lockSubjectMetaKey meta.values
-  lockType <- requireSome ("has a " <> lockTypeMetaKey <> " field in metadata") $ TextMap.lookup lockTypeMetaKey meta.values
-  kind <- lockTypeAndSubjectToGovernanceLockKind lockType lockSubject
 
-  checkGovernanceMetadataKeys governanceLockKeys meta
-  let governanceLockSpecification = GovernanceLockSpecification with
-        kind
-        unlockControllers = controllerSpecificationFromMetaOrOwner unlockControllersMetaKey meta owner
-        substitutionControllers = controllerSpecificationFromMetaOrOwner substitutionControllersMetaKey meta owner
-        vestingControllers = controllerSpecificationFromMetaOrOwner vestingControllersMetaKey meta owner
-      Some [ (_, amount) ] = TextMap.toList <$> allocation.nextIterationFunding
+  specification <- parseGovernanceLockSpecification settlement.id allocation.meta owner
+  amount <- case TextMap.toList <$> allocation.nextIterationFunding of
+    Some [(_, amount)] -> pure amount
+    Some v@(_ :: _) -> assertFail $ "Expected exactly one nextIterationFunding value, got: " <> show v
+    _ -> assertFail $ "Expected exactly one nextIterationFunding value, got none"
 
   (optLockedAmulet, senderChangeCids, _, meta) <-
     amulet_allocationFactoryV2_allocateImplCore (ExternalPartyAmuletRules dso) alloc amount
 
-  lockedAmulet <- requireSome ("FundingAmount needs to be greater than or equal to 0.0, we got:  " <> show amount) optLockedAmulet
+  lockedAmulet <- case optLockedAmulet of
+    Some a -> pure a
+    None -> assertFail $ "FundingAmount must be greater than or equal to 0.0, we got: " <> show amount
 
   allocationCid <- fmap toInterfaceContractId $ create GovernanceLock with
     dso
     owner
     amount
     lockedAmulet
-    specification = governanceLockSpecification
+    specification
     originalLockCid = None
     requestedAt
     meta

@@ -11,12 +11,14 @@ import DA.Functor (($>))
 import DA.List.Total (head, minimumOn)
 import DA.Map (Map)
 import DA.Map qualified as Map
+import DA.NonEmpty qualified as NonEmpty
 import DA.Optional
 import DA.Set qualified as Set
 import DA.Text qualified as Text
 import DA.TextMap qualified as TextMap
 import DA.Time
 import DA.Traversable (forA)
+import DA.Validation
 
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
@@ -253,7 +255,7 @@ template GovernanceLock
           originalAllocationCid = coerceContractId <$> originalLockCid
           settlement = V2.SettlementInfo with
             executors = [dso]
-            id = governanceLockKindToPartyHint specification.kind
+            id = fst $ governanceLockKindToTypeAndSubject specification.kind
               -- ^ Textual identifier of the settlement.
             cid = None
             meta = emptyMetadata
@@ -282,7 +284,7 @@ template GovernanceLock
         potentiallyUnsafeArchive self
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
         unlockAt <- getUnlockAtTime requestedAt extraArgs.meta state
-        let unlockAmount = getUnlockAmount extraArgs.meta
+        unlockAmount <- getUnlockAmount extraArgs.meta
         unlockResult <- governanceLock_unlockImpl (coerceContractId self) this unlockAmount unlockAt actors context state
         pure $ V2.AllocationResult with
             output = case unlockResult.vestingLock of
@@ -432,11 +434,13 @@ getUnlockAtTime requestedAt meta state =
     Some unlockAt -> pure unlockAt
     None -> snd <$> searchCurrentTimeBounds requestedAt state
 
-getUnlockAmount : Metadata -> Optional Decimal
+getUnlockAmount : CanAssert m => Metadata -> m (Optional Decimal)
 getUnlockAmount meta =
-    parse <$> TextMap.lookup unlockAmountMetaKey meta.values
+    forA (getOptionalMetadata unlockAmountMetaKey meta) parse
   where
-    parse t = fromSomeNote ("Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: '" <> t <> "'") (Text.parseDecimal t)
+    parse t = case Text.parseDecimal t of
+      Some d -> pure d
+      None -> assertFail $ "Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: '" <> t <> "'"
 
 getWithdrawRequestedAtTime : Time -> RelTime -> Metadata -> ExternalPartyConfigState -> Update Time
 getWithdrawRequestedAtTime endTime vestingPeriod meta state =
@@ -560,7 +564,7 @@ template VestingLock
           originalAllocationCid = coerceContractId <$> originalLockCid
           settlement = V2.SettlementInfo with
             executors = [dso]
-            id = governanceLockKindToPartyHint specification.kind
+            id = fst $ governanceLockKindToTypeAndSubject specification.kind
               -- ^ Textual identifier of the settlement.
             cid = None
             meta = emptyMetadata
@@ -927,17 +931,8 @@ unlockAmountMetaKey = cipMetaPrefix <> "unlock-amount"
 -- Encoded as microseconds since the epoch.
 withdrawAtMetaKey = cipMetaPrefix <> "withdraw-at"
 
-lockTypeMetaKey = cipMetaPrefix <> "lock-type"
-
-lockTypeMetaKeyValue_SV = "SV"
-
-lockTypeMetaKeyValue_FA = "FA"
-
-lockTypeMetaKeyValue_ProvisionalFA = "ProvisionalFA"
-
+-- | Metadata key of a `GovernanceLock` subject.
 lockSubjectMetaKey = cipMetaPrefix <> "lock-subject"
-
-controllerKeys = [unlockControllersMetaKey, substitutionControllersMetaKey, vestingControllersMetaKey]
 
 -- | Metadata key that sets the `unlockControllers` of a `GovernanceLock`.
 unlockControllersMetaKey = cipMetaPrefix <> "unlock-controllers"
@@ -948,38 +943,16 @@ substitutionControllersMetaKey = cipMetaPrefix <> "substitution-controllers"
 -- | Metadata key that sets the `vestingControllers` of a `GovernanceLock`.
 vestingControllersMetaKey = cipMetaPrefix <> "vesting-controllers"
 
-governanceLockKeys = Set.fromList $ lockTypeMetaKey :: lockSubjectMetaKey :: controllerKeys
+governanceLockKeys = Set.fromList [lockSubjectMetaKey, unlockControllersMetaKey, substitutionControllersMetaKey, vestingControllersMetaKey]
 
-controllerSpecificationFromMeta : Text -> Metadata -> Optional ControllerSpecification
-controllerSpecificationFromMeta field meta =
-    ControllerSpecification <$> tryPartiesFromText <$> TextMap.lookup field meta.values
-  where
-    tryPartiesFromText : Text -> [[Party]]
-    tryPartiesFromText = fmap (fmap (\p -> tryPartyFromText (errorMsg p) p) . Text.splitOn ",") . Text.splitOn ";"
+getOptionalMetadata : Text -> Metadata -> Optional Text
+getOptionalMetadata key meta = TextMap.lookup key meta.values
 
-    errorMsg p = "Invalid party in metadata field '" <> field <> "': " <> p
-
-tryPartyFromText : Text -> Text -> Party
-tryPartyFromText errorMsg p = fromSomeNote errorMsg (partyFromText p)
-
-controllerSpecificationFromMetaOrOwner : Text -> Metadata -> Party -> ControllerSpecification
-controllerSpecificationFromMetaOrOwner field meta owner =
-  fromOptional (ControllerSpecification [[owner]]) $ controllerSpecificationFromMeta field meta
-
-lockTypeAndSubjectToGovernanceLockKind : CanAssert m => Text -> Text -> m GovernanceLockKind
-lockTypeAndSubjectToGovernanceLockKind lockTypeValue lockSubject
-  | checkLockType lockTypeMetaKeyValue_SV = pure $ GLK_SuperValidatorRightsOwner with svName = lockSubject
-  | checkLockType lockTypeMetaKeyValue_FA = pure $ GLK_FeaturedApp with provider = tryPartyFromText invalidPartyErrorMsg lockSubject
-  | checkLockType lockTypeMetaKeyValue_ProvisionalFA = pure $ GLK_ProvisionalFeaturedApp with provider = tryPartyFromText invalidPartyErrorMsg lockSubject
-  | otherwise = error $ "Invalid value in " <> lockTypeMetaKey <> " metadata field: '" <> lockTypeValue <> "'"
-  where
-    invalidPartyErrorMsg = "Invalid party in " <> lockSubjectMetaKey <> " metadata field for lock type '" <> lockTypeValue <> "': " <> lockSubject
-    checkLockType = (==) lockTypeValue
-
-governanceLockKindToLockTypeAndSubject : GovernanceLockKind -> (Text, Text)
-governanceLockKindToLockTypeAndSubject (GLK_SuperValidatorRightsOwner with svName) = (lockTypeMetaKeyValue_SV, svName)
-governanceLockKindToLockTypeAndSubject (GLK_FeaturedApp with provider) = (lockTypeMetaKeyValue_FA, partyToText provider)
-governanceLockKindToLockTypeAndSubject (GLK_ProvisionalFeaturedApp with provider) = (lockTypeMetaKeyValue_ProvisionalFA, partyToText provider)
+getRequiredMetadata : CanAssert m => Text -> Metadata -> m Text
+getRequiredMetadata key meta =
+  case getOptionalMetadata key meta of
+    Some v -> pure v
+    None -> assertFail $ "Missing metadata field '" <> key <> "'"
 
 checkGovernanceMetadataKeys : (CanAssert m) => Set.Set Text -> Metadata -> m ()
 checkGovernanceMetadataKeys knownKeys =
@@ -996,9 +969,17 @@ cipAddressPrefix = cipPrefix <> "_"
 -- | Special "dummy" namespace used to identify special parties.
 magicNamespace = "::1220000000000000000000000000000000000000000000000000000000000000abcd"
 
-featuredAppLockTag = "fa-lock"
-provisionalFeaturedAppLockTag = "provisional-" <> featuredAppLockTag
-superValidatorLockTag = "sv-lock"
+makeLockType : Text -> Text
+makeLockType = (<>) cipAddressPrefix
+
+featuredAppLockType = makeLockType "fa-lock"
+provisionalFeaturedAppLockType = makeLockType "provisional-fa-lock"
+superValidatorLockType = makeLockType "sv-lock"
+
+governanceLockKindToTypeAndSubject : GovernanceLockKind -> (Text, Text)
+governanceLockKindToTypeAndSubject (GLK_FeaturedApp provider) = (featuredAppLockType, partyToText provider)
+governanceLockKindToTypeAndSubject (GLK_ProvisionalFeaturedApp provider) = (provisionalFeaturedAppLockType, partyToText provider)
+governanceLockKindToTypeAndSubject (GLK_SuperValidatorRightsOwner svName) = (superValidatorLockType, svName)
 
 isGovernanceLockTransferParty : Party -> Bool
 isGovernanceLockTransferParty party = isSome $ Text.stripPrefix cipAddressPrefix (partyToText party) >>= Text.stripSuffix magicNamespace
@@ -1024,35 +1005,37 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg = do
     senderChangeCids = optionalToList $ toInterfaceContractId <$> changeCid
     meta = emptyMetadata
 
+governanceLockKindFromTypeAndSubject : CanAssert m => Text -> Text -> m GovernanceLockKind
+governanceLockKindFromTypeAndSubject type_ subject
+  | checkType featuredAppLockType = GLK_FeaturedApp <$> parseProvider
+  | checkType provisionalFeaturedAppLockType = GLK_ProvisionalFeaturedApp <$> parseProvider
+  | checkType superValidatorLockType = pure $ GLK_SuperValidatorRightsOwner with svName = subject
+  | otherwise = assertFail $ "Invalid lock type: " <> type_
+  where
+    checkType = (==) type_
+    parseProvider = case partyFromText subject of
+      Some p -> pure p
+      None -> assertFail $ "Invalid provider for " <> type_ <> ": " <> subject
+
 specificationFromReceiverAndReason : CanAssert m => Party -> Party -> Metadata -> m GovernanceLockSpecification
 specificationFromReceiverAndReason owner receiver meta = do
-  let operationString = Text.stripPrefix cipAddressPrefix (partyToText receiver) >>= Text.stripSuffix magicNamespace
+  let type_ = Text.stripSuffix magicNamespace (partyToText receiver)
   let subject = Text.stripPrefix "lock-subject=" =<< reasonMetaKey `TextMap.lookup` meta.values
-  case liftA2 (,) operationString subject of
-        Some (tag, subject) | tag == superValidatorLockTag -> pure $ ownerControlledSpecification owner $ GLK_SuperValidatorRightsOwner with
-          svName = subject
-        Some (tag, subject) | tag == featuredAppLockTag, Some subject <- partyFromText subject -> pure $ ownerControlledSpecification owner $ GLK_FeaturedApp with
-          provider = subject
-        Some (tag, subject) | tag == provisionalFeaturedAppLockTag, Some subject <- partyFromText subject -> pure $ ownerControlledSpecification owner $ GLK_ProvisionalFeaturedApp with
-          provider = subject
-        _ -> assertFail "Unknown receiver or lock-subject"
-
-governanceLockKindToPartyHint : GovernanceLockKind -> Text
-governanceLockKindToPartyHint (GLK_FeaturedApp _) = cipAddressPrefix <> featuredAppLockTag
-governanceLockKindToPartyHint (GLK_ProvisionalFeaturedApp _) = cipAddressPrefix <> provisionalFeaturedAppLockTag
-governanceLockKindToPartyHint (GLK_SuperValidatorRightsOwner _) = cipAddressPrefix <> superValidatorLockTag
+  case liftA2 (,) type_ subject of
+    Some (t, s) -> ownerControlledSpecification owner <$> governanceLockKindFromTypeAndSubject t s
+    None -> assertFail "Unknown receiver or lock-subject"
 
 makeCanonicalParty : Text -> Party
-makeCanonicalParty tag = fromSome $ partyFromText $ cipAddressPrefix <> tag <> magicNamespace
+makeCanonicalParty type_ = fromSome $ partyFromText $ type_ <> magicNamespace
 
 featuredAppLockCanonicalParty : Party
-featuredAppLockCanonicalParty = makeCanonicalParty featuredAppLockTag
+featuredAppLockCanonicalParty = makeCanonicalParty featuredAppLockType
 
 provisionalFeaturedAppLockCanonicalParty : Party
-provisionalFeaturedAppLockCanonicalParty = makeCanonicalParty provisionalFeaturedAppLockTag
+provisionalFeaturedAppLockCanonicalParty = makeCanonicalParty provisionalFeaturedAppLockType
 
 superValidatorLockCanonicalParty : Party
-superValidatorLockCanonicalParty = makeCanonicalParty superValidatorLockTag
+superValidatorLockCanonicalParty = makeCanonicalParty superValidatorLockType
 
 lockTypeToCompatibilityPartyAndReason : GovernanceLockKind -> (Party, Text)
 lockTypeToCompatibilityPartyAndReason (GLK_FeaturedApp with provider) = (featuredAppLockCanonicalParty, "lock-subject=" <> partyToText provider)
@@ -1062,11 +1045,53 @@ lockTypeToCompatibilityPartyAndReason (GLK_SuperValidatorRightsOwner with svName
 maxComparableTime : Time
 maxComparableTime = addRelTime maxTime $ microseconds (-1)
 
-requireSome : CanAssert m => Text -> Optional a -> m a
-requireSome msg a =
-  case a of
-    None -> assertFail $ "The requirement '" <> msg <> "' was not met."
-    Some a -> pure a
+-- Parsers
+-- =======
+
+data Parser i o = Parser (i -> Validation Text o)
+type ControllerSpecificationParser = Parser (Metadata, Party) ControllerSpecification
+
+runParser : Parser i o -> i -> Validation Text o
+runParser (Parser f) input = f input
+
+controllersParser : Text -> ControllerSpecificationParser
+controllersParser key =
+    Parser \(meta, owner) ->
+      ControllerSpecification <$> optional (pure [[owner]]) (runParser partiesParser) (TextMap.lookup key meta.values)
+  where
+    partiesParser : Parser Text [[Party]]
+    partiesParser = Parser \t -> forA (Text.splitOn ";" t) \ps -> forA (Text.splitOn "," ps) (runParser partyParser)
+
+    partyParser : Parser Text Party
+    partyParser = Parser \p -> (partyFromText p) <?> ("Invalid party in metadata field '" <> key <> "': " <> p)
+
+unlockControllersParser : ControllerSpecificationParser
+unlockControllersParser = controllersParser unlockControllersMetaKey
+
+substitutionControllersParser : ControllerSpecificationParser
+substitutionControllersParser = controllersParser substitutionControllersMetaKey
+
+vestingControllersParser : ControllerSpecificationParser
+vestingControllersParser = controllersParser vestingControllersMetaKey
+
+governanceLockKindParser : Parser (Text, Metadata) GovernanceLockKind
+governanceLockKindParser = Parser \(type_, meta) ->
+  validate $ getRequiredMetadata lockSubjectMetaKey meta >>= governanceLockKindFromTypeAndSubject type_
+
+governanceLockSpecificationParser : Parser (Text, Metadata, Party) GovernanceLockSpecification
+governanceLockSpecificationParser = Parser \(type_, meta, owner) ->
+  GovernanceLockSpecification <$>
+  runParser governanceLockKindParser (type_, meta) <*>
+  runParser unlockControllersParser (meta, owner) <*>
+  runParser substitutionControllersParser (meta, owner) <*>
+  runParser vestingControllersParser (meta, owner)
+
+parseGovernanceLockSpecification : CanAssert m => Text -> Metadata -> Party -> m GovernanceLockSpecification
+parseGovernanceLockSpecification type_ meta owner = do
+  checkGovernanceMetadataKeys governanceLockKeys meta
+  case runParser governanceLockSpecificationParser (type_, meta, owner) of
+    Errors errors -> assertFail $ "Errors parsing GovernanceLockSpecification:\n\n" <> Text.intercalate "\n" (NonEmpty.toList errors)
+    Success output -> pure output
 
 -- SV Reward Coupon Helpers
 ---------------------------

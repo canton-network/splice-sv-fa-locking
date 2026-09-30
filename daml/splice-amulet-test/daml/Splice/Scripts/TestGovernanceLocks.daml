@@ -884,11 +884,11 @@ governanceLockV1 env owner amount kind = do
 
 governanceLockV2 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockV2 env owner amount kind = do
-  let (lockType, lockSubject) = governanceLockKindToLockTypeAndSubject kind
-      lockMeta = Metadata $ TM.fromList [(lockTypeMetaKey, lockType), (lockSubjectMetaKey, lockSubject)]
+  let (lockType, lockSubject) = governanceLockKindToTypeAndSubject kind
+      lockMeta = Metadata $ TM.fromList [(lockSubjectMetaKey, lockSubject)]
       settlementInfo = V2.SettlementInfo with
         executors = [owner]
-        id = cipAddressPrefix <> "GovernanceLockSettlement"
+        id = lockType
         cid = None
         meta = emptyMetadata
       allocation = V2.AllocationSpecification with
