@@ -328,7 +328,7 @@ data FeaturedAppConfig = FeaturedAppConfig with
       -- ^ Weight of the this provider's app activity in the computation of traffic-based app rewards.
     lockThresholdOverride : Optional Decimal
       -- ^ Override of the network-wide minimum lock threshold.
-      -- None means that the default in DsoRulesConfig applies.
+      -- None means that the default from AmuletConfig applies.
   deriving (Eq, Show, Serializable)
 
 -- | This holds those fields of FeaturedAppConfig which are not stored directly on the FeaturedAppRight contract.
@@ -347,7 +347,9 @@ template FeaturedAppRight with
     config : Optional FeaturedAppConfigInternal
       -- ^ Additional config values specific to this featured app right.
     underlockPermanentAt : Optional Time
-      -- ^ If set, indicates that the featured app right is suspended and indicates when the FeaturedAppRight may be archived.
+      -- ^ If set, indicates that the featured app right is suspended and
+      -- indicates the deadline of when the underlock will be made permanent
+      -- by archiving FeaturedAppRight.
   where
     signatory dso
     observer provider
@@ -406,9 +408,7 @@ template FeaturedAppRight with
     choice FeaturedAppRight_ClearUnderlock : FeaturedAppRight_ClearUnderlockResult
       controller dso
       do
-        featuredAppRightCid <- case this.underlockPermanentAt of
-          None -> fail "FeaturedAppRight_ClearUnderlock: not underlocked"
-          Some _ -> create this with underlockPermanentAt = None
+        featuredAppRightCid <- create this with underlockPermanentAt = None
         return FeaturedAppRight_ClearUnderlockResult with
           featuredAppRightCid
 

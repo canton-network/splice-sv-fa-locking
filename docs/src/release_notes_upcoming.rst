@@ -65,5 +65,4 @@ release-notes:: Upcoming
           ``underlockPermanentAt`` for underlock enforcement.
         - Once either is populated, either by a governance vote setting app-specific config, or by the right being
           suspended for underlocking, that contract can no longer be read by participants running on an older version
-          of ``splice-amulet``. App providers whose nodes have not upgraded will lose visibility of their
-          ``FeaturedAppRight`` until their node upgrades.
+          of ``splice-amulet``. App providers whose nodes have not upgraded cannot use their ''FeaturedAppRight'' until their node upgrades. Any transaction that involves such an app provider as a featured app provider will fail because the ''FeaturedAppRight'' downgrade will fail.
