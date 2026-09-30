@@ -186,6 +186,20 @@ final object AllocationExecuteTransfer
       choice = splice.api.token.allocationv1.Allocation.CHOICE_Allocation_ExecuteTransfer,
     )
 
+object GovernanceLockAllocation_Withdraw
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.allocationv2.Allocation.INTERFACE,
+      template = splice.governancelock.GovernanceLock.COMPANION,
+      choice = splice.api.token.allocationv2.Allocation.CHOICE_Allocation_Withdraw,
+    )
+
+object VestingLockAllocation_Withdraw
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.allocationv2.Allocation.INTERFACE,
+      template = splice.governancelock.VestingLock.COMPANION,
+      choice = splice.api.token.allocationv2.Allocation.CHOICE_Allocation_Withdraw,
+    )
+
 final case class TransferInstruction_Accept(
     node: ExerciseNode[
       splice.api.token.transferinstructionv1.TransferInstruction_Accept,

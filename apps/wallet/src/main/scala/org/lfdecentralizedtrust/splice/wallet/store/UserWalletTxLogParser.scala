@@ -71,6 +71,7 @@ import org.lfdecentralizedtrust.splice.history.{
   DevelopmentFundCoupon_Withdraw,
   DirectTokenStandardTransfer,
   DirectTokenStandardTransferV2,
+  GovernanceLockAllocation_Withdraw,
   GovernanceLockTransferInstruction_Withdraw,
   LockedAmuletCreate,
   LockedAmuletExpireAmulet,
@@ -90,6 +91,7 @@ import org.lfdecentralizedtrust.splice.history.{
   TransferPreapproval_Renew,
   TransferPreapproval_Send,
   TransferPreapproval_SendV2,
+  VestingLockAllocation_Withdraw,
   VestingLockTransferInstruction_Withdraw,
 }
 import org.lfdecentralizedtrust.splice.store.TxLogStore
@@ -910,7 +912,8 @@ class UserWalletTxLogParser(
           // Withdrawing a GovernanceLock or VestingLock unlocks the underlying LockedAmulet then
           // relocks the remaining locked amount. This emits bare amulet create/archive events, which
           // which we have to ignore during recursion.
-          case GovernanceLockTransferInstruction_Withdraw(_) |
+          case GovernanceLockAllocation_Withdraw(_) | VestingLockAllocation_Withdraw(_) |
+              GovernanceLockTransferInstruction_Withdraw(_) |
               VestingLockTransferInstruction_Withdraw(_) =>
             val start = exercised.getNodeId.intValue()
             val end = exercised.getLastDescendantNodeId.intValue()
