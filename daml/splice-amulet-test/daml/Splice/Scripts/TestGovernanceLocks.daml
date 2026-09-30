@@ -516,13 +516,16 @@ testSubstitution_governanceLock = do
           exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
             args = CreateSubstitutionProposalArgs with
               dso
-              substitutedLock = SubstitutedLock with
-                owner = alice
-                specification = SLS_Governance $ ownerControlledSpecification alice someSvKind
+              substitutedLock = SLS_Governance with
+                governanceKey = GovernanceLockKey with
+                  owner = alice
+                  specification = ownerControlledSpecification alice someSvKind
+                unlockControllers = ControllerSpecification [[bob]]
+                substitutionControllers = ControllerSpecification [[bob]]
+                vestingControllers = ControllerSpecification [[bob]]
               proposer = bob
               amount
               inputHoldingCids = map downcast inputHoldingCids
-              newControllers = governanceOwnerSubstitutedLockControllers bob
               extraArgs = emptyExtraArgs with context
         errorIfLeft result
 
@@ -538,6 +541,7 @@ testSubstitution_governanceLock = do
         result <- submitWithTransferContext registry (actAs [alice]) $ \context ->
           exerciseCmd proposalCid SubstitutionProposal_Accept with
             target = ST_GovernanceLock aliceLock
+            actors = [ alice ]
             extraArgs = emptyExtraArgs with context
         errorIfLeft result
 
@@ -554,13 +558,16 @@ testSubstitution_governanceLock = do
     exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
       args = CreateSubstitutionProposalArgs with
         dso
-        substitutedLock = SubstitutedLock with
-          owner = alice
-          specification = SLS_Governance $ ownerControlledSpecification alice someSvKind
+        substitutedLock = SLS_Governance with
+                governanceKey = GovernanceLockKey with
+                  owner = alice
+                  specification = ownerControlledSpecification alice someSvKind
+                unlockControllers = ControllerSpecification [[bob]]
+                substitutionControllers = ControllerSpecification [[bob]]
+                vestingControllers = ControllerSpecification [[bob]]
         proposer = bob
         amount = testLockAmount - testSubstAmount
         inputHoldingCids = map downcast inputHoldingCids
-        newControllers = governanceOwnerSubstitutedLockControllers bob
         extraArgs = emptyExtraArgs with context
   errorIfLeft result
 
