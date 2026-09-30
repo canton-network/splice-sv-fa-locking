@@ -262,7 +262,6 @@ template GovernanceLock
             authorizer = basicAccount owner
             transferLegSides = []
             settlementDeadline = Some maxComparableTime
-            -- FIXME: Should we specify nextIterationFunding?
             nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName amount
             committed = False
             -- FIXME: Correct metadata?
@@ -271,10 +270,7 @@ template GovernanceLock
           createdAt = requestedAt
           numIterations = 0
           expiresAt = Some maxBound
-          availableActions = Map.fromList [(V2.AA_Withdraw, [[owner]])]
-          -- FIXME: should available action include AA_Custom with the second below?
-          --availableActions : Map.Map AllocationAction [[Party]] =
-          --  Map.fromList [(owner, "withdraw vested amounts"), (dso, "release fully vested lock")]
+          availableActions = Map.fromList [(V2.AA_Withdraw, specification.unlockControllers.controllers)]
           meta = emptyMetadata
         where
           (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
@@ -582,15 +578,12 @@ template VestingLock
           createdAt = endTime
           numIterations = 0
           expiresAt = Some maxBound
-          availableActions = Map.fromList [(V2.AA_Withdraw, [[owner]])]
-          -- FIXME: should available action include AA_Custom with the second below?
-          --availableActions : Map.Map AllocationAction [[Party]] =
-          --  Map.fromList [(owner, "withdraw vested amounts"), (dso, "release fully vested lock")]
+          availableActions = Map.fromList [(V2.AA_Withdraw, specification.vestingControllers.controllers)]
           meta = emptyMetadata
         where
           (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
-      allocation_settleImpl _ _ = assertFail "Allocations representing vesting locks cannot be accepted"
-      allocation_cancelImpl _ _ = assertFail "Allocations representing vesting locks cannot be accepted"
+      allocation_settleImpl _ _ = assertFail "Allocations representing vesting locks cannot be settled"
+      allocation_cancelImpl _ _ = assertFail "Allocations representing vesting locks cannot be cancelled"
       allocation_withdrawImpl self V2.Allocation_Withdraw{..} = do
         -- `Allocation_Withdraw` is nonconsuming so we need to archive here
         -- `vestingLock_withdrawImpl` creates a new `VestingLock` when necessary
