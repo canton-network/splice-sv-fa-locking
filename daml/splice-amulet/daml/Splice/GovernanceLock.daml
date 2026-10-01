@@ -1003,7 +1003,7 @@ governanceLock_allocationFactoryV2_allocateImpl dso V2.AllocationFactory_Allocat
   checkActors actors [[owner]]
   assertDeadlineExceeded "requestedAt" requestedAt
 
-  specification <- assertParsed "GovernanceLockSpecification" governanceLockSpecificationParser (settlement.id, allocation.meta, owner)
+  specification <- assertParsed "GovernanceLockSpecification" governanceLockSpecificationTSv2Parser (settlement.id, allocation.meta, owner)
   amount <- assertParsed "allocation.nextIterationFunding" fundingAmountParser allocation.nextIterationFunding
 
   let filteredMeta = removeGovernanceMetadataKeys allocation.meta
@@ -1034,12 +1034,8 @@ governanceLockKindFromTypeAndSubject type_ subject
       None -> assertFail $ "Invalid provider for " <> type_ <> ": " <> subject
 
 specificationFromReceiverAndReason : CanAssert m => Party -> Party -> Metadata -> m GovernanceLockSpecification
-specificationFromReceiverAndReason owner receiver meta = do
-  let type_ = Text.stripSuffix magicNamespace (partyToText receiver)
-  let subject = Text.stripPrefix "lock-subject=" =<< reasonMetaKey `TextMap.lookup` meta.values
-  case liftA2 (,) type_ subject of
-    Some (t, s) -> ownerControlledSpecification owner <$> governanceLockKindFromTypeAndSubject t s
-    None -> assertFail "Unknown receiver or lock-subject"
+specificationFromReceiverAndReason owner receiver meta =
+  assertParsed "GovernanceLockSpecification" governanceLockSpecificationTSv1Parser (owner, receiver, meta)
 
 makeCanonicalParty : Text -> Party
 makeCanonicalParty type_ = fromSome $ partyFromText $ type_ <> magicNamespace
@@ -1106,8 +1102,16 @@ governanceLockKindParser : Parser (Text, Metadata) GovernanceLockKind
 governanceLockKindParser = Parser \(type_, meta) ->
   validate $ getRequiredMetadata lockSubjectMetaKey meta >>= governanceLockKindFromTypeAndSubject type_
 
-governanceLockSpecificationParser : Parser (Text, Metadata, Party) GovernanceLockSpecification
-governanceLockSpecificationParser = Parser \(type_, meta, owner) ->
+governanceLockSpecificationTSv1Parser : Parser (Party, Party, Metadata) GovernanceLockSpecification
+governanceLockSpecificationTSv1Parser = Parser \(owner, receiver, meta) ->
+  let type_ = Text.stripSuffix magicNamespace (partyToText receiver)
+      subject = Text.stripPrefix "lock-subject=" =<< reasonMetaKey `TextMap.lookup` meta.values
+  in case liftA2 (,) type_ subject of
+    Some (t, s) -> validate $ ownerControlledSpecification owner <$> governanceLockKindFromTypeAndSubject t s
+    None -> invalid "Unknown receiver or lock-subject"
+
+governanceLockSpecificationTSv2Parser : Parser (Text, Metadata, Party) GovernanceLockSpecification
+governanceLockSpecificationTSv2Parser = Parser \(type_, meta, owner) ->
   GovernanceLockSpecification <$>
   runParser governanceLockKindParser (type_, meta) <*>
   runParser unlockControllersParser (meta, owner) <*>

@@ -152,9 +152,9 @@ test_governanceLockKindParser = do
 -- Lock specification parser
 ----------------------------
 
-test_governanceLockSpecificationParser : Script ()
-test_governanceLockSpecificationParser = do
-  let run lockType entries = runParser governanceLockSpecificationParser (lockType, mkMeta entries, testOwner)
+test_governanceLockSpecificationTSv2Parser : Script ()
+test_governanceLockSpecificationTSv2Parser = do
+  let run lockType entries = runParser governanceLockSpecificationTSv2Parser (lockType, mkMeta entries, testOwner)
 
   let fullSpecification = GovernanceLockSpecification with
         kind = GLK_FeaturedApp testProvider
