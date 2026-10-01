@@ -701,7 +701,7 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
   pure (governanceLock, governanceLockCid, changeHolding)
 
 isGovernanceAllocationArgument V2.AllocationFactory_Allocate{allocation} =
-  not (TextMap.null . (.values) $ keepGovernanceMetadataKeys allocation.meta)
+  TextMap.member lockSubjectMetaKey allocation.meta.values
 
 governanceLockKindObservers : GovernanceLockKind -> [Party]
 governanceLockKindObservers (GLK_FeaturedApp party) = [party]
@@ -937,8 +937,6 @@ substitutionControllersMetaKey = cipMetaPrefix <> "substitution-controllers"
 -- | Metadata key that sets the `vestingControllers` of a `GovernanceLock`.
 vestingControllersMetaKey = cipMetaPrefix <> "vesting-controllers"
 
-knownGovernanceMetaKeys = Set.fromList [lockSubjectMetaKey, unlockControllersMetaKey, substitutionControllersMetaKey, vestingControllersMetaKey]
-
 getOptionalMetadata : Text -> Metadata -> Optional Text
 getOptionalMetadata key meta = TextMap.lookup key meta.values
 
@@ -948,15 +946,9 @@ getRequiredMetadata key meta =
     Some v -> pure v
     None -> assertFail $ "Missing metadata field '" <> key <> "'"
 
-filterGovernanceMetadataKeys : (Text -> Set.Set Text -> Bool) -> Metadata -> Metadata
-filterGovernanceMetadataKeys isKeyValid meta =
-  Metadata $ TextMap.filterWithKey (\k _ -> isKeyValid k knownGovernanceMetaKeys) meta.values
-
-keepGovernanceMetadataKeys : Metadata -> Metadata
-keepGovernanceMetadataKeys = filterGovernanceMetadataKeys Set.member
-
 removeGovernanceMetadataKeys : Metadata -> Metadata
-removeGovernanceMetadataKeys = filterGovernanceMetadataKeys \k -> \_ -> not (cipMetaPrefix `Text.isPrefixOf` k)
+removeGovernanceMetadataKeys meta =
+  Metadata $ TextMap.filterWithKey (\k _ -> not (cipMetaPrefix `Text.isPrefixOf` k)) meta.values
 
 -- TSv1 support
 -- ============
