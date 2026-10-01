@@ -1085,6 +1085,14 @@ assertParsed parsedType parser input =
         (if length errorsList > 5 then ". First five errors" else  "") <> ":\n\n" <>
         Text.intercalate "\n" (take 5 errorsList)
 
+keyValueParser : Parser Text (TextMap.TextMap Text)
+keyValueParser = Parser \keyValues -> fmap TextMap.fromList $ forA (Text.splitOn "&" keyValues) \keyValue ->
+    keyValueValidation $ Text.splitOn "=" keyValue
+  where
+    keyValueValidation : [Text] -> Validation Text (Text, Text)
+    keyValueValidation [k, v] = ok (k, v)
+    keyValueValidation l = invalid $ "Unable to map a key value pair, from list: " <> show l
+
 controllersParser : Text -> ControllerSpecificationParser
 controllersParser key =
     Parser \(meta, owner) ->
