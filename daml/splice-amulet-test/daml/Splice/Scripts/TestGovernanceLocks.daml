@@ -136,7 +136,7 @@ testGovernanceLockCompatHappyPathScenario ops = do
   AmuletRegistryV2.tapFaucet registry alice 180000.0
   AmuletRegistryV2.tapFaucet registry bob 10000.0
 
-  aliceLock <- expectSuccess $ ops.governanceLock env alice 80000.0 someFaKind
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 80000.0 someFaKind emptyMetadata
 
   -- Unlock 80k Amulet such that 1/8th should result in 10k Amulet withdrawable after 1/8th year.
   aliceVesting <- expectSuccess $ ops.governanceUnlock env aliceLock alice emptyMetadata
@@ -179,7 +179,7 @@ testGovernanceLockCompatTimesFromMetaScenario ops = do
 
   AmuletRegistryV2.tapFaucet registry alice 80000.0
 
-  aliceLock <- expectSuccess $ ops.governanceLock env alice 80000.0 someFaKind
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 80000.0 someFaKind emptyMetadata
 
   now <- getTime
 
@@ -214,18 +214,22 @@ testGovernanceLockCompatTimesFromMetaScenario ops = do
   WalletClientV2.checkHoldingWithAmountExists alice registry.instrumentId 20000.0
   checkLockedHolding alice newVestingLock 60000.0
 
--- | Only TSv2 supports setting the unlock amount, as TSv1 always unlocks the full amount.
+testGovernanceLockCompatPartialUnlockFromMetaTSv1 : Script ()
+testGovernanceLockCompatPartialUnlockFromMetaTSv1 = testGovernanceLockCompatPartialUnlockFromMetaScenario tsv1Operations
+
 testGovernanceLockCompatPartialUnlockFromMetaTSv2 : Script ()
-testGovernanceLockCompatPartialUnlockFromMetaTSv2 = do
+testGovernanceLockCompatPartialUnlockFromMetaTSv2 = testGovernanceLockCompatPartialUnlockFromMetaScenario tsv2Operations
+
+testGovernanceLockCompatPartialUnlockFromMetaScenario : CompatGovernanceLockOperations -> Script ()
+testGovernanceLockCompatPartialUnlockFromMetaScenario ops = do
   env@TestEnv{..} <- setupTest
-  let ops = tsv2Operations
-      registry = registriesEnv.amuletV2
+  let registry = registriesEnv.amuletV2
       someFaKind = GLK_FeaturedApp bob
       unlockAmountMeta amount = Metadata $ TM.fromList [(unlockAmountMetaKey, amount)]
 
   AmuletRegistryV2.tapFaucet registry alice 30000.0
 
-  aliceLock <- expectSuccess $ ops.governanceLock env alice 30000.0 someFaKind
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 30000.0 someFaKind emptyMetadata
 
   -- The unlock amount must be a valid decimal
   actionMustFail (expectMessageContains "Invalid decimal in cip-0105/unlock-amount metadata field: 'not-a-decimal'") $
@@ -537,7 +541,7 @@ testGovernanceLockCompatProvisionalFullWithdrawScenario ops = do
 
   AmuletRegistryV2.tapFaucet registry alice 20000.0
 
-  aliceLock <- expectSuccess $ ops.governanceLock env alice 20000.0 provisionalSpec
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 20000.0 provisionalSpec emptyMetadata
 
   -- Full withdraw: no vesting lock
   None <- expectSuccess $ ops.optGovernanceUnlock env aliceLock alice emptyMetadata
@@ -813,6 +817,7 @@ data CompatGovernanceLockOperations = CompatGovernanceLockOperations with
     -> Party
     -> Decimal
     -> GovernanceLockKind
+    -> Metadata
     -> Script (Either SubmitError (ContractId GovernanceLock))
   optGovernanceUnlock
     :  TestEnv
@@ -826,6 +831,12 @@ data CompatGovernanceLockOperations = CompatGovernanceLockOperations with
     -> Party
     -> Metadata
     -> Script (Either SubmitError (ContractId VestingLock))
+  pendingGovernanceUnlock
+    :  TestEnv
+    -> ContractId GovernanceLock
+    -> Party
+    -> Metadata
+    -> Script (Either SubmitError (Optional (ContractId GovernanceLock)))
   vestingWithdraw
     :  TestEnv
     -> ContractId VestingLock
@@ -837,26 +848,30 @@ tsv1Operations = CompatGovernanceLockOperations with
     governanceLock
     optGovernanceUnlock
     governanceUnlock
+    pendingGovernanceUnlock
     vestingWithdraw
   where
     governanceLock = governanceLockV1
     optGovernanceUnlock = withdrawTransferInstructionV1
     governanceUnlock env cid actor meta = ((<$>) fromSome) <$> optGovernanceUnlock env cid actor meta
+    pendingGovernanceUnlock = withdrawTransferInstructionV1
     vestingWithdraw = withdrawTransferInstructionV1
 
 tsv2Operations = CompatGovernanceLockOperations with
     governanceLock
     optGovernanceUnlock
     governanceUnlock
+    pendingGovernanceUnlock
     vestingWithdraw
   where
     governanceLock = governanceLockV2
     optGovernanceUnlock = withdrawAllocationV2
     governanceUnlock env cid actor meta = ((<$>) fromSome) <$> optGovernanceUnlock env cid actor meta
+    pendingGovernanceUnlock = withdrawAllocationV2
     vestingWithdraw = withdrawAllocationV2
 
-governanceLockV1 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Script (Either SubmitError (ContractId GovernanceLock))
-governanceLockV1 env owner amount kind = do
+governanceLockV1 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata -> Script (Either SubmitError (ContractId GovernanceLock))
+governanceLockV1 env owner amount kind meta = do
   now <- getTime
   inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
   let encodedReason = "lock-subject=" <> case kind of
@@ -877,15 +892,15 @@ governanceLockV1 env owner amount kind = do
       requestedAt = now
       executeBefore = now
       inputHoldingCids = downcast <$> inputs
-      meta = reasonToMeta encodedReason emptyMetadata
+      meta = reasonToMeta encodedReason meta
     extraArgs = emptyExtraArgs
   optContractId <- WalletClientV2.transferV1 env.registries owner $ transfer
   pure $ optionalToEither (UnknownError "Unexpected none in lock[") $ fromInterfaceContractId <$> optContractId
 
-governanceLockV2 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Script (Either SubmitError (ContractId GovernanceLock))
-governanceLockV2 env owner amount kind = do
+governanceLockV2 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata -> Script (Either SubmitError (ContractId GovernanceLock))
+governanceLockV2 env owner amount kind meta = do
   let (lockType, lockSubject) = governanceLockKindToTypeAndSubject kind
-      lockMeta = Metadata $ TM.fromList [(lockSubjectMetaKey, lockSubject)]
+      lockMeta = Metadata $ meta.values <> TM.fromList [(lockSubjectMetaKey, lockSubject)]
       settlementInfo = V2.SettlementInfo with
         executors = [env.instrId.admin]
         id = lockType

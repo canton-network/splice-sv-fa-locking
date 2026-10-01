@@ -278,15 +278,21 @@ template GovernanceLock
         -- `governanceLock_unlockImpl` creates a new `GovernanceLock` or `VestingLock` when necessary
         potentiallyUnsafeArchive self
         unlockResult <- governanceLock_tokenStandard_withdrawImpl (coerceContractId self) this requestedAt actors extraArgs
-        pure $ V2.AllocationResult with
-            output = case unlockResult.vestingLock of
-              Some vestingLock -> V2.AllocationResult_Pending with
-                allocationCid = toInterfaceContractId vestingLock
+        let resultMeta = simpleHoldingTxMeta TxKind_Unlock (Some "unlock governance lock") None
+        pure $ case unlockResult of
+          GovernanceLock_UnlockResult_Pending pendingLock -> V2.AllocationResult with
+            output = V2.AllocationResult_Pending with
+              allocationCid = toInterfaceContractId pendingLock
+            authorizerHoldingCids = TextMap.empty
+            meta = resultMeta
+          GovernanceLock_UnlockResult_Completed vestingLock _ unlockedAmulet -> V2.AllocationResult with
+            output = case vestingLock of
+              Some vestingLock -> V2.AllocationResult_Pending with allocationCid = toInterfaceContractId vestingLock
               None -> V2.AllocationResult_Withdrawn
-            authorizerHoldingCids = case unlockResult.unlockedAmulet of
+            authorizerHoldingCids = case unlockedAmulet of
               Some unlockedAmulet -> TextMap.singleton amuletInstrumentIdName [coerceContractId unlockedAmulet]
               None -> TextMap.empty
-            meta = simpleHoldingTxMeta TxKind_Unlock (Some "unlock governance lock") None
+            meta = resultMeta
 
       allocation_settleExtraObservers _ = observer this
       allocation_cancelExtraObservers _ = observer this
@@ -581,13 +587,18 @@ template VestingLock
         -- `vestingLock_withdrawImpl` creates a new `VestingLock` when necessary
         potentiallyUnsafeArchive self
         withdrawResult <- vestingLock_tokenStandard_withdrawImpl (coerceContractId self) this actors extraArgs
-        pure $ V2.AllocationResult with
-          output = case withdrawResult.vestingLock of
-            Some vestingLock -> V2.AllocationResult_Pending with
-              allocationCid = toInterfaceContractId vestingLock
-            None -> V2.AllocationResult_Withdrawn
-          authorizerHoldingCids = TextMap.singleton amuletInstrumentIdName [upcast withdrawResult.vested]
-          meta = simpleHoldingTxMeta TxKind_Unlock (Some "withdraw vested amount") None
+        let resultMeta = simpleHoldingTxMeta TxKind_Unlock (Some "withdraw vested amount") None
+        pure $ case withdrawResult of
+          VestingLock_WithdrawResult_Pending pendingLock -> V2.AllocationResult with
+            output = V2.AllocationResult_Pending with allocationCid = toInterfaceContractId pendingLock
+            authorizerHoldingCids = TextMap.empty
+            meta = resultMeta
+          VestingLock_WithdrawResult_Completed vestingLock vested -> V2.AllocationResult with
+            output = case vestingLock of
+              Some vestingLock -> V2.AllocationResult_Pending with allocationCid = toInterfaceContractId vestingLock
+              None -> V2.AllocationResult_Withdrawn
+            authorizerHoldingCids = TextMap.singleton amuletInstrumentIdName [upcast vested]
+            meta = resultMeta
 
       allocation_settleExtraObservers _ = observer this
       allocation_cancelExtraObservers _ = observer this
