@@ -1021,8 +1021,8 @@ governanceLock_allocationFactoryV2_allocateImpl dso V2.AllocationFactory_Allocat
   let lockAlloc = view $ toInterface @V2.Allocation lock
       (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
       expectedMeta = reasonToMeta encodedReason filteredMeta
-  require' ("lock settlement", lockAlloc.settlement) isEqualR ("input settlement", settlement)
-  require' ("lock allocation", lockAlloc.allocation) isEqualR ("input allocation", allocation with meta = expectedMeta)
+  requireMatchExpected ("lock settlement", lockAlloc.settlement) settlement
+  requireMatchExpected ("lock allocation", lockAlloc.allocation) allocation with meta = expectedMeta
 
   pure V2.AllocationInstructionResult with
     authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, fmap toInterfaceContractId $ optionalToList changeCid)]
