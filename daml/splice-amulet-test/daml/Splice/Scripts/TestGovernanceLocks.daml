@@ -566,6 +566,7 @@ testSubstitution_governanceLock = do
               dso
               substitutedLock = SLS_Governance with
                 governanceKey = GovernanceLockKey with
+                  dso
                   owner = alice
                   specification = ownerControlledSpecification alice someSvKind
                 unlockControllers = ControllerSpecification [[bob]]
@@ -585,10 +586,8 @@ testSubstitution_governanceLock = do
   -- accept substitution
   let acceptOneProposal = do
         (proposalCid, _)::_ <- query @SubstitutionProposal dso
-        [(aliceLock, _ )] <- query @GovernanceLock alice
         result <- submitWithTransferContext registry (actAs [alice]) $ \context ->
           exerciseCmd proposalCid SubstitutionProposal_Accept with
-            target = ST_GovernanceLock aliceLock
             actors = [ alice ]
             extraArgs = emptyExtraArgs with context
         errorIfLeft result
@@ -608,6 +607,7 @@ testSubstitution_governanceLock = do
         dso
         substitutedLock = SLS_Governance with
                 governanceKey = GovernanceLockKey with
+                  dso
                   owner = alice
                   specification = ownerControlledSpecification alice someSvKind
                 unlockControllers = ControllerSpecification [[bob]]

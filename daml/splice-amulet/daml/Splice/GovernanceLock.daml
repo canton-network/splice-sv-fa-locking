@@ -109,6 +109,8 @@ template GovernanceLock
     signatory dso, owner
     observer governanceLockKindObservers specification.kind, governanceLockControllers specification
     ensure amount > 0.0 && either error (const True) (validateGovernanceLockControllers @(Either Text) specification)
+    key ( GovernanceLockKey with dso; owner; specification ) : GovernanceLockKey
+    maintainer key.dso
 
     choice GovernanceLock_Unlock : GovernanceLock_UnlockResult
       with
@@ -421,6 +423,9 @@ template VestingLock
     observer allControllers specification.vestingControllers
     ensure vestingAmount > 0.0 && vestingPeriod >= aunit && either error (const True) (validateVestingLockControllers @(Either Text) specification)
 
+    key ( VestingLockKey with dso; owner; specification ) : VestingLockKey
+    maintainer key.dso
+
     choice VestingLock_Withdraw : VestingLock_WithdrawResult
       -- ^ Withdraw all funds that have vested since the last withdrawal
       -- and the time of this request.
@@ -732,11 +737,13 @@ getMiningRoundsFromChoiceContext choiceContext = do
 -- ============
 
 data GovernanceLockKey = GovernanceLockKey with
+    dso : Party
     owner : Party
     specification : GovernanceLockSpecification
   deriving (Eq, Show, Serializable)
 
 data VestingLockKey = VestingLockKey with
+    dso : Party
     owner : Party
     specification : VestingLockSpecification
   deriving (Eq, Show, Serializable)
@@ -764,13 +771,6 @@ substitutionLockSpecification_substitutionController : SubstitutionLockSpecifica
 substitutionLockSpecification_substitutionController SLS_Governance { governanceKey } = governanceKey.specification.substitutionControllers
 substitutionLockSpecification_substitutionController SLS_Vesting { vestingKey } = vestingKey.specification.vestingControllers
 
-data SubstitutionTarget
-  = ST_GovernanceLock with
-      governanceLockCid : ContractId GovernanceLock
-  | ST_VestingLock with
-      vestingLockCid : ContractId VestingLock
-  deriving (Eq, Show, Serializable)
-
 template SubstitutionProposal with
     dso : Party
     substitutedLock : SubstitutionLockSpecification
@@ -784,7 +784,6 @@ template SubstitutionProposal with
 
     choice SubstitutionProposal_Accept : ()
       with
-        target : SubstitutionTarget
         actors : [ Party ]
         extraArgs : ExtraArgs
         -- TODO: add actors as part of adding support for custom substitution controllers
@@ -827,16 +826,8 @@ substitutionProposal_executeAccept (SubstitutionProposal with ..) (SubstitutionP
         let substitutedLockOwner = ForOwner with dso; owner = substitutionLockSpecification_owner substitutedLock
         (substitutedLockedAmulet, lockedAmount, mkLock) <- case substitutedLock of
           SLS_Governance with .. -> do
-            (lockCid, lock) <- case target of
-                      ST_GovernanceLock lockCid -> do
-                        lock <- fetchAndArchive substitutedLockOwner lockCid
-                        pure (lockCid, lock)
-                      _ -> assertFail "Supplied lock does not match the proposed type"
-            -- check that it matches the lock that we expect to substitute
-            let actualLock = GovernanceLockKey with
-                  owner = lock.owner
-                  specification = lock.specification
-            requireMatchExpected ("substituted lock", actualLock) governanceKey
+            (lockCid, lock) <- fetchByKey @GovernanceLock governanceKey
+            potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
             let mkLock lockOwner lockAmount lockedAmulet = do
                   create GovernanceLock with
                     dso
@@ -856,16 +847,8 @@ substitutionProposal_executeAccept (SubstitutionProposal with ..) (SubstitutionP
                   pure ()
             pure (lock.lockedAmulet, lock.amount, mkLock)
           SLS_Vesting with .. -> do
-            (lockCid, lock) <- case target of
-                      ST_VestingLock lockCid -> do
-                        lock <- fetchAndArchive substitutedLockOwner lockCid
-                        pure (lockCid, lock)
-                      _ -> assertFail "Supplied lock does not match the proposed type"
-            -- check that it matches the lock that we expect to substitute
-            let actualLock = VestingLockKey with
-                  owner = lock.owner
-                  specification = lock.specification
-            requireMatchExpected ("substituted lock", actualLock) vestingKey
+            (lockCid, lock) <- fetchByKey @VestingLock vestingKey
+            potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
             let mkLock lockOwner lockAmount lockedAmulet = do
                   create VestingLock with
                     dso
