@@ -7,6 +7,7 @@ module Splice.Scripts.UnitTests.GovernanceLockParsers where
 import DA.Assert
 import DA.NonEmpty qualified as NonEmpty
 import DA.Optional
+import DA.Text qualified as Text
 import DA.TextMap qualified as TextMap
 import DA.Validation
 
@@ -56,6 +57,30 @@ expectErrors expected result = case result of
 
 invalidPartyError : Text -> Text -> Text
 invalidPartyError key p = "Invalid party in metadata field '" <> key <> "': " <> p
+
+mkTestErrors' : Int -> [Text]
+mkTestErrors' 0 = []
+mkTestErrors' numErrors = ("e" <> show numErrors) :: mkTestErrors' (numErrors - 1)
+
+mkTestErrors : Int -> [Text]
+mkTestErrors numErrors = reverse $ mkTestErrors' numErrors
+
+testParserWithErrors : Int -> Parser () ()
+testParserWithErrors numErrors =
+  Parser \_ -> Errors $ fromSome $ NonEmpty.nonEmpty $ mkTestErrors numErrors
+
+test_assertParsed : Script ()
+test_assertParsed = do
+    run "exactly 1" (testParserWithErrors 1) === Left (errorsText 1)
+    run "less than 5" (testParserWithErrors 2) === Left ("Found 2 errors parsing less than 5:\n\n" <> errorsText 2)
+    run "exactly 5" (testParserWithErrors 5) === Left ("Found 5 errors parsing exactly 5:\n\n" <> errorsText 5)
+    run "more than 5" (testParserWithErrors 6) === Left ("Found 6 errors parsing more than 5. First five errors:\n\n" <> errorsText 5)
+  where
+    run : Text -> Parser () () -> Either Text ()
+    run parsedType parser = assertParsed parsedType parser ()
+
+    errorsText : Int -> Text
+    errorsText numErrors = Text.intercalate "\n" (mkTestErrors numErrors)
 
 -- Controller parsers
 ---------------------

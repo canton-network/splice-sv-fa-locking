@@ -1081,8 +1081,14 @@ runParser (Parser f) input = f input
 assertParsed : CanAssert m => Text -> Parser i o -> i -> m o
 assertParsed parsedType parser input =
   case runParser parser input of
-    Errors errors -> assertFail $ "Errors parsing " <> parsedType <> ":\n\n" <> Text.intercalate "\n" (NonEmpty.toList errors)
     Success output -> pure output
+    Errors (NonEmpty.NonEmpty e []) -> assertFail e
+    Errors es -> do
+      let errorsList = NonEmpty.toList es
+      let numErrors = length errorsList
+      assertFail $ "Found " <> show numErrors <> " error" <> (if numErrors == 1 then "" else "s") <> " parsing " <> parsedType <>
+        (if length errorsList > 5 then ". First five errors" else  "") <> ":\n\n" <>
+        Text.intercalate "\n" (take 5 errorsList)
 
 controllersParser : Text -> ControllerSpecificationParser
 controllersParser key =
