@@ -59,6 +59,7 @@ import org.lfdecentralizedtrust.splice.store.{
   MiningRoundsStore,
   PageLimit,
   StoreTestBase,
+  UnavailablePartiesStore,
 }
 import org.lfdecentralizedtrust.splice.sv.store.SvDsoStore.{IdleAnsSubscription, RoundBatch}
 import org.lfdecentralizedtrust.splice.sv.store.db.DbSvDsoStore
@@ -177,7 +178,7 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
           )
         } yield {
           def cidsAt(t: CantonTimestamp) = store
-            .listExpiredVestingLocks(t, PageLimit.tryCreate(10))(TraceContext.empty)
+            .listExpiredVestingLocks(None)(t, PageLimit.tryCreate(10))(TraceContext.empty)
             .futureValue
             .map(_.contract.contractId)
 
@@ -189,6 +190,53 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
             dsoLock.contractId,
             laterDsoLock.contractId,
           )
+        }
+      }
+
+      "respects ignored parties" in {
+        val party1 = userParty(1)
+        val party2 = userParty(2)
+        val party1Lock =
+          vestingLock(party1, vestingAmount = BigDecimal(10), endTime = time(2).toInstant)
+        val party2Lock =
+          vestingLock(party2, vestingAmount = BigDecimal(20), endTime = time(2).toInstant)
+        for {
+          store <- mkStore()
+          _ <- MonadUtil.sequentialTraverse(Seq(party1Lock, party2Lock))(
+            dummyDomain.create(_)(store.multiDomainAcsStore)
+          )
+        } yield {
+          def cidsIgnoring(ignored: Option[UnavailablePartiesStore]) = store
+            .listExpiredVestingLocks(ignored)(time(3), PageLimit.tryCreate(10))(TraceContext.empty)
+            .futureValue
+            .map(_.contract.contractId)
+
+          cidsIgnoring(None) should contain theSameElementsAs Seq(
+            party1Lock.contractId,
+            party2Lock.contractId,
+          )
+          // An empty ignore list must not filter anything out.
+          cidsIgnoring(
+            Some(new InMemoryUnavailablePartiesStore(Set.empty))
+          ) should contain theSameElementsAs
+            Seq(party1Lock.contractId, party2Lock.contractId)
+          cidsIgnoring(
+            Some(new InMemoryUnavailablePartiesStore(Set(party1)))
+          ) should contain theSameElementsAs
+            Seq(party2Lock.contractId)
+          cidsIgnoring(
+            Some(new InMemoryUnavailablePartiesStore(Set(party2)))
+          ) should contain theSameElementsAs
+            Seq(party1Lock.contractId)
+          cidsIgnoring(
+            Some(new InMemoryUnavailablePartiesStore(Set(party1, party2)))
+          ) should be(empty)
+          // The DSO party is a signatory on every lock but is not the `owner`, so ignoring it
+          // must not filter anything out.
+          cidsIgnoring(
+            Some(new InMemoryUnavailablePartiesStore(Set(dsoParty)))
+          ) should contain theSameElementsAs
+            Seq(party1Lock.contractId, party2Lock.contractId)
         }
       }
 
@@ -2470,15 +2518,19 @@ class DbSvDsoStoreTest
 
       for {
         store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
         _ <- dummyDomain.create(readyLock)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(readyRight)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(notReadyLock)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(confirmedLock)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(confirmedRight)(store.multiDomainAcsStore)
-        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()
+        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()(
+          CantonTimestamp.now(),
+          PageLimit.tryCreate(100),
+        )(traceContext)
       } yield {
-        result.map { case (lock, right) => (lock.contractId, right) } should
-          contain theSameElementsAs Seq((readyLock.contractId, readyRight.contractId))
+        result.map(_.contract.contractId) should
+          contain theSameElementsAs Seq(readyLock.contractId)
       }
     }
 
@@ -2496,13 +2548,83 @@ class DbSvDsoStoreTest
 
       for {
         store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
         _ <- dummyDomain.create(lock)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(right1)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(right2)(store.multiDomainAcsStore)
-        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()
+        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()(
+          CantonTimestamp.now(),
+          PageLimit.tryCreate(100),
+        )(traceContext)
       } yield {
-        result.map(_._1.contractId) should contain theSameElementsAs Seq(lock.contractId)
-        Seq(right1.contractId, right2.contractId) should contain(result.head._2)
+        result.map(_.contract.contractId) should contain theSameElementsAs Seq(lock.contractId)
+      }
+    }
+
+    "respects ignored parties" in {
+      val ownerA = userParty(1)
+      val ownerB = userParty(2)
+      val providerA = userParty(3)
+      val providerB = userParty(4)
+      val controllerA = userParty(5)
+      val lockA = governanceLock(
+        ownerA,
+        amount = BigDecimal(10),
+        kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+          providerA.toProtoPrimitive
+        ),
+        controller = Some(controllerA),
+      )
+      val lockB = governanceLock(
+        ownerB,
+        amount = BigDecimal(10),
+        kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+          providerB.toProtoPrimitive
+        ),
+      )
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(lockA)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(lockB)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(providerA))(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(providerB))(store.multiDomainAcsStore)
+        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()(
+          CantonTimestamp.now(),
+          PageLimit.tryCreate(100),
+        )(traceContext)
+        resultNoOwnerA <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
+          Some(new InMemoryUnavailablePartiesStore(Set(ownerA)))
+        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
+        resultNoOwners <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
+          Some(new InMemoryUnavailablePartiesStore(Set(ownerA, ownerB)))
+        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
+        resultNoProviderA <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
+          Some(new InMemoryUnavailablePartiesStore(Set(providerA)))
+        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
+        resultNoProviders <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
+          Some(new InMemoryUnavailablePartiesStore(Set(providerA, providerB)))
+        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
+        resultNoControllerA <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
+          Some(new InMemoryUnavailablePartiesStore(Set(controllerA)))
+        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
+      } yield {
+        result.map(_.contract.contractId) should contain theSameElementsAs Seq(
+          lockA.contractId,
+          lockB.contractId,
+        )
+        resultNoOwnerA.map(_.contract.contractId) should contain theSameElementsAs Seq(
+          lockB.contractId
+        )
+        resultNoOwners shouldBe empty
+        resultNoProviderA.map(_.contract.contractId) should contain theSameElementsAs Seq(
+          lockB.contractId
+        )
+        resultNoProviders shouldBe empty
+        resultNoControllerA.map(_.contract.contractId) should contain theSameElementsAs Seq(
+          lockB.contractId
+        )
       }
     }
 
