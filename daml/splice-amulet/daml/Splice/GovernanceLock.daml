@@ -433,12 +433,7 @@ getUnlockAtTime requestedAt meta state =
     None -> snd <$> searchCurrentTimeBounds requestedAt state
 
 getUnlockAmount : CanAssert m => Metadata -> m (Optional Decimal)
-getUnlockAmount meta =
-    forA (getOptionalMetadata unlockAmountMetaKey meta) parse
-  where
-    parse t = case Text.parseDecimal t of
-      Some d -> pure d
-      None -> assertFail $ "Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: '" <> t <> "'"
+getUnlockAmount = assertParsed "unlockAmount" unlockAmountParser
 
 getWithdrawRequestedAtTime : Time -> RelTime -> Metadata -> ExternalPartyConfigState -> Update Time
 getWithdrawRequestedAtTime endTime vestingPeriod meta state =
@@ -1124,6 +1119,11 @@ fundingAmountParser = Parser \m ->
     Some [(instrumentId, amount)] | instrumentId == amuletInstrumentIdName -> ok amount
     Some v@(_ :: _) -> invalid $ "Expected exactly one " <> amuletInstrumentIdName <> " value, got: " <> show v
     _ -> invalid $ "Expected exactly one " <> amuletInstrumentIdName <> " value, got none"
+
+unlockAmountParser : Parser Metadata (Optional Decimal)
+unlockAmountParser = Parser \meta ->
+  forA (getOptionalMetadata unlockAmountMetaKey meta) \t ->
+    (Text.parseDecimal t) <?> ("Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: '" <> t <> "'")
 
 -- SV Reward Coupon Helpers
 ---------------------------
