@@ -956,7 +956,7 @@ keepGovernanceMetadataKeys : Metadata -> Metadata
 keepGovernanceMetadataKeys = filterGovernanceMetadataKeys Set.member
 
 removeGovernanceMetadataKeys : Metadata -> Metadata
-removeGovernanceMetadataKeys = filterGovernanceMetadataKeys \k -> not . Set.member k
+removeGovernanceMetadataKeys = filterGovernanceMetadataKeys \k -> \_ -> not (cipMetaPrefix `Text.isPrefixOf` k)
 
 -- TSv1 support
 -- ============
