@@ -216,7 +216,7 @@ template GovernanceLock
             requestedAt
             executeBefore = maxBound
             inputHoldingCids = []
-            meta = reasonToMeta encodedReason meta
+            meta = reasonToMeta encodedReason $ encodeGovernanceLockMetadata this
           status = V1.TransferPendingInternalWorkflow with
             pendingActions = Map.fromList
               [ (p, "withdraw transfer instruction to approve unlock")
@@ -262,7 +262,7 @@ template GovernanceLock
             settlementDeadline = Some maxComparableTime
             nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName amount
             committed = False
-            meta = reasonToMeta encodedReason meta
+            meta = reasonToMeta encodedReason $ encodeGovernanceLockMetadata this
           holdingCids = [toInterfaceContractId lockedAmulet]
           createdAt = requestedAt
           numIterations = 0
@@ -957,6 +957,19 @@ removeGovernanceMetadataKeys : Metadata -> Metadata
 removeGovernanceMetadataKeys meta =
   Metadata $ TextMap.filterWithKey (\k _ -> not (cipMetaPrefix `Text.isPrefixOf` k)) meta.values
 
+encodeControllerSpecification : ControllerSpecification -> Text
+encodeControllerSpecification ControllerSpecification{controllers} =
+  Text.intercalate ";" $ fmap (Text.intercalate "," . fmap partyToText) controllers
+
+encodeGovernanceLockMetadata : GovernanceLock -> Metadata
+encodeGovernanceLockMetadata GovernanceLock{..} =
+  Metadata $ TextMap.union meta.values $ TextMap.fromList $
+    (lockSubjectMetaKey, snd (governanceLockKindToTypeAndSubject specification.kind)) ::
+      fmap (\(k, cs) -> (k, encodeControllerSpecification cs))
+        [ (unlockControllersMetaKey, specification.unlockControllers)
+        , (substitutionControllersMetaKey, specification.substitutionControllers)
+        , (vestingControllersMetaKey, specification.vestingControllers) ]
+
 -- TSv1 support
 -- ============
 
@@ -1013,13 +1026,12 @@ governanceLock_allocationFactoryV2_allocateImpl dso V2.AllocationFactory_Allocat
   specification <- parseGovernanceLockSpecification allocation.meta (\m -> (settlement.id, m, owner)) governanceLockSpecificationParser
   amount <- assertParsed "allocation.nextIterationFunding" fundingAmountParser allocation.nextIterationFunding
 
-  let filteredMeta = removeGovernanceMetadataKeys allocation.meta
   (lock, lockCid, changeCid) <- governanceLock_lockForGovernance_impl
-    dso amount (fmap downcast inputHoldingCids) specification extraArgs owner requestedAt filteredMeta
+    dso amount (fmap downcast inputHoldingCids) specification extraArgs owner requestedAt (removeGovernanceMetadataKeys allocation.meta)
 
   let lockAlloc = view $ toInterface @V2.Allocation lock
       (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
-      expectedMeta = reasonToMeta encodedReason filteredMeta
+      expectedMeta = reasonToMeta encodedReason $ encodeGovernanceLockMetadata lock
   requireMatchExpected ("lock settlement", lockAlloc.settlement) settlement
   requireMatchExpected ("lock allocation", lockAlloc.allocation) allocation with meta = expectedMeta
 
