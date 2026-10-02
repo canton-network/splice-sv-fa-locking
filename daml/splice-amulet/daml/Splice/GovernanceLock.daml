@@ -220,8 +220,7 @@ template GovernanceLock
           status = V1.TransferPendingInternalWorkflow with
             pendingActions = Map.fromList
               [ (p, "withdraw transfer instruction to approve unlock")
-              | p <- Set.toList $ allControllers specification.unlockControllers
-              , not (Map.member p pendingUnlockApprovals)
+              | p <- Set.toList $ allControllers (governanceLockRemainingUnlockControllers this)
               ]
           meta = emptyMetadata
         where
@@ -267,7 +266,7 @@ template GovernanceLock
           createdAt = requestedAt
           numIterations = 0
           expiresAt = Some maxBound
-          availableActions = Map.fromList [(V2.AA_Withdraw, specification.unlockControllers.controllers)]
+          availableActions = Map.singleton V2.AA_Withdraw (governanceLockRemainingUnlockControllers this).controllers
           meta = emptyMetadata
         where
           (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
@@ -527,8 +526,7 @@ template VestingLock
           status = V1.TransferPendingInternalWorkflow with
             pendingActions = Map.fromList $
               [ (p, "withdraw vested amounts")
-              | p <- Set.toList $ allControllers specification.vestingControllers
-              , not (Map.member p pendingWithdrawApprovals)
+              | p <- Set.toList $ allControllers (vestingLockRemainingWithdrawControllers this)
               ]
           meta = emptyMetadata
         where
@@ -576,7 +574,7 @@ template VestingLock
           createdAt = endTime `addRelTime` (- vestingPeriod)
           numIterations = 0
           expiresAt = Some maxBound
-          availableActions = Map.fromList [(V2.AA_Withdraw, specification.vestingControllers.controllers)]
+          availableActions = Map.singleton V2.AA_Withdraw (vestingLockRemainingWithdrawControllers this).controllers
           meta = emptyMetadata
         where
           (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
@@ -735,6 +733,18 @@ validateControllers : CanAssert m => [(Text, ControllerSpecification)] -> m ()
 validateControllers = mapA_ \(controllerType, ControllerSpecification{controllers}) -> do
   require (controllerType <> "Controllers must not be empty") (not $ null controllers)
   require (controllerType <> "Controllers must not contain an empty controller set") (all (not . null) controllers)
+
+remainingControllers : Map.Map Party a -> ControllerSpecification -> ControllerSpecification
+remainingControllers pendingApprovals controllers =
+  ControllerSpecification $ filter (not . null) $ fmap (filter (\p -> not $ Map.member p pendingApprovals)) controllers.controllers
+
+governanceLockRemainingUnlockControllers : GovernanceLock -> ControllerSpecification
+governanceLockRemainingUnlockControllers GovernanceLock{specification, pendingUnlockApprovals} =
+  remainingControllers pendingUnlockApprovals specification.unlockControllers
+
+vestingLockRemainingWithdrawControllers : VestingLock -> ControllerSpecification
+vestingLockRemainingWithdrawControllers VestingLock{specification, pendingWithdrawApprovals} =
+  remainingControllers pendingWithdrawApprovals specification.vestingControllers
 
 -- | Updates approvals for a GovernanceLock unlock
 governanceLock_updateUnlockApprovals : GovernanceLock -> Optional Decimal -> Time -> [Party] -> Update (Either (Map.Map Party UnlockApproval) Time)
@@ -962,13 +972,22 @@ encodeControllerSpecification ControllerSpecification{controllers} =
   Text.intercalate ";" $ fmap (Text.intercalate "," . fmap partyToText) controllers
 
 encodeGovernanceLockMetadata : GovernanceLock -> Metadata
-encodeGovernanceLockMetadata GovernanceLock{..} =
-  Metadata $ TextMap.union meta.values $ TextMap.fromList $
-    (lockSubjectMetaKey, snd (governanceLockKindToTypeAndSubject specification.kind)) ::
-      fmap (\(k, cs) -> (k, encodeControllerSpecification cs))
-        [ (unlockControllersMetaKey, specification.unlockControllers)
-        , (substitutionControllersMetaKey, specification.substitutionControllers)
-        , (vestingControllersMetaKey, specification.vestingControllers) ]
+encodeGovernanceLockMetadata (GovernanceLock
+  _dso
+  _owner
+  _amount
+  _lockedAmulet
+  (GovernanceLockSpecification kind unlockControllers substitutionControllers vestingControllers)
+  _originalLockCid
+  _requestedAt
+  meta
+  _pendingUnlockApprovals) =
+    Metadata $ TextMap.union meta.values $ TextMap.fromList $
+      (lockSubjectMetaKey, snd (governanceLockKindToTypeAndSubject kind)) ::
+        fmap (\(k, cs) -> (k, encodeControllerSpecification cs))
+          [ (unlockControllersMetaKey, unlockControllers)
+          , (substitutionControllersMetaKey, substitutionControllers)
+          , (vestingControllersMetaKey, vestingControllers) ]
 
 -- TSv1 support
 -- ============
@@ -1096,13 +1115,13 @@ assertParsed parsedType parser input =
         (if length errorsList > 5 then ". First five errors" else  "") <> ":\n\n" <>
         Text.intercalate "\n" (take 5 errorsList)
 
-keyValueParser : (Text -> Text) -> Parser Text (TextMap.TextMap Text)
-keyValueParser mapKey = Parser \keyValues -> fmap TextMap.fromList $ forA (Text.splitOn "&" keyValues) \keyValue ->
-    keyValueValidation $ Text.splitOn "=" keyValue
-  where
-    keyValueValidation : [Text] -> Validation Text (Text, Text)
-    keyValueValidation [k, v] = ok (mapKey k, v)
-    keyValueValidation l = invalid $ "Unable to map a key value pair, from list: " <> show l
+-- | Parse a URL-style key value string 'key1=value1&...&key2=value2' into a key-value map.
+keyValueParser : Parser Text (TextMap.TextMap Text)
+keyValueParser = Parser \keyValues ->
+  TextMap.fromList <$> forA (Text.splitOn "&" keyValues) \keyValue ->
+    case Text.splitOn "=" keyValue of
+      [k, v] -> ok (k, v)
+      l -> invalid $ "Unable to map a key value pair, from list: " <> show l
 
 controllersParser : Text -> ControllerSpecificationParser
 controllersParser key =
@@ -1132,8 +1151,19 @@ governanceLockMetadataParser : Parser Metadata Metadata
 governanceLockMetadataParser = Parser \meta ->
   case TextMap.lookup reasonMetaKey meta.values of
     Some reason ->
-      Metadata . TextMap.delete reasonMetaKey . TextMap.union meta.values <$>
-        runParser (keyValueParser ((<>) cipMetaPrefix . Text.dropPrefix cipMetaPrefix)) reason
+      let
+        -- Prefix all parsed keys with the CIP prefix to avoid clashes
+        -- with metadata keys from other namespaces.
+        adjustPrefix k = cipMetaPrefix <> k
+        textMapMapKeys f = TextMap.fromList . fmap (\(k, v) -> (f k, v)) . TextMap.toList
+        parsedReasonMeta = textMapMapKeys adjustPrefix <$> runParser keyValueParser reason
+      in
+        -- Prefer the original metadata keys to avoid users overwriting
+        -- metadata that is already set via their "memo" tag.
+        -- Delete the parsed reason as it will be repopulated when
+        -- encoding the governance lock via the token standard interface.
+        Metadata . TextMap.union (TextMap.delete reasonMetaKey meta.values) <$> parsedReasonMeta
+
     None -> ok meta
 
 governanceLockSpecificationParser : Parser (Text, Metadata, Party) GovernanceLockSpecification

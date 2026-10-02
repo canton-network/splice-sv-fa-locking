@@ -165,19 +165,21 @@ test_governanceLockMetadataParser = do
       reason r = (reasonMetaKey, r)
       otherEntry = ("other-key", "other-value")
       pairError l = "Unable to map a key value pair, from list: " <> show l
-      lockSubjectMetaKeyNoPrefix = Text.dropPrefix cipMetaPrefix lockSubjectMetaKey
+      dropMetaPrefix = Text.dropPrefix cipMetaPrefix
+      lockSubjectMetaKeyNoPrefix = dropMetaPrefix lockSubjectMetaKey
+      unlockControllersMetaKeyNoPrefix = dropMetaPrefix unlockControllersMetaKey
 
   -- Without a reason field, the metadata is returned unchanged
   expectSuccess (mkMeta []) $ run []
   expectSuccess (mkMeta [otherEntry, (lockSubjectMetaKey, "provider")]) $ run [otherEntry, (lockSubjectMetaKey, "provider")]
 
-  -- A single pair is added to the metadata and the reason field is removed
-  expectSuccess (mkMeta [(lockSubjectMetaKey, "provider")]) $
-    run [reason $ lockSubjectMetaKey <> "=provider"]
-
-  -- Keys without `cipMetaPrefix` are prefixed
+  -- A single pair is prefixed with `cipMetaPrefix` and added to the metadata, and the reason field is removed
   expectSuccess (mkMeta [(lockSubjectMetaKey, "provider")]) $
     run [reason $ lockSubjectMetaKeyNoPrefix <> "=provider"]
+
+  -- Keys that already contain `cipMetaPrefix` are prefixed again
+  expectSuccess (mkMeta [(cipMetaPrefix <> lockSubjectMetaKey, "provider")]) $
+    run [reason $ lockSubjectMetaKey <> "=provider"]
 
   -- `&` separates the pairs, and the other metadata fields are kept
   expectSuccess
@@ -189,7 +191,8 @@ test_governanceLockMetadataParser = do
       ])
     $ run
         [ otherEntry
-        , reason $ lockSubjectMetaKeyNoPrefix <> "=provider&" <> unlockControllersMetaKey <> "=alice,bob&vesting-controllers=alice;charlie"
+        , reason $ lockSubjectMetaKeyNoPrefix <>
+          "=provider&" <> unlockControllersMetaKeyNoPrefix <> "=alice,bob&vesting-controllers=alice;charlie"
         ]
 
   -- An empty value is allowed
@@ -200,7 +203,7 @@ test_governanceLockMetadataParser = do
   expectSuccess (mkMeta [(lockSubjectMetaKey, "provider"), (unlockControllersMetaKey, "bob")]) $
     run
       [ (lockSubjectMetaKey, "provider")
-      , reason $ lockSubjectMetaKeyNoPrefix <> "=someSv&unlock-controllers=bob"
+      , reason $ lockSubjectMetaKeyNoPrefix <> "=someSv&" <> unlockControllersMetaKeyNoPrefix <> "=bob"
       ]
 
   -- A pair without `=`
