@@ -90,6 +90,9 @@ ownerControlledSpecification owner kind = GovernanceLockSpecification with
   substitutionControllers = ControllerSpecification [[owner]]
   vestingControllers = ControllerSpecification [[owner]]
 
+ownerControlledSingleSpecification : Party -> ControllerSpecification
+ownerControlledSingleSpecification owner = ControllerSpecification [[owner]]
+
 template GovernanceLock
   with
     dso : Party
@@ -110,6 +113,8 @@ template GovernanceLock
     signatory dso, owner
     observer governanceLockKindObservers specification.kind, governanceLockControllers specification
     ensure amount > 0.0 && either error (const True) (validateGovernanceLockControllers @(Either Text) specification)
+    key ( GovernanceLockKey with dso; owner; specification ) : GovernanceLockKey
+    maintainer key.dso
 
     choice GovernanceLock_Unlock : GovernanceLock_UnlockResult
       with
@@ -487,6 +492,9 @@ template VestingLock
     observer allControllers specification.vestingControllers
     ensure vestingAmount > 0.0 && vestingPeriod >= aunit && either error (const True) (validateVestingLockControllers @(Either Text) specification)
 
+    key ( VestingLockKey with dso; owner; specification ) : VestingLockKey
+    maintainer key.dso
+
     choice VestingLock_Withdraw : VestingLock_WithdrawResult
       -- ^ Withdraw all funds that have vested since the last withdrawal
       -- and the time of this request.
@@ -844,6 +852,194 @@ getMiningRoundsFromChoiceContext choiceContext = do
   openMiningRoundCid <- getFromContextU @(ContractId OpenMiningRound) choiceContext openMiningRoundContextKey
   pure (issuingMiningRoundCids, openMiningRoundCid)
 
+-- Substitution
+-- ============
+
+data GovernanceLockKey = GovernanceLockKey with
+    dso : Party
+    owner : Party
+    specification : GovernanceLockSpecification
+  deriving (Eq, Show, Serializable)
+
+data VestingLockKey = VestingLockKey with
+    dso : Party
+    owner : Party
+    specification : VestingLockSpecification
+  deriving (Eq, Show, Serializable)
+
+data SubstitutionLockSpecification
+  = SLS_Governance with
+      governanceKey : GovernanceLockKey
+      unlockControllers : ControllerSpecification
+        -- ^ Controllers that can unlock the lock.
+      substitutionControllers : ControllerSpecification
+        -- ^ Controllers that can approve a substitution.
+      vestingControllers : ControllerSpecification
+        -- ^ Controllers that can withdraw vested funds once the lock is vesting. Copied to the VestingLock on unlock.
+  | SLS_Vesting with
+      vestingKey : VestingLockKey
+      vestingControllers : ControllerSpecification
+        -- ^ Controllers that can drive the return of vested funds to the owner.
+  deriving (Eq, Show, Serializable)
+
+substitutionLockSpecification_owner : SubstitutionLockSpecification -> Party
+substitutionLockSpecification_owner SLS_Governance { governanceKey } = governanceKey.owner
+substitutionLockSpecification_owner SLS_Vesting { vestingKey } = vestingKey.owner
+
+substitutionLockSpecification_substitutionController : SubstitutionLockSpecification -> ControllerSpecification
+substitutionLockSpecification_substitutionController SLS_Governance { governanceKey } = governanceKey.specification.substitutionControllers
+substitutionLockSpecification_substitutionController SLS_Vesting { vestingKey } = vestingKey.specification.vestingControllers
+
+template SubstitutionProposal with
+    dso : Party
+    substitutedLock : SubstitutionLockSpecification
+    proposer : Party -- ^ Party that proposed the substitution
+    amount : Decimal -- ^ Amount being substituted
+    lockedAmulet : ContractId LockedAmulet -- ^ Amulet providing the funds
+    pendingSubstituteApprovals : Map.Map Party ()
+  where
+    signatory dso, proposer
+    observer substitutionLockSpecification_owner substitutedLock
+
+    choice SubstitutionProposal_Accept : ()
+      with
+        actors : [ Party ]
+        extraArgs : ExtraArgs
+        -- TODO: add actors as part of adding support for custom substitution controllers
+      controller actors
+      do
+        substitutionProposal_acceptImpl this self $ SubstitutionProposal_Accept with ..
+
+    choice SubstitutionProposal_Withdraw : () -- FIXME: proper type, above as well
+      controller proposer
+      do
+        unlockAmulet (ForOwner with dso; owner = proposer) lockedAmulet
+        pure ()
+
+
+substitutionProposal_updateApprovals : SubstitutionProposal -> [Party] -> Update (Either (Map.Map Party ()) ())
+substitutionProposal_updateApprovals SubstitutionProposal{..} actors = do
+  result <- updateApprovals
+    (substitutionLockSpecification_substitutionController substitutedLock)
+    actors
+    ()
+    pendingSubstituteApprovals
+    (\_ -> True)
+  pure $ () <$ result
+
+substitutionProposal_acceptImpl : SubstitutionProposal -> ContractId SubstitutionProposal -> SubstitutionProposal_Accept -> Update ()
+substitutionProposal_acceptImpl this@(SubstitutionProposal with ..) _self arg@(SubstitutionProposal_Accept with ..) = do
+        recorded <- substitutionProposal_updateApprovals this actors
+        case recorded of
+          Left stillPending -> do
+            _pendingLock <- create this with
+              pendingSubstituteApprovals = stillPending
+              -- originalLockCid = Some $ fromOptional self originalLockCid
+            pure ()
+          Right _ ->
+            substitutionProposal_executeAccept this arg
+
+substitutionProposal_executeAccept : SubstitutionProposal -> SubstitutionProposal_Accept -> Update ()
+substitutionProposal_executeAccept (SubstitutionProposal with ..) (SubstitutionProposal_Accept with ..) = do
+        -- fetch and archive the referenced lock
+        let substitutedLockOwner = ForOwner with dso; owner = substitutionLockSpecification_owner substitutedLock
+        (substitutedLockedAmulet, lockedAmount, mkLock) <- case substitutedLock of
+          SLS_Governance with .. -> do
+            (lockCid, lock) <- fetchByKey @GovernanceLock governanceKey
+            potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
+            let mkLock lockOwner lockAmount lockedAmulet = do
+                  create GovernanceLock with
+                    dso
+                    owner = lockOwner
+                    amount = lockAmount
+                    lockedAmulet
+                    specification = if lockOwner == lock.owner
+                                       then lock.specification else GovernanceLockSpecification with
+                      kind = lock.specification.kind
+                      unlockControllers
+                      substitutionControllers
+                      vestingControllers
+                    originalLockCid = Some $ fromOptional lockCid lock.originalLockCid
+                    requestedAt = lock.requestedAt
+                    meta = lock.meta
+                    pendingUnlockApprovals = mempty
+                  pure ()
+            pure (lock.lockedAmulet, lock.amount, mkLock)
+          SLS_Vesting with .. -> do
+            (lockCid, lock) <- fetchByKey @VestingLock vestingKey
+            potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
+            let mkLock lockOwner lockAmount lockedAmulet = do
+                  create VestingLock with
+                    dso
+                    owner = lockOwner
+                    lockedAmulet
+                    vestingPeriod = lock.vestingPeriod
+                    endTime = lock.endTime
+                    vestingAmount = lockAmount
+                    specification = if lockOwner == lock.owner
+                                       then lock.specification else VestingLockSpecification with
+                      kind = lock.specification.kind
+                      vestingControllers
+                    originalLockCid = Some $ fromOptional (coerceContractId lockCid) lock.originalLockCid
+                    meta = lock.meta
+                    pendingWithdrawApprovals = mempty
+                  pure () -- FIXME: decide whether we want an interface for locks, or use AnyContractId
+            pure (lock.lockedAmulet, lock.vestingAmount, mkLock)
+
+        case amount `compare` lockedAmount of
+          LT -> do
+            -- liquidate part of the amount
+            (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+
+            (Some (newLockedAmulet, remainingAmount), _unlockedAmulet) <-
+              partialUnlock substitutedLockOwner substitutedLockedAmulet amount context
+
+            requireMinimumLock state remainingAmount
+            requireMinimumLock state amount
+
+            mkLock (substitutionLockSpecification_owner substitutedLock) remainingAmount newLockedAmulet
+            mkLock proposer amount lockedAmulet
+          EQ -> do
+            -- liquidate the whole amount
+            unlockAmulet substitutedLockOwner substitutedLockedAmulet
+            mkLock proposer amount lockedAmulet
+          GT ->
+            fail $ "substituted lock has less funds (" <> show lockedAmount <> ") than the amount proposed to be substituted (" <> show amount <> ")"
+        pure ()
+
+-- | Type to simplify passing in all the arguments required to create a substitution proposal.
+--
+-- TODO: move this to a separate utlity pacakge `splice-governance-lock-utils`, which then also contains the codecs to and from TSv2 choices
+data CreateSubstitutionProposalArgs = CreateSubstitutionProposalArgs with
+    dso : Party
+    substitutedLock : SubstitutionLockSpecification
+    proposer : Party -- ^ Party that proposed the substitution
+    amount : Decimal -- ^ Amount being substituted
+    inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
+    extraArgs : ExtraArgs
+  deriving (Eq, Show, Serializable)
+
+
+createSubstitutionProposal : CreateSubstitutionProposalArgs -> Update (ContractId SubstitutionProposal, Optional (ContractId Amulet))
+createSubstitutionProposal CreateSubstitutionProposalArgs {..} = do
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+  requireMinimumLock state amount
+  let lockProperties = LockProperties with
+        -- FIXME: context decscription reads a bit strangely
+        -- FIXME: actually format this at all.
+        context = "" -- "Substitution proposal for " <> describeGovernanceLockKind substitutedLock.specification
+        expiresAt = maxBound
+  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner = proposer) [(amount, lockProperties)] inputHoldingCids context ""
+  proposal <- create SubstitutionProposal with
+    dso
+    substitutedLock
+    proposer
+    amount
+    lockedAmulet
+    pendingSubstituteApprovals = mempty
+  pure $ (proposal, changeHolding)
+
+
 -- Helpers for handling LockedAmulet
 -- =================================
 
@@ -1064,6 +1260,11 @@ lockTypeToCompatibilityPartyAndReason (GLK_SuperValidatorRightsOwner with svName
 maxComparableTime : Time
 maxComparableTime = addRelTime maxTime $ microseconds (-1)
 
+fetchAmount : ForOwner -> ContractId LockedAmulet -> Update Decimal
+fetchAmount forOwner holding = do
+  holdingView <- view . toInterface @Holding <$> fetchChecked forOwner holding
+  pure holdingView.amount
+
 -- Parsers
 -- =======
 
@@ -1190,5 +1391,12 @@ getSvRewardInputAmuletAndChange svRewardCouponInputs svRewardCouponPercentage ex
 
   pure ([toInterfaceContractId changeFromSvCouponRewards], svRewardMintAllowance)
 
+
+-- Instances
+------------
+
 instance HasCheckedFetch GovernanceLock ForOwner where
-  contractGroupId GovernanceLock {..} = ForOwner with dso; owner
+  contractGroupId GovernanceLock{..} = ForOwner with dso; owner = owner
+
+instance HasCheckedFetch VestingLock ForOwner where
+  contractGroupId VestingLock{..} = ForOwner with dso; owner = owner

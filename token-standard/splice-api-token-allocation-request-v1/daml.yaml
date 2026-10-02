@@ -13,7 +13,7 @@ data-dependencies:
 - ../splice-api-token-allocation-v1/.daml/dist/splice-api-token-allocation-v1-current.dar
 build-options:
   - --explicit-serializable=yes
-  - --target=2.1
+  - --target=2.3
 codegen:
   java:
     package-prefix: org.lfdecentralizedtrust.splice.codegen.java
