@@ -435,6 +435,22 @@ testTopUpWithSvRewardCouponsHappyPath = do
   (Some newAliceLock2') <- queryContractId alice newAliceLock2
   WalletClientV2.checkBalance alice env.instrId $ expectedUnlockedBalance + newAliceLock3'.amount + newAliceLock2'.amount
 
+testTopUpWithTSv2HappyPath : Script ()
+testTopUpWithTSv2HappyPath = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      ops = tsv2Operations
+
+  -- Using a featured app to get a whole and very divisible number of days.
+  let someFaKind = GLK_FeaturedApp bob
+
+  AmuletRegistryV2.tapFaucet registry alice 180000.0
+  AmuletRegistryV2.tapFaucet registry bob 10000.0
+
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 80000.0 someFaKind emptyMetadata
+
+  pure ()
+
 testTopUpNegativePath : Script ()
 testTopUpNegativePath = do
   env@TestEnv{..} <- setupTest
