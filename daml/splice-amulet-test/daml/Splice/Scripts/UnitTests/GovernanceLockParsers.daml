@@ -152,9 +152,14 @@ test_governanceLockKindParser = do
 -- Lock specification parser
 ----------------------------
 
-test_governanceLockSpecificationTSv2Parser : Script ()
-test_governanceLockSpecificationTSv2Parser = do
-  let run lockType entries = runParser governanceLockSpecificationTSv2Parser (lockType, mkMeta entries, testOwner)
+-- TODO(canton-network/splice-sv-fa-locking#68) test character check implementation
+
+test_governanceLockSpecificationParser'
+  :  (Text -> [(Text, Text)] -> i)
+  -> Parser i GovernanceLockSpecification
+  -> Script ()
+test_governanceLockSpecificationParser' mkInput parser = do
+  let run lockType entries = runParser parser $ mkInput lockType entries
 
   let fullSpecification = GovernanceLockSpecification with
         kind = GLK_FeaturedApp testProvider
@@ -192,6 +197,18 @@ test_governanceLockSpecificationTSv2Parser = do
         , (substitutionControllersMetaKey, "bob")
         , (vestingControllersMetaKey, "bad$vesting")
         ]
+
+test_governanceLockSpecificationParser : Script ()
+test_governanceLockSpecificationParser =
+  test_governanceLockSpecificationParser'
+    (\lockType -> \entries -> (lockType, mkMeta entries, testOwner))
+    governanceLockSpecificationParser
+
+test_governanceLockSpecificationTSv1Parser : Script ()
+test_governanceLockSpecificationTSv1Parser =
+  test_governanceLockSpecificationParser'
+    (\lockType -> \entries -> (testOwner, fromSome (partyFromText (lockType <> magicNamespace)), mkMeta entries))
+    governanceLockSpecificationTSv1Parser
 
 -- Funding amount parser
 ------------------------

@@ -993,7 +993,7 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg = do
   -- validate call to factory and retrieve context
   requireMatchExpected ("admin", arg.expectedAdmin) dso
 
-  specification <- specificationFromReceiverAndReason transfer.sender transfer.receiver transfer.meta
+  specification <- parseGovernanceLockSpecificationTSv1 transfer.sender transfer.receiver transfer.meta
 
   (_, lockCid, changeCid) <- governanceLock_lockForGovernance_impl expectedAdmin transfer.amount transfer.inputHoldingCids specification extraArgs transfer.sender transfer.requestedAt transfer.meta
   pure $ V1.TransferInstructionResult with
@@ -1010,7 +1010,7 @@ governanceLock_allocationFactoryV2_allocateImpl dso V2.AllocationFactory_Allocat
   checkActors actors [[owner]]
   assertDeadlineExceeded "requestedAt" requestedAt
 
-  specification <- assertParsed "GovernanceLockSpecification" governanceLockSpecificationTSv2Parser (settlement.id, allocation.meta, owner)
+  specification <- parseGovernanceLockSpecification allocation.meta (\m -> (settlement.id, m, owner)) governanceLockSpecificationParser
   amount <- assertParsed "allocation.nextIterationFunding" fundingAmountParser allocation.nextIterationFunding
 
   let filteredMeta = removeGovernanceMetadataKeys allocation.meta
@@ -1039,10 +1039,6 @@ governanceLockKindFromTypeAndSubject type_ subject
     parseProvider = case partyFromText subject of
       Some p -> pure p
       None -> assertFail $ "Invalid provider for " <> type_ <> ": " <> subject
-
-specificationFromReceiverAndReason : CanAssert m => Party -> Party -> Metadata -> m GovernanceLockSpecification
-specificationFromReceiverAndReason owner receiver meta =
-  assertParsed "GovernanceLockSpecification" governanceLockSpecificationTSv1Parser (owner, receiver, meta)
 
 makeCanonicalParty : Text -> Party
 makeCanonicalParty type_ = fromSome $ partyFromText $ type_ <> magicNamespace
@@ -1085,12 +1081,12 @@ assertParsed parsedType parser input =
         (if length errorsList > 5 then ". First five errors" else  "") <> ":\n\n" <>
         Text.intercalate "\n" (take 5 errorsList)
 
-keyValueParser : Parser Text (TextMap.TextMap Text)
-keyValueParser = Parser \keyValues -> fmap TextMap.fromList $ forA (Text.splitOn "&" keyValues) \keyValue ->
+keyValueParser : (Text -> Text) -> Parser Text (TextMap.TextMap Text)
+keyValueParser mapKey = Parser \keyValues -> fmap TextMap.fromList $ forA (Text.splitOn "&" keyValues) \keyValue ->
     keyValueValidation $ Text.splitOn "=" keyValue
   where
     keyValueValidation : [Text] -> Validation Text (Text, Text)
-    keyValueValidation [k, v] = ok (k, v)
+    keyValueValidation [k, v] = ok (mapKey k, v)
     keyValueValidation l = invalid $ "Unable to map a key value pair, from list: " <> show l
 
 controllersParser : Text -> ControllerSpecificationParser
@@ -1117,21 +1113,36 @@ governanceLockKindParser : Parser (Text, Metadata) GovernanceLockKind
 governanceLockKindParser = Parser \(type_, meta) ->
   validate $ getRequiredMetadata lockSubjectMetaKey meta >>= governanceLockKindFromTypeAndSubject type_
 
+governanceLockMetadataParser : Parser Metadata Metadata
+governanceLockMetadataParser = Parser \meta ->
+  case TextMap.lookup reasonMetaKey meta.values of
+    Some reason ->
+      Metadata . TextMap.delete reasonMetaKey . TextMap.union meta.values <$>
+        runParser (keyValueParser ((<>) cipMetaPrefix . Text.dropPrefix cipMetaPrefix)) reason
+    None -> ok meta
+
+governanceLockSpecificationParser : Parser (Text, Metadata, Party) GovernanceLockSpecification
+governanceLockSpecificationParser = Parser \(type_, meta, owner) ->
+  GovernanceLockSpecification <$>
+    runParser governanceLockKindParser (type_, meta) <*>
+    runParser unlockControllersParser (meta, owner) <*>
+    runParser substitutionControllersParser (meta, owner) <*>
+    runParser vestingControllersParser (meta, owner)
+
 governanceLockSpecificationTSv1Parser : Parser (Party, Party, Metadata) GovernanceLockSpecification
 governanceLockSpecificationTSv1Parser = Parser \(owner, receiver, meta) ->
-  let type_ = Text.stripSuffix magicNamespace (partyToText receiver)
-      subject = Text.stripPrefix "lock-subject=" =<< reasonMetaKey `TextMap.lookup` meta.values
-  in case liftA2 (,) type_ subject of
-    Some (t, s) -> validate $ ownerControlledSpecification owner <$> governanceLockKindFromTypeAndSubject t s
-    None -> invalid "Unknown receiver or lock-subject"
+  case Text.stripSuffix magicNamespace (partyToText receiver) of
+    Some type_ -> runParser governanceLockSpecificationParser (type_, meta, owner)
+    None -> invalid $ "Invalid receiver: " <> show receiver
 
-governanceLockSpecificationTSv2Parser : Parser (Text, Metadata, Party) GovernanceLockSpecification
-governanceLockSpecificationTSv2Parser = Parser \(type_, meta, owner) ->
-  GovernanceLockSpecification <$>
-  runParser governanceLockKindParser (type_, meta) <*>
-  runParser unlockControllersParser (meta, owner) <*>
-  runParser substitutionControllersParser (meta, owner) <*>
-  runParser vestingControllersParser (meta, owner)
+parseGovernanceLockSpecification : CanAssert m => Metadata -> (Metadata -> i) -> Parser i GovernanceLockSpecification -> m GovernanceLockSpecification
+parseGovernanceLockSpecification rawMeta makeInput parser = do
+  meta <- assertParsed "metadata" governanceLockMetadataParser rawMeta
+  assertParsed "GovernanceLockSpecification" parser (makeInput meta)
+
+parseGovernanceLockSpecificationTSv1 : CanAssert m => Party -> Party -> Metadata -> m GovernanceLockSpecification
+parseGovernanceLockSpecificationTSv1 owner receiver meta =
+  parseGovernanceLockSpecification meta (\m -> (owner, receiver, m)) governanceLockSpecificationTSv1Parser
 
 fundingAmountParser : Parser (Optional (TextMap.TextMap Decimal)) Decimal
 fundingAmountParser = Parser \m ->
