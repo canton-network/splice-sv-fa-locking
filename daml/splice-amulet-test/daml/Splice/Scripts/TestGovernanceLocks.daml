@@ -440,6 +440,7 @@ testTopUpWithTSv2HappyPath = do
   env@TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
       ops = tsv2Operations
+      initialAmount = 80000.0
 
   -- Using a featured app to get a whole and very divisible number of days.
   let someFaKind = GLK_FeaturedApp bob
@@ -447,7 +448,19 @@ testTopUpWithTSv2HappyPath = do
   AmuletRegistryV2.tapFaucet registry alice 180000.0
   AmuletRegistryV2.tapFaucet registry bob 10000.0
 
-  aliceLock <- expectSuccess $ ops.governanceLock env alice 80000.0 someFaKind emptyMetadata
+  aliceLock <- expectSuccess $ ops.governanceLock env alice initialAmount someFaKind emptyMetadata
+
+  let avMap = AV_Map $ TM.fromList
+        [ (lockActionMetaKey, AV_Text "topup")
+        , (topUpAmountMetaKey, AV_Decimal 5000.0)
+        , (allocTopUpIdMetaKey, AV_ContractId $ toAnyContractId aliceLock)
+        ]
+
+  let extraArgs = ExtraArgs with
+        context = ChoiceContext with
+          values = TM.singleton extendedMetaKey avMap
+        meta = emptyMetadata
+  toppedUpAliceLock <- expectSuccess $ governanceLockV2WithExtraArgs env alice 0.0 someFaKind emptyMetadata extraArgs
 
   pure ()
 
@@ -934,6 +947,29 @@ governanceLockV2 env owner amount kind meta = do
   pure $ case result.output of
     V2.AllocationInstructionResult_Completed cid -> Right $ fromInterfaceContractId cid
     o -> Left $ UnknownError $ "Unexpected AllocationInstructionResult: " <> show o
+
+governanceLockV2WithExtraArgs : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata -> ExtraArgs -> Script (Either SubmitError (ContractId GovernanceLock))
+governanceLockV2WithExtraArgs env owner amount kind meta extraArgs = do
+  let (lockType, lockSubject) = governanceLockKindToTypeAndSubject kind
+      lockMeta = Metadata $ meta.values <> TM.fromList [(lockSubjectMetaKey, lockSubject)]
+      settlementInfo = V2.SettlementInfo with
+        executors = [env.instrId.admin]
+        id = lockType
+        cid = None
+        meta = emptyMetadata
+      allocation = V2.AllocationSpecification with
+        admin = env.instrId.admin
+        authorizer = basicAccount owner
+        transferLegSides = []
+        settlementDeadline = Some maxComparableTime
+        nextIterationFunding = Some $ TM.singleton env.instrId.id amount
+        committed = False
+        meta = lockMeta
+  result <- WalletClientV2.allocateV2WithExtraArgs env.registries owner settlementInfo allocation extraArgs
+  pure $ case result.output of
+    V2.AllocationInstructionResult_Completed cid -> Right $ fromInterfaceContractId cid
+    o -> Left $ UnknownError $ "Unexpected AllocationInstructionResult: " <> show o
+
 
 withdrawViaTokenStandard
   :  forall i c r o t1 t2. (Choice i c r, HasField "output" r o, HasToInterface t1 i, HasFromInterface t2 i)

@@ -674,6 +674,11 @@ calculateUnvestedAmount currentTime VestingLock{ .. }
     | currentTime >= endTime = None
     | otherwise = Some $ (vestingAmount * relTimeToSeconds (endTime `subTime` currentTime)) / relTimeToSeconds vestingPeriod
 
+data LockAction =
+  LA_CreateLock
+  | LA_TopUp
+--  | LA_Substitute -- FIXME Implement this portion potentially
+
 -- | Implementation for the LockForGovernance choice on ExternalPartyAmuletRules and core implementation of token standard v1 and v2 interfaces.
 governanceLock_lockForGovernance_impl
   : Party
@@ -706,6 +711,10 @@ governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs 
         pendingUnlockApprovals = Map.empty
   governanceLockCid <- create governanceLock
   pure (governanceLock, governanceLockCid, changeHolding)
+
+--isGovernanceTopUpAllocationArgument V2.AllocationFactory_Allocate{allocation} =
+--  TextMap.member lockToTopUpMetaKey allocation.meta.values
+--  && TextMap.member topUpAmountMetaKey allocation.meta.values
 
 isGovernanceAllocationArgument V2.AllocationFactory_Allocate{allocation} =
   TextMap.member lockSubjectMetaKey allocation.meta.values
@@ -944,6 +953,14 @@ substitutionControllersMetaKey = cipMetaPrefix <> "substitution-controllers"
 -- | Metadata key that sets the `vestingControllers` of a `GovernanceLock`.
 vestingControllersMetaKey = cipMetaPrefix <> "vesting-controllers"
 
+lockActionMetaKey = cipMetaPrefix <> "lock-action"
+
+lockInputsMetaKey = cipMetaPrefix <> "lock-inputs"
+
+allocTopUpIdMetaKey = cipMetaPrefix <> "alloc-top-up-id"
+
+extendedMetaKey = cipMetaPrefix <> "cid-meta"
+
 topUpAmountMetaKey = cipMetaPrefix <> "top-up-amount"
 
 mergeWithLocksMetaKey = cipMetaPrefix <> "merge-with-locks"
@@ -1012,29 +1029,38 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg = do
 
 governanceLock_allocationFactoryV2_allocateImpl : Party -> V2.AllocationFactory_Allocate -> Update V2.AllocationInstructionResult
 governanceLock_allocationFactoryV2_allocateImpl dso V2.AllocationFactory_Allocate{..} = do
-  requireMatchExpected ("admin", allocation.admin) dso
-  ensureBasicAccount "allocation.authorizer" allocation.authorizer
-  let owner = regularAccountOwner allocation.authorizer
-  checkActors actors [[owner]]
-  assertDeadlineExceeded "requestedAt" requestedAt
+  -- FIXME: Parse below and required items
+  let (Some (AV_Map tm)) = TextMap.lookup extendedMetaKey extraArgs.context.values
+      (Some (AV_Text lockAction)) = TextMap.lookup lockActionMetaKey tm
 
-  specification <- assertParsed "GovernanceLockSpecification" governanceLockSpecificationTSv2Parser (settlement.id, allocation.meta, owner)
-  amount <- assertParsed "allocation.nextIterationFunding" fundingAmountParser allocation.nextIterationFunding
+  -- FIXME: Use data type
+  case lockAction of
+    "topup" -> do
+      pure ()
+    _ -> do
+      requireMatchExpected ("admin", allocation.admin) dso
+      ensureBasicAccount "allocation.authorizer" allocation.authorizer
+      let owner = regularAccountOwner allocation.authorizer
+      checkActors actors [[owner]]
+      assertDeadlineExceeded "requestedAt" requestedAt
 
-  let filteredMeta = removeGovernanceMetadataKeys allocation.meta
-  (lock, lockCid, changeCid) <- governanceLock_lockForGovernance_impl
-    dso amount (fmap downcast inputHoldingCids) specification extraArgs owner requestedAt filteredMeta
+      specification <- assertParsed "GovernanceLockSpecification" governanceLockSpecificationTSv2Parser (settlement.id, allocation.meta, owner)
+      amount <- assertParsed "allocation.nextIterationFunding" fundingAmountParser allocation.nextIterationFunding
 
-  let lockAlloc = view $ toInterface @V2.Allocation lock
-      (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
-      expectedMeta = reasonToMeta encodedReason filteredMeta
-  requireMatchExpected ("lock settlement", lockAlloc.settlement) settlement
-  requireMatchExpected ("lock allocation", lockAlloc.allocation) allocation with meta = expectedMeta
+      let filteredMeta = removeGovernanceMetadataKeys allocation.meta
+      (lock, lockCid, changeCid) <- governanceLock_lockForGovernance_impl
+        dso amount (fmap downcast inputHoldingCids) specification extraArgs owner requestedAt filteredMeta
 
-  pure V2.AllocationInstructionResult with
-    authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, fmap toInterfaceContractId $ optionalToList changeCid)]
-    output = V2.AllocationInstructionResult_Completed with allocationCid = toInterfaceContractId lockCid
-    meta = simpleHoldingTxMeta TxKind_MergeSplit (Some "lock for governance") None
+      let lockAlloc = view $ toInterface @V2.Allocation lock
+          (_, encodedReason) = lockTypeToCompatibilityPartyAndReason specification.kind
+          expectedMeta = reasonToMeta encodedReason filteredMeta
+      requireMatchExpected ("lock settlement", lockAlloc.settlement) settlement
+      requireMatchExpected ("lock allocation", lockAlloc.allocation) allocation with meta = expectedMeta
+
+      pure V2.AllocationInstructionResult with
+        authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, fmap toInterfaceContractId $ optionalToList changeCid)]
+        output = V2.AllocationInstructionResult_Completed with allocationCid = toInterfaceContractId lockCid
+        meta = simpleHoldingTxMeta TxKind_MergeSplit (Some "lock for governance") None
 
 governanceLockKindFromTypeAndSubject : CanAssert m => Text -> Text -> m GovernanceLockKind
 governanceLockKindFromTypeAndSubject type_ subject
@@ -1092,6 +1118,9 @@ assertParsed parsedType parser input =
       assertFail $ "Found " <> show numErrors <> " error" <> (if numErrors == 1 then "" else "s") <> " parsing " <> parsedType <>
         (if length errorsList > 5 then ". First five errors" else  "") <> ":\n\n" <>
         Text.intercalate "\n" (take 5 errorsList)
+
+--lockActionParser : Parser ExtraArgs LockAction
+--lockActionParser = Parser \extraArgs ->
 
 controllersParser : Text -> ControllerSpecificationParser
 controllersParser key =

@@ -52,6 +52,7 @@ module Splice.Testing.TokenStandard.WalletClientV2
     listAllocationsV1,
 
     allocateV2,
+    allocateV2WithExtraArgs,
     acceptAllocationInstructionV2,
     withdrawAllocationInstructionV2,
     withdrawAllocationV2,
@@ -75,6 +76,7 @@ module Splice.Testing.TokenStandard.WalletClientV2
     extractNextIterationAllocationCid,
 
     mkAllocationFactory_AllocateV2,
+    mkAllocationFactory_AllocateV2',
     mkAllocationInstruction_AcceptV2,
     mkAllocationInstruction_WithdrawV2,
     mkAllocation_WithdrawV2,
@@ -412,9 +414,14 @@ extractAllocationInstructionResultV1 result = error $ "Expected a AllocationInst
 allocateV2
   : MultiRegistry.MultiRegistry -> Party -> V2.SettlementInfo -> V2.AllocationSpecification -> Script V2.AllocationInstructionResult
 allocateV2 registries actor settlementInfo allocation = do
+  allocateV2WithExtraArgs registries actor settlementInfo allocation emptyExtraArgs
+
+allocateV2WithExtraArgs
+  : MultiRegistry.MultiRegistry -> Party -> V2.SettlementInfo -> V2.AllocationSpecification -> ExtraArgs -> Script V2.AllocationInstructionResult
+allocateV2WithExtraArgs registries actor settlementInfo allocation extraArgs = do
   registry <- MultiRegistry.getRegistryApiV2 registries allocation.admin
-  batch <- mkAllocationFactory_AllocateV2 registry actor settlementInfo allocation
-  extractAllocationInstructionResultV2 <$>executeSingletonTSABatch registries actor batch
+  batch <- mkAllocationFactory_AllocateV2' registry actor settlementInfo allocation extraArgs
+  extractAllocationInstructionResultV2 <$> executeSingletonTSABatch registries actor batch
 
 extractAllocationInstructionResultV2 : BatchingUtilityV2.TokenStandardActionResult -> V2.AllocationInstructionResult
 extractAllocationInstructionResultV2 (BatchingUtilityV2.TSAR_AllocationInstructionResultV2 result) = result
@@ -783,14 +790,19 @@ mkAllocationFactory_AllocateV1 registry allocation = do
 
 mkAllocationFactory_AllocateV2
   : V2.RegistryApi api => api -> Party -> V2.SettlementInfo -> V2.AllocationSpecification -> Script TSABatch
-mkAllocationFactory_AllocateV2 registryV2 actor settlement allocation = do
+mkAllocationFactory_AllocateV2 registryV2 actor settlement allocation =
+  mkAllocationFactory_AllocateV2' registryV2 actor settlement allocation emptyExtraArgs
+
+mkAllocationFactory_AllocateV2'
+  : V2.RegistryApi api => api -> Party -> V2.SettlementInfo -> V2.AllocationSpecification -> ExtraArgs -> Script TSABatch
+mkAllocationFactory_AllocateV2' registryV2 actor settlement allocation extraArgs = do
   now <- getTime
   enrichedChoice <- V2.getAllocationFactory registryV2 V2.AllocationFactory_Allocate with
     settlement
     allocation
     inputHoldingCids = []
     requestedAt = now
-    extraArgs = emptyExtraArgs
+    extraArgs
     actors = [actor]
   let action = BatchingUtilityV2.TSA_AllocationFactory_AllocateV2 BatchingUtilityV2.ChoiceCall with
         cid = TSU.toAnyContractId enrichedChoice.factoryCid
