@@ -944,6 +944,14 @@ substitutionControllersMetaKey = cipMetaPrefix <> "substitution-controllers"
 -- | Metadata key that sets the `vestingControllers` of a `GovernanceLock`.
 vestingControllersMetaKey = cipMetaPrefix <> "vesting-controllers"
 
+topUpAmountMetaKey = cipMetaPrefix <> "top-up-amount"
+
+mergeWithLocksMetaKey = cipMetaPrefix <> "merge-with-locks"
+
+topUpSvRewardCouponsMetaKey = cipMetaPrefix <> "top-up-with-sv-reward-coupons"
+
+topUpSvRewardCouponPercentageMetaKey = cipMetaPrefix <> "top-up-with-sv-reward-coupon-percentage"
+
 getOptionalMetadata : Text -> Metadata -> Optional Text
 getOptionalMetadata key meta = TextMap.lookup key meta.values
 
