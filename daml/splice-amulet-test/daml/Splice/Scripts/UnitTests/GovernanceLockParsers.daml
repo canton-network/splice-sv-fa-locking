@@ -42,6 +42,9 @@ testProvider = testParty "provider"
 invalidParty : Text
 invalidParty = "bad$party"
 
+invalidSVName : Text
+invalidSVName = "bad$SV"
+
 mkMeta : [(Text, Text)] -> Metadata
 mkMeta = Metadata . TextMap.fromList
 
@@ -148,6 +151,10 @@ test_governanceLockKindParser = do
     run featuredAppLockType (subject invalidParty)
   expectErrors ["Invalid provider for " <> provisionalFeaturedAppLockType <> ": " <> invalidParty] $
     run provisionalFeaturedAppLockType (subject invalidParty)
+
+  -- The subject of an SV lock must only contain alphanumeric characters or hyphens
+  expectErrors ["Invalid SV name for " <> superValidatorLockType <> ": " <> invalidSVName] $
+    run superValidatorLockType (subject invalidSVName)
 
 -- Metadata parser
 ------------------

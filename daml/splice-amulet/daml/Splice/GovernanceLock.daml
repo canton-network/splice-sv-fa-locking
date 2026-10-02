@@ -1044,13 +1044,16 @@ governanceLockKindFromTypeAndSubject : CanAssert m => Text -> Text -> m Governan
 governanceLockKindFromTypeAndSubject type_ subject
   | checkType featuredAppLockType = GLK_FeaturedApp <$> parseProvider
   | checkType provisionalFeaturedAppLockType = GLK_ProvisionalFeaturedApp <$> parseProvider
-  | checkType superValidatorLockType = pure $ GLK_SuperValidatorRightsOwner with svName = subject
+  | checkType superValidatorLockType = GLK_SuperValidatorRightsOwner <$> parseSvName
   | otherwise = assertFail $ "Invalid lock type: " <> type_
   where
     checkType = (==) type_
     parseProvider = case partyFromText subject of
       Some p -> pure p
       None -> assertFail $ "Invalid provider for " <> type_ <> ": " <> subject
+    parseSvName
+      | Text.isPred (\c -> c == "-" || Text.isAlphaNum c) subject = pure subject
+      | otherwise = assertFail $ "Invalid SV name for " <> type_ <> ": " <> subject
 
 makeCanonicalParty : Text -> Party
 makeCanonicalParty type_ = fromSome $ partyFromText $ type_ <> magicNamespace
