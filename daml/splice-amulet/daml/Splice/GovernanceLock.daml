@@ -881,6 +881,7 @@ data VestingLockKey = VestingLockKey with
     meta : Metadata
   deriving (Eq, Show, Serializable)
 
+-- | A proposal for a substitution of a governance lock.
 template GovernanceLockSubstitution with
     target : GovernanceLockKey
     newLockSpecification : GovernanceLockSpecification
@@ -888,7 +889,7 @@ template GovernanceLockSubstitution with
     owner : Party -- ^ Party that proposed the substitution
     amount : Decimal -- ^ Amount being substituted
     lockedAmulet : ContractId LockedAmulet -- ^ Amulet providing the funds
-    withdrawProposalControllers : ControllerSpecification
+    withdrawProposalControllers : ControllerSpecification  -- ^ Controllers that may withdraw the substitution proposal.
     pendingSubstituteApprovals : Map.Map Party SubstitutionApproval
   where
     signatory target.dso, owner
@@ -972,8 +973,8 @@ data GovernanceLockSubstitution_AcceptResult
   = GovernanceLockSubstitution_AcceptResult_Pending with
       proposalCid : ContractId GovernanceLockSubstitution
   | GovernanceLockSubstitution_AcceptResult_Complete with
-    lockCid : ContractId GovernanceLock
-    remainderCid : Optional (ContractId GovernanceLock)
+      lockCid : ContractId GovernanceLock
+      remainderCid : Optional (ContractId GovernanceLock)
   deriving (Eq, Show, Serializable)
 
 data GovernanceLockSubstitution_WithdrawResult
@@ -1154,7 +1155,6 @@ data AnySubstitution
 
 -- | Type to simplify passing in all the arguments required to create a substitution proposal.
 --
--- TODO: move this to a separate utlity pacakge `splice-governance-lock-utils`, which then also contains the codecs to and from TSv2 choices
 data CreateSubstitutionProposalArgs = CreateSubstitutionProposalArgs with
     dso : Party
     substitution : AnySubstitution
