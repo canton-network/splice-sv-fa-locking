@@ -1440,11 +1440,6 @@ lockTypeToCompatibilityPartyAndReason (GLK_SuperValidatorRightsOwner with svName
 maxComparableTime : Time
 maxComparableTime = addRelTime maxTime $ microseconds (-1)
 
-fetchAmount : ForOwner -> ContractId LockedAmulet -> Update Decimal
-fetchAmount forOwner holding = do
-  holdingView <- view . toInterface @Holding <$> fetchChecked forOwner holding
-  pure holdingView.amount
-
 -- Parsers
 -- =======
 
