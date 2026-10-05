@@ -618,17 +618,20 @@ testSubstitution_governanceLock = do
           exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
             args = CreateSubstitutionProposalArgs with
               dso
-              substitutedLock = SLS_Governance with
-                governanceKey = GovernanceLockKey with
+              substitution = AS_Governance with
+                governanceLockKey = GovernanceLockKey with
                   dso
                   owner = alice
                   specification = ownerControlledSpecification alice someSvKind
-                unlockControllers = ControllerSpecification [[bob]]
-                substitutionControllers = ControllerSpecification [[bob]]
-                vestingControllers = ControllerSpecification [[bob]]
-              proposer = bob
+                governanceSpecification = GovernanceLockSpecification with
+                  kind = GLK_SuperValidatorRightsOwner "TestSV"
+                  unlockControllers = ControllerSpecification [[bob]]
+                  substitutionControllers = ControllerSpecification [[bob]]
+                  vestingControllers = ControllerSpecification [[bob]]
+              owner = bob
               amount
               inputHoldingCids = map downcast inputHoldingCids
+              newLockMeta = mempty
               extraArgs = emptyExtraArgs with context
         errorIfLeft result
 
@@ -639,9 +642,9 @@ testSubstitution_governanceLock = do
 
   -- accept substitution
   let acceptOneProposal = do
-        (proposalCid, _)::_ <- query @SubstitutionProposal dso
+        (proposalCid, _)::_ <- query @GovernanceLockSubstitution dso
         result <- submitWithTransferContext registry (actAs [alice]) $ \context ->
-          exerciseCmd proposalCid SubstitutionProposal_Accept with
+          exerciseCmd proposalCid GovernanceLockSubstitution_Accept with
             actors = [ alice ]
             extraArgs = emptyExtraArgs with context
         errorIfLeft result
@@ -659,17 +662,20 @@ testSubstitution_governanceLock = do
     exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
       args = CreateSubstitutionProposalArgs with
         dso
-        substitutedLock = SLS_Governance with
-                governanceKey = GovernanceLockKey with
+        substitution = AS_Governance with
+                governanceLockKey = GovernanceLockKey with
                   dso
                   owner = alice
                   specification = ownerControlledSpecification alice someSvKind
-                unlockControllers = ControllerSpecification [[bob]]
-                substitutionControllers = ControllerSpecification [[bob]]
-                vestingControllers = ControllerSpecification [[bob]]
-        proposer = bob
+                governanceSpecification = GovernanceLockSpecification with
+                  kind = GLK_SuperValidatorRightsOwner "TestSV"
+                  unlockControllers = ControllerSpecification [[bob]]
+                  substitutionControllers = ControllerSpecification [[bob]]
+                  vestingControllers = ControllerSpecification [[bob]]
+        owner = bob
         amount = testLockAmount - testSubstAmount
         inputHoldingCids = map downcast inputHoldingCids
+        newLockMeta = mempty
         extraArgs = emptyExtraArgs with context
   errorIfLeft result
 
@@ -1036,6 +1042,20 @@ governanceLockV2 env owner amount kind meta = do
     V2.AllocationInstructionResult_Completed cid -> Right $ fromInterfaceContractId cid
     o -> Left $ UnknownError $ "Unexpected AllocationInstructionResult: " <> show o
 
+withdrawViaTokenStandard
+  :  forall i c r o t1 t2. (Choice i c r, HasField "output" r o, HasToInterface t1 i, HasFromInterface t2 i)
+  => ([Party] -> ExtraArgs -> c)
+  -> (o -> Optional (ContractId i))
+  -> TestEnv
+  -> ContractId t1
+  -> Party
+  -> Metadata
+  -> Script (Either SubmitError (Optional (ContractId t2)))
+withdrawViaTokenStandard choice getCid env cid actor meta = do
+  result <- submitWithTransferContext env.registriesEnv.amuletV2 (actAs actor)
+    \context -> exerciseCmd (toInterfaceContractId @i cid) $ choice [actor] ExtraArgs with context; meta
+  pure $ (fmap (fromInterfaceContractId @t2) . getCid . (.output)) <$> result
+
 withdrawTransferInstructionV1
   :  forall t1 t2. (HasToInterface t1 V1.TransferInstruction, HasFromInterface t2 V1.TransferInstruction)
   => TestEnv
@@ -1043,9 +1063,11 @@ withdrawTransferInstructionV1
   -> Party
   -> Metadata
   -> Script (Either SubmitError (Optional (ContractId t2)))
-withdrawTransferInstructionV1 env cid actor meta = do
-  result <- WalletClientV2.tryWithdrawTransferInstructionV1 env.registries actor (toInterfaceContractId cid) meta
-  pure $ fmap fromInterfaceContractId <$> result
+withdrawTransferInstructionV1 = withdrawViaTokenStandard
+  (\_ extraArgs -> V1.TransferInstruction_Withdraw with extraArgs)
+  (\case
+    V1.TransferInstructionResult_Pending cid -> Some cid
+    _ -> None)
 
 withdrawAllocationV2
   :  forall t1 t2. (HasToInterface t1 V2.Allocation, HasFromInterface t2 V2.Allocation)
@@ -1054,13 +1076,11 @@ withdrawAllocationV2
   -> Party
   -> Metadata
   -> Script (Either SubmitError (Optional (ContractId t2)))
-withdrawAllocationV2 env cid actor meta = do
-  result <- WalletClientV2.tryWithdrawAllocationV2Result env.registries actor env.instrId.admin (toInterfaceContractId cid) meta
-  pure $ fmap
-    (\case
-      V2.AllocationResult{output = V2.AllocationResult_Pending cid} -> Some $ fromInterfaceContractId cid
-      _ -> None)
-    result
+withdrawAllocationV2 = withdrawViaTokenStandard
+  (\actors extraArgs -> V2.Allocation_Withdraw with actors; extraArgs)
+  (\case
+    V2.AllocationResult_Pending cid -> Some cid
+    _ -> None)
 
 getExtraArgsForRounds : ChoiceContext -> ContractId IssuingMiningRound -> ContractId OpenMiningRound -> ExtraArgs
 getExtraArgsForRounds context issuingMiningRoundCid openRoundCid = ExtraArgs with

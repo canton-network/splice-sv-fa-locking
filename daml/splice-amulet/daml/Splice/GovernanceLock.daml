@@ -90,8 +90,8 @@ ownerControlledSpecification owner kind = GovernanceLockSpecification with
   substitutionControllers = ControllerSpecification [[owner]]
   vestingControllers = ControllerSpecification [[owner]]
 
-ownerControlledSingleSpecification : Party -> ControllerSpecification
-ownerControlledSingleSpecification owner = ControllerSpecification [[owner]]
+ownerControlled : Party -> ControllerSpecification
+ownerControlled owner = ControllerSpecification [[owner]]
 
 template GovernanceLock
   with
@@ -867,178 +867,324 @@ data VestingLockKey = VestingLockKey with
     specification : VestingLockSpecification
   deriving (Eq, Show, Serializable)
 
-data SubstitutionLockSpecification
-  = SLS_Governance with
-      governanceKey : GovernanceLockKey
-      unlockControllers : ControllerSpecification
-        -- ^ Controllers that can unlock the lock.
-      substitutionControllers : ControllerSpecification
-        -- ^ Controllers that can approve a substitution.
-      vestingControllers : ControllerSpecification
-        -- ^ Controllers that can withdraw vested funds once the lock is vesting. Copied to the VestingLock on unlock.
-  | SLS_Vesting with
-      vestingKey : VestingLockKey
-      vestingControllers : ControllerSpecification
-        -- ^ Controllers that can drive the return of vested funds to the owner.
-  deriving (Eq, Show, Serializable)
-
-substitutionLockSpecification_owner : SubstitutionLockSpecification -> Party
-substitutionLockSpecification_owner SLS_Governance { governanceKey } = governanceKey.owner
-substitutionLockSpecification_owner SLS_Vesting { vestingKey } = vestingKey.owner
-
-substitutionLockSpecification_substitutionController : SubstitutionLockSpecification -> ControllerSpecification
-substitutionLockSpecification_substitutionController SLS_Governance { governanceKey } = governanceKey.specification.substitutionControllers
-substitutionLockSpecification_substitutionController SLS_Vesting { vestingKey } = vestingKey.specification.vestingControllers
-
-template SubstitutionProposal with
-    dso : Party
-    substitutedLock : SubstitutionLockSpecification
-    proposer : Party -- ^ Party that proposed the substitution
+template GovernanceLockSubstitution with
+    target : GovernanceLockKey
+    newLockSpecification : GovernanceLockSpecification
+    newLockMeta : Metadata
+    owner : Party -- ^ Party that proposed the substitution
     amount : Decimal -- ^ Amount being substituted
     lockedAmulet : ContractId LockedAmulet -- ^ Amulet providing the funds
-    pendingSubstituteApprovals : Map.Map Party ()
+    withdrawProposalControllers : ControllerSpecification
+    pendingSubstituteApprovals : Map.Map Party SubstitutionApproval
   where
-    signatory dso, proposer
-    observer substitutionLockSpecification_owner substitutedLock
+    signatory target.dso, owner
+    observer allControllers $ substitutable_substituteController target <> withdrawProposalControllers
+    ensure target.specification.kind == newLockSpecification.kind
 
-    choice SubstitutionProposal_Accept : ()
+    choice GovernanceLockSubstitution_Accept : GovernanceLockSubstitution_AcceptResult
       with
-        actors : [ Party ]
+        actors : [Party]
         extraArgs : ExtraArgs
-        -- TODO: add actors as part of adding support for custom substitution controllers
       controller actors
       do
-        substitutionProposal_acceptImpl this self $ SubstitutionProposal_Accept with ..
+        abstractSubstitutionProposal_handleApprovals
+          governanceLockSubstitution_executeAccept
+          GovernanceLockSubstitution_AcceptResult_Pending
+          (==SubstitutionApproval_Approve)
+          this $ GovernanceLockSubstitution_Accept actors extraArgs
 
-    choice SubstitutionProposal_Withdraw : () -- FIXME: proper type, above as well
-      controller proposer
+    choice GovernanceLockSubstitution_Withdraw : GovernanceLockSubstitution_WithdrawResult
+      with
+        actors : [Party]
+      controller actors
       do
-        unlockAmulet (ForOwner with dso; owner = proposer) lockedAmulet
-        pure ()
-
-
-substitutionProposal_updateApprovals : SubstitutionProposal -> [Party] -> Update (Either (Map.Map Party ()) ())
-substitutionProposal_updateApprovals SubstitutionProposal{..} actors = do
-  result <- updateApprovals
-    (substitutionLockSpecification_substitutionController substitutedLock)
-    actors
-    ()
-    pendingSubstituteApprovals
-    (\_ -> True)
-  pure $ () <$ result
-
-substitutionProposal_acceptImpl : SubstitutionProposal -> ContractId SubstitutionProposal -> SubstitutionProposal_Accept -> Update ()
-substitutionProposal_acceptImpl this@(SubstitutionProposal with ..) _self arg@(SubstitutionProposal_Accept with ..) = do
-        recorded <- substitutionProposal_updateApprovals this actors
+        recorded <- updateApprovals withdrawProposalControllers actors SubstitutionApproval_Withdraw this.pendingSubstituteApprovals (==SubstitutionApproval_Withdraw)
         case recorded of
           Left stillPending -> do
-            _pendingLock <- create this with
+            pendingLock <- create this with
               pendingSubstituteApprovals = stillPending
-              -- originalLockCid = Some $ fromOptional self originalLockCid
-            pure ()
-          Right _ ->
-            substitutionProposal_executeAccept this arg
+            pure $ GovernanceLockSubstitution_WithdrawResult_Pending pendingLock
+          Right _ -> do
+            unlockAmulet (ForOwner with dso = target.dso; owner) lockedAmulet
+            pure $ GovernanceLockSubstitution_WithdrawResult_Withdrawn
 
-substitutionProposal_executeAccept : SubstitutionProposal -> SubstitutionProposal_Accept -> Update ()
-substitutionProposal_executeAccept (SubstitutionProposal with ..) (SubstitutionProposal_Accept with ..) = do
+template VestingLockSubstitution with
+    target : VestingLockKey
+    newLockSpecification : VestingLockSpecification
+    newLockMeta : Metadata
+    owner : Party -- ^ Party that proposed the substitution
+    amount : Decimal -- ^ Amount being substituted
+    lockedAmulet : ContractId LockedAmulet -- ^ Amulet providing the funds
+    withdrawProposalControllers : ControllerSpecification
+    pendingSubstituteApprovals : Map.Map Party SubstitutionApproval
+  where
+    signatory target.dso, owner
+    observer allControllers $ substitutable_substituteController target <> withdrawProposalControllers
+    ensure target.specification.kind == newLockSpecification.kind
+
+    choice VestingLockSubstitution_Accept : VestingLockSubstitution_AcceptResult
+      with
+        actors : [Party]
+        extraArgs : ExtraArgs
+      controller actors
+      do
+        abstractSubstitutionProposal_handleApprovals
+          vestingLockSubstitution_executeAccept
+          VestingLockSubstitution_AcceptResult_Pending
+          (==SubstitutionApproval_Approve)
+          this $ VestingLockSubstitution_Accept actors extraArgs
+
+    choice VestingLockSubstitution_Withdraw : VestingLockSubstitution_WithdrawResult
+      with
+        actors : [Party]
+      controller actors
+      do
+        recorded <- updateApprovals withdrawProposalControllers actors SubstitutionApproval_Withdraw this.pendingSubstituteApprovals (==SubstitutionApproval_Withdraw)
+        case recorded of
+          Left stillPending -> do
+            pendingLock <- create this with
+              pendingSubstituteApprovals = stillPending
+            pure $ VestingLockSubstitution_WithdrawResult_Pending pendingLock
+          Right _ -> do
+            unlockAmulet (ForOwner with dso = target.dso; owner) lockedAmulet
+            pure $ VestingLockSubstitution_WithdrawResult_Withdrawn
+
+data SubstitutionApproval
+    = SubstitutionApproval_Approve
+    | SubstitutionApproval_Withdraw
+  deriving (Eq, Show, Serializable)
+
+data GovernanceLockSubstitution_AcceptResult
+  = GovernanceLockSubstitution_AcceptResult_Pending with
+      proposalCid : ContractId GovernanceLockSubstitution
+  | GovernanceLockSubstitution_AcceptResult_Complete with
+    lockCid : ContractId GovernanceLock
+    remainderCid : Optional (ContractId GovernanceLock)
+  deriving (Eq, Show, Serializable)
+
+data GovernanceLockSubstitution_WithdrawResult
+    = GovernanceLockSubstitution_WithdrawResult_Pending (ContractId GovernanceLockSubstitution)
+    | GovernanceLockSubstitution_WithdrawResult_Withdrawn
+  deriving (Eq, Show, Serializable)
+
+data VestingLockSubstitution_AcceptResult
+  = VestingLockSubstitution_AcceptResult_Pending with
+      proposalCid : ContractId VestingLockSubstitution
+  | VestingLockSubstitution_AcceptResult_Complete with
+    lockCid : ContractId VestingLock
+    remainderCid : Optional (ContractId VestingLock)
+  deriving (Eq, Show, Serializable)
+
+data VestingLockSubstitution_WithdrawResult
+    = VestingLockSubstitution_WithdrawResult_Pending (ContractId VestingLockSubstitution)
+    | VestingLockSubstitution_WithdrawResult_Withdrawn
+  deriving (Eq, Show, Serializable)
+
+class Substitutable a where
+  substitutable_substituteController : a -> ControllerSpecification
+
+instance Substitutable GovernanceLockKey where
+  substitutable_substituteController = (.specification.substitutionControllers)
+
+instance Substitutable VestingLockKey where
+  substitutable_substituteController = (.specification.vestingControllers)
+
+
+abstractSubstitutionProposal_handleApprovals
+  : (Choice proposal accept result
+  , HasCreate proposal
+  , HasEnsure proposal
+  , HasField "actors" accept [Party]
+  , HasField "target" proposal k
+  , Substitutable k
+  , HasField "pendingSubstituteApprovals" proposal (Map Party SubstitutionApproval))
+  => (proposal -> accept -> Update result)
+  -> (ContractId proposal -> result)
+  -> (SubstitutionApproval -> Bool)
+  -> proposal -> accept -> Update result
+abstractSubstitutionProposal_handleApprovals executeAccept wrapPending approvalTest this arg = do
+  recorded <- updateApprovals
+    (substitutable_substituteController this.target)
+    arg.actors
+    SubstitutionApproval_Approve
+    this.pendingSubstituteApprovals
+    approvalTest
+  case recorded of
+    Left stillPending -> do
+      pendingLock <- create this with
+        pendingSubstituteApprovals = stillPending
+      pure $ wrapPending pendingLock
+    Right _ ->
+      executeAccept this arg
+
+
+governanceLockSubstitution_executeAccept : GovernanceLockSubstitution -> GovernanceLockSubstitution_Accept -> Update GovernanceLockSubstitution_AcceptResult
+governanceLockSubstitution_executeAccept (GovernanceLockSubstitution with ..) (GovernanceLockSubstitution_Accept with ..) = do
         -- fetch and archive the referenced lock
-        let substitutedLockOwner = ForOwner with dso; owner = substitutionLockSpecification_owner substitutedLock
-        (substitutedLockedAmulet, lockedAmount, mkLock) <- case substitutedLock of
-          SLS_Governance with .. -> do
-            (lockCid, lock) <- fetchByKey @GovernanceLock governanceKey
-            potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
-            let mkLock lockOwner lockAmount lockedAmulet = do
-                  create GovernanceLock with
-                    dso
-                    owner = lockOwner
-                    amount = lockAmount
-                    lockedAmulet
-                    specification = if lockOwner == lock.owner
-                                       then lock.specification else GovernanceLockSpecification with
-                      kind = lock.specification.kind
-                      unlockControllers
-                      substitutionControllers
-                      vestingControllers
-                    originalLockCid = Some $ fromOptional lockCid lock.originalLockCid
-                    requestedAt = lock.requestedAt
-                    meta = lock.meta
-                    pendingUnlockApprovals = mempty
-                  pure ()
-            pure (lock.lockedAmulet, lock.amount, mkLock)
-          SLS_Vesting with .. -> do
-            (lockCid, lock) <- fetchByKey @VestingLock vestingKey
-            potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
-            let mkLock lockOwner lockAmount lockedAmulet = do
-                  create VestingLock with
-                    dso
-                    owner = lockOwner
-                    lockedAmulet
-                    vestingPeriod = lock.vestingPeriod
-                    endTime = lock.endTime
-                    vestingAmount = lockAmount
-                    specification = if lockOwner == lock.owner
-                                       then lock.specification else VestingLockSpecification with
-                      kind = lock.specification.kind
-                      vestingControllers
-                    originalLockCid = Some $ fromOptional (coerceContractId lockCid) lock.originalLockCid
-                    meta = lock.meta
-                    pendingWithdrawApprovals = mempty
-                  pure () -- FIXME: decide whether we want an interface for locks, or use AnyContractId
-            pure (lock.lockedAmulet, lock.vestingAmount, mkLock)
+        let targetOwner = ForOwner with dso = target.dso; owner = target.owner
+        (lockCid, lock) <- fetchByKey @GovernanceLock target
+        potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
 
-        case amount `compare` lockedAmount of
+        remainderCid <- case amount `compare` lock.amount of
           LT -> do
             -- liquidate part of the amount
-            (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+            (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext target.dso extraArgs.context
 
             (Some (newLockedAmulet, remainingAmount), _unlockedAmulet) <-
-              partialUnlock substitutedLockOwner substitutedLockedAmulet amount context
+              partialUnlock targetOwner lock.lockedAmulet amount context
 
             requireMinimumLock state remainingAmount
             requireMinimumLock state amount
 
-            mkLock (substitutionLockSpecification_owner substitutedLock) remainingAmount newLockedAmulet
-            mkLock proposer amount lockedAmulet
+            -- There is remainder, so create the remainder lock.
+            remainderCid <- create GovernanceLock with
+              dso = target.dso
+              owner = lock.owner
+              amount = remainingAmount
+              specification = lock.specification
+              originalLockCid = Some $ fromOptional lockCid lock.originalLockCid
+              lockedAmulet = newLockedAmulet
+              requestedAt = lock.requestedAt
+              meta = lock.meta
+              pendingUnlockApprovals = mempty
+            pure $ Some remainderCid
+
           EQ -> do
             -- liquidate the whole amount
-            unlockAmulet substitutedLockOwner substitutedLockedAmulet
-            mkLock proposer amount lockedAmulet
+            unlockAmulet targetOwner lock.lockedAmulet
+            pure None
+
           GT ->
-            fail $ "substituted lock has less funds (" <> show lockedAmount <> ") than the amount proposed to be substituted (" <> show amount <> ")"
-        pure ()
+            fail $ "substituted lock has less funds (" <> show lock.amount <> ") than the amount proposed to be substituted (" <> show amount <> ")"
+
+        -- In any non-fail case, we create the new lock for the owner.
+        newLockCid <- create GovernanceLock with
+              dso = target.dso
+              owner
+              amount
+              lockedAmulet
+              specification = newLockSpecification
+              originalLockCid = None -- Could reuse the substitution's CID or leave it as the new GovernanceLock's CID like this.
+              requestedAt = lock.requestedAt -- This could also be the approval time, but this is still "the time this amount of amulet became locked".
+              meta = newLockMeta
+              pendingUnlockApprovals = mempty
+        pure GovernanceLockSubstitution_AcceptResult_Complete with
+          lockCid = newLockCid
+          remainderCid
+
+
+vestingLockSubstitution_executeAccept : VestingLockSubstitution -> VestingLockSubstitution_Accept -> Update VestingLockSubstitution_AcceptResult
+vestingLockSubstitution_executeAccept (VestingLockSubstitution with ..) (VestingLockSubstitution_Accept with ..) = do
+        -- fetch and archive the referenced lock
+        let targetOwner = ForOwner with dso = target.dso; owner = target.owner
+        (lockCid, lock) <- fetchByKey @VestingLock target
+        potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
+
+        remainderCid <- case amount `compare` lock.vestingAmount of
+          LT -> do
+            -- liquidate part of the amount
+            (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext target.dso extraArgs.context
+
+            (Some (newLockedAmulet, remainingAmount), _unlockedAmulet) <-
+              partialUnlock targetOwner lock.lockedAmulet amount context
+
+            requireMinimumLock state remainingAmount
+            requireMinimumLock state amount
+
+            remainderCid <- create VestingLock with
+              dso = target.dso
+              owner = lock.owner
+              vestingAmount = remainingAmount
+              lockedAmulet = newLockedAmulet
+              vestingPeriod = lock.vestingPeriod
+              endTime = lock.endTime
+              specification = lock.specification
+              originalLockCid = Some $ fromOptional (toAnyContractId lockCid) lock.originalLockCid
+              meta = lock.meta
+              pendingWithdrawApprovals = lock.pendingWithdrawApprovals -- FIXME: Not sure whether it should be empty or the old approvals.
+            pure $ Some remainderCid
+
+          EQ -> do
+            -- liquidate the whole amount
+            unlockAmulet targetOwner lock.lockedAmulet
+            pure None
+          GT ->
+            fail $ "substituted lock has less funds (" <> show lock.vestingAmount <> ") than the amount proposed to be substituted (" <> show amount <> ")"
+
+        -- In any non-fail case, we create the new lock for the owner.
+        newLockCid <- create VestingLock with
+          dso = target.dso
+          owner
+          vestingAmount = amount
+          lockedAmulet
+          vestingPeriod = lock.vestingPeriod
+          endTime = lock.endTime
+          specification = newLockSpecification
+          originalLockCid = None -- Could reuse the substitution's CID or leave it as the new GovernanceLock's CID like this.
+          meta = newLockMeta
+          pendingWithdrawApprovals = mempty
+        pure VestingLockSubstitution_AcceptResult_Complete with
+          lockCid = newLockCid
+          remainderCid
+
+
+data AnySubstitution
+  = AS_Governance with
+      governanceLockKey : GovernanceLockKey
+      governanceSpecification : GovernanceLockSpecification
+  | AS_Vesting with
+      vestingLockKey : VestingLockKey
+      vestingSpecification : VestingLockSpecification
+  deriving (Eq, Show, Serializable)
+
 
 -- | Type to simplify passing in all the arguments required to create a substitution proposal.
 --
 -- TODO: move this to a separate utlity pacakge `splice-governance-lock-utils`, which then also contains the codecs to and from TSv2 choices
 data CreateSubstitutionProposalArgs = CreateSubstitutionProposalArgs with
     dso : Party
-    substitutedLock : SubstitutionLockSpecification
-    proposer : Party -- ^ Party that proposed the substitution
+    substitution : AnySubstitution
+    newLockMeta : Metadata
+    owner : Party -- ^ Party that proposed the substitution
     amount : Decimal -- ^ Amount being substituted
     inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
     extraArgs : ExtraArgs
   deriving (Eq, Show, Serializable)
 
 
-createSubstitutionProposal : CreateSubstitutionProposalArgs -> Update (ContractId SubstitutionProposal, Optional (ContractId Amulet))
+createSubstitutionProposal : CreateSubstitutionProposalArgs -> Update (AnyContractId, Optional (ContractId Amulet))
 createSubstitutionProposal CreateSubstitutionProposalArgs {..} = do
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
   requireMinimumLock state amount
   let lockProperties = LockProperties with
         -- FIXME: context decscription reads a bit strangely
         -- FIXME: actually format this at all.
-        context = "" -- "Substitution proposal for " <> describeGovernanceLockKind substitutedLock.specification
+        context = "" -- "Substitution proposal for " <> describeGovernanceLockKind target.specification
         expiresAt = maxBound
-  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner = proposer) [(amount, lockProperties)] inputHoldingCids context ""
-  proposal <- create SubstitutionProposal with
-    dso
-    substitutedLock
-    proposer
-    amount
-    lockedAmulet
-    pendingSubstituteApprovals = mempty
-  pure $ (proposal, changeHolding)
-
+  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] inputHoldingCids context ""
+  case substitution of
+    (AS_Governance with ..) -> do
+      proposal <- create GovernanceLockSubstitution with
+        target = governanceLockKey
+        newLockSpecification = governanceSpecification
+        newLockMeta
+        owner
+        amount
+        lockedAmulet
+        withdrawProposalControllers = ownerControlled owner
+        pendingSubstituteApprovals = mempty
+      pure $ (toAnyContractId proposal, changeHolding)
+    (AS_Vesting with ..) -> do
+      proposal <- create VestingLockSubstitution with
+        target = vestingLockKey
+        newLockSpecification = vestingSpecification
+        newLockMeta
+        owner
+        amount
+        lockedAmulet
+        withdrawProposalControllers = ownerControlled owner
+        pendingSubstituteApprovals = mempty
+      pure $ (toAnyContractId proposal, changeHolding)
 
 -- Helpers for handling LockedAmulet
 -- =================================
