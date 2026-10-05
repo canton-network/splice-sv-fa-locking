@@ -113,7 +113,7 @@ template GovernanceLock
     signatory dso, owner
     observer governanceLockKindObservers specification.kind, governanceLockControllers specification
     ensure amount > 0.0 && either error (const True) (validateGovernanceLockControllers @(Either Text) specification)
-    key ( GovernanceLockKey with dso; owner; specification ) : GovernanceLockKey
+    key ( GovernanceLockKey with dso; owner; specification; meta ) : GovernanceLockKey
     maintainer key.dso
 
     choice GovernanceLock_Unlock : GovernanceLock_UnlockResult
@@ -491,7 +491,7 @@ template VestingLock
     observer allControllers specification.vestingControllers
     ensure vestingAmount > 0.0 && vestingPeriod >= aunit && either error (const True) (validateVestingLockControllers @(Either Text) specification)
 
-    key ( VestingLockKey with dso; owner; specification ) : VestingLockKey
+    key ( VestingLockKey with dso; owner; specification; vestingPeriod; endTime; meta ) : VestingLockKey
     maintainer key.dso
 
     choice VestingLock_Withdraw : VestingLock_WithdrawResult
@@ -869,12 +869,16 @@ data GovernanceLockKey = GovernanceLockKey with
     dso : Party
     owner : Party
     specification : GovernanceLockSpecification
+    meta : Metadata
   deriving (Eq, Show, Serializable)
 
 data VestingLockKey = VestingLockKey with
     dso : Party
     owner : Party
     specification : VestingLockSpecification
+    vestingPeriod : RelTime
+    endTime : Time
+    meta : Metadata
   deriving (Eq, Show, Serializable)
 
 template GovernanceLockSubstitution with

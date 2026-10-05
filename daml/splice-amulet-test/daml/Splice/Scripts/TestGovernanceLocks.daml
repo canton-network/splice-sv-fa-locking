@@ -623,6 +623,7 @@ testSubstitution_governanceLock = do
                   dso
                   owner = alice
                   specification = ownerControlledSpecification alice someSvKind
+                  meta = emptyMetadata
                 governanceSpecification = GovernanceLockSpecification with
                   kind = GLK_SuperValidatorRightsOwner "TestSV"
                   unlockControllers = ControllerSpecification [[bob]]
@@ -667,6 +668,7 @@ testSubstitution_governanceLock = do
                   dso
                   owner = alice
                   specification = ownerControlledSpecification alice someSvKind
+                  meta = emptyMetadata
                 governanceSpecification = GovernanceLockSpecification with
                   kind = GLK_SuperValidatorRightsOwner "TestSV"
                   unlockControllers = ControllerSpecification [[bob]]
