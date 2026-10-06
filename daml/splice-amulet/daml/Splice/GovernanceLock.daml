@@ -902,11 +902,19 @@ template GovernanceLockSubstitution with
         extraArgs : ExtraArgs
       controller actors
       do
-        abstractSubstitutionProposal_handleApprovals
-          governanceLockSubstitution_executeAccept
-          GovernanceLockSubstitution_AcceptResult_Pending
+        recorded <- updateApprovals
+          (substitutable_substituteController this.target)
+          arg.actors
+          SubstitutionApproval_Approve
+          this.pendingSubstituteApprovals
           (==SubstitutionApproval_Approve)
-          this $ GovernanceLockSubstitution_Accept actors extraArgs
+        case recorded of
+          Left stillPending -> do
+            pendingLock <- create this with
+              pendingSubstituteApprovals = stillPending
+            pure $ GovernanceLockSubstitution_AcceptResult_Pending pendingLock
+          Right _ ->
+            governanceLockSubstitution_executeAccept this $ GovernanceLockSubstitution_Accept actors extraArgs
 
     choice GovernanceLockSubstitution_Withdraw : GovernanceLockSubstitution_WithdrawResult
       with
@@ -943,11 +951,19 @@ template VestingLockSubstitution with
         extraArgs : ExtraArgs
       controller actors
       do
-        abstractSubstitutionProposal_handleApprovals
-          vestingLockSubstitution_executeAccept
-          VestingLockSubstitution_AcceptResult_Pending
+        recorded <- updateApprovals
+          (substitutable_substituteController this.target)
+          arg.actors
+          SubstitutionApproval_Approve
+          this.pendingSubstituteApprovals
           (==SubstitutionApproval_Approve)
-          this $ VestingLockSubstitution_Accept actors extraArgs
+        case recorded of
+          Left stillPending -> do
+            pendingLock <- create this with
+              pendingSubstituteApprovals = stillPending
+            pure $ VestingLockSubstitution_AcceptResult_Pending pendingLock
+          Right _ ->
+            vestingLockSubstitution_executeAccept this $ VestingLockSubstitution_Accept actors extraArgs
 
     choice VestingLockSubstitution_Withdraw : VestingLockSubstitution_WithdrawResult
       with
@@ -1005,142 +1021,114 @@ instance Substitutable VestingLockKey where
   substitutable_substituteController = (.specification.vestingControllers)
 
 
-abstractSubstitutionProposal_handleApprovals
-  : (Choice proposal accept result
-  , HasCreate proposal
-  , HasEnsure proposal
-  , HasField "actors" accept [Party]
-  , HasField "target" proposal k
-  , Substitutable k
-  , HasField "pendingSubstituteApprovals" proposal (Map Party SubstitutionApproval))
-  => (proposal -> accept -> Update result)
-  -> (ContractId proposal -> result)
-  -> (SubstitutionApproval -> Bool)
-  -> proposal -> accept -> Update result
-abstractSubstitutionProposal_handleApprovals executeAccept wrapPending approvalTest this arg = do
-  recorded <- updateApprovals
-    (substitutable_substituteController this.target)
-    arg.actors
-    SubstitutionApproval_Approve
-    this.pendingSubstituteApprovals
-    approvalTest
-  case recorded of
-    Left stillPending -> do
-      pendingLock <- create this with
-        pendingSubstituteApprovals = stillPending
-      pure $ wrapPending pendingLock
-    Right _ ->
-      executeAccept this arg
-
-
 governanceLockSubstitution_executeAccept : GovernanceLockSubstitution -> GovernanceLockSubstitution_Accept -> Update GovernanceLockSubstitution_AcceptResult
 governanceLockSubstitution_executeAccept (GovernanceLockSubstitution with ..) (GovernanceLockSubstitution_Accept with ..) = do
-        -- fetch and archive the referenced lock
-        let targetOwner = ForOwner with dso = target.dso; owner = target.owner
-        (lockCid, lock) <- fetchByKey @GovernanceLock target
-        potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
+  -- fetch and archive the referenced lock
+  let targetOwner = ForOwner with dso = target.dso; owner = target.owner
+  (lockCid, lock) <- fetchByKey @GovernanceLock target
+  potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
 
-        remainderCid <- case amount `compare` lock.amount of
-          LT -> do
-            -- liquidate part of the amount
-            (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext target.dso extraArgs.context
+  remainderCid <- case amount `compare` lock.amount of
+    LT -> do
+      -- liquidate part of the amount
+      (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext target.dso extraArgs.context
 
-            (Some (newLockedAmulet, remainingAmount), _unlockedAmulet) <-
-              partialUnlock targetOwner lock.lockedAmulet amount context
+      (Some (newLockedAmulet, remainingAmount), _unlockedAmulet) <-
+        partialUnlock targetOwner lock.lockedAmulet amount context
 
-            requireMinimumLock state remainingAmount
-            requireMinimumLock state amount
+      requireMinimumLock state remainingAmount
+      requireMinimumLock state amount
 
-            -- There is remainder, so create the remainder lock.
-            remainderCid <- create GovernanceLock with
-              dso = target.dso
-              owner = lock.owner
-              amount = remainingAmount
-              specification = lock.specification
-              originalLockCid = Some $ fromOptional lockCid lock.originalLockCid
-              lockedAmulet = newLockedAmulet
-              requestedAt = lock.requestedAt
-              meta = lock.meta
-              pendingUnlockApprovals = mempty
-            pure $ Some remainderCid
+      -- There is remainder, so create the remainder lock.
+      remainderCid <- create GovernanceLock with
+        dso = target.dso
+        owner = lock.owner
+        amount = remainingAmount
+        specification = lock.specification
+        originalLockCid = Some $ fromOptional lockCid lock.originalLockCid
+        lockedAmulet = newLockedAmulet
+        requestedAt = lock.requestedAt
+        meta = lock.meta
+        pendingUnlockApprovals = mempty
+      pure $ Some remainderCid
 
-          EQ -> do
-            -- liquidate the whole amount
-            unlockAmulet targetOwner lock.lockedAmulet
-            pure None
+    EQ -> do
+      -- liquidate the whole amount
+      unlockAmulet targetOwner lock.lockedAmulet
+      pure None
 
-          GT ->
-            fail $ "substituted lock has less funds (" <> show lock.amount <> ") than the amount proposed to be substituted (" <> show amount <> ")"
+    GT ->
+      fail $ "substituted lock has less funds (" <> show lock.amount <> ") than the amount proposed to be substituted (" <> show amount <> ")"
 
-        -- In any non-fail case, we create the new lock for the owner.
-        newLockCid <- create GovernanceLock with
-              dso = target.dso
-              owner
-              amount
-              lockedAmulet
-              specification = newLockSpecification
-              originalLockCid = None -- Could reuse the substitution's CID or leave it as the new GovernanceLock's CID like this.
-              requestedAt = lock.requestedAt -- This could also be the approval time, but this is still "the time this amount of amulet became locked".
-              meta = newLockMeta
-              pendingUnlockApprovals = mempty
-        pure GovernanceLockSubstitution_AcceptResult_Complete with
-          lockCid = newLockCid
-          remainderCid
+  -- In any non-fail case, we create the new lock for the owner.
+  newLockCid <- create GovernanceLock with
+        dso = target.dso
+        owner
+        amount
+        lockedAmulet
+        specification = newLockSpecification
+        originalLockCid = None -- Could reuse the substitution's CID or leave it as the new GovernanceLock's CID like this.
+        requestedAt = lock.requestedAt -- This could also be the approval time, but this is still "the time this amount of amulet became locked".
+        meta = newLockMeta
+        pendingUnlockApprovals = mempty
+  pure GovernanceLockSubstitution_AcceptResult_Complete with
+    lockCid = newLockCid
+    remainderCid
 
 
 vestingLockSubstitution_executeAccept : VestingLockSubstitution -> VestingLockSubstitution_Accept -> Update VestingLockSubstitution_AcceptResult
 vestingLockSubstitution_executeAccept (VestingLockSubstitution with ..) (VestingLockSubstitution_Accept with ..) = do
-        -- fetch and archive the referenced lock
-        let targetOwner = ForOwner with dso = target.dso; owner = target.owner
-        (lockCid, lock) <- fetchByKey @VestingLock target
-        potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
+  -- fetch and archive the referenced lock
+  let targetOwner = ForOwner with dso = target.dso; owner = target.owner
+  (lockCid, lock) <- fetchByKey @VestingLock target
+  potentiallyUnsafeArchive lockCid -- Should create fetchByKeyAndArchive
 
-        remainderCid <- case amount `compare` lock.vestingAmount of
-          LT -> do
-            -- liquidate part of the amount
-            (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext target.dso extraArgs.context
+  remainderCid <- case amount `compare` lock.vestingAmount of
+    LT -> do
+      -- liquidate part of the amount
+      (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext target.dso extraArgs.context
 
-            (Some (newLockedAmulet, remainingAmount), _unlockedAmulet) <-
-              partialUnlock targetOwner lock.lockedAmulet amount context
+      (Some (newLockedAmulet, remainingAmount), _unlockedAmulet) <-
+        partialUnlock targetOwner lock.lockedAmulet amount context
 
-            requireMinimumLock state remainingAmount
-            requireMinimumLock state amount
+      requireMinimumLock state remainingAmount
+      requireMinimumLock state amount
 
-            remainderCid <- create VestingLock with
-              dso = target.dso
-              owner = lock.owner
-              vestingAmount = remainingAmount
-              lockedAmulet = newLockedAmulet
-              vestingPeriod = lock.vestingPeriod
-              endTime = lock.endTime
-              specification = lock.specification
-              originalLockCid = Some $ fromOptional (toAnyContractId lockCid) lock.originalLockCid
-              meta = lock.meta
-              pendingWithdrawApprovals = lock.pendingWithdrawApprovals -- FIXME: Not sure whether it should be empty or the old approvals.
-            pure $ Some remainderCid
+      remainderCid <- create VestingLock with
+        dso = target.dso
+        owner = lock.owner
+        vestingAmount = remainingAmount
+        lockedAmulet = newLockedAmulet
+        vestingPeriod = lock.vestingPeriod
+        endTime = lock.endTime
+        specification = lock.specification
+        originalLockCid = Some $ fromOptional (toAnyContractId lockCid) lock.originalLockCid
+        meta = lock.meta
+        pendingWithdrawApprovals = lock.pendingWithdrawApprovals -- FIXME: Not sure whether it should be empty or the old approvals.
+      pure $ Some remainderCid
 
-          EQ -> do
-            -- liquidate the whole amount
-            unlockAmulet targetOwner lock.lockedAmulet
-            pure None
-          GT ->
-            fail $ "substituted lock has less funds (" <> show lock.vestingAmount <> ") than the amount proposed to be substituted (" <> show amount <> ")"
+    EQ -> do
+      -- liquidate the whole amount
+      unlockAmulet targetOwner lock.lockedAmulet
+      pure None
+    GT ->
+      fail $ "substituted lock has less funds (" <> show lock.vestingAmount <> ") than the amount proposed to be substituted (" <> show amount <> ")"
 
-        -- In any non-fail case, we create the new lock for the owner.
-        newLockCid <- create VestingLock with
-          dso = target.dso
-          owner
-          vestingAmount = amount
-          lockedAmulet
-          vestingPeriod = lock.vestingPeriod
-          endTime = lock.endTime
-          specification = newLockSpecification
-          originalLockCid = None -- Could reuse the substitution's CID or leave it as the new GovernanceLock's CID like this.
-          meta = newLockMeta
-          pendingWithdrawApprovals = mempty
-        pure VestingLockSubstitution_AcceptResult_Complete with
-          lockCid = newLockCid
-          remainderCid
+  -- In any non-fail case, we create the new lock for the owner.
+  newLockCid <- create VestingLock with
+    dso = target.dso
+    owner
+    vestingAmount = amount
+    lockedAmulet
+    vestingPeriod = lock.vestingPeriod
+    endTime = lock.endTime
+    specification = newLockSpecification
+    originalLockCid = None -- Could reuse the substitution's CID or leave it as the new GovernanceLock's CID like this.
+    meta = newLockMeta
+    pendingWithdrawApprovals = mempty
+  pure VestingLockSubstitution_AcceptResult_Complete with
+    lockCid = newLockCid
+    remainderCid
 
 
 data AnySubstitution
