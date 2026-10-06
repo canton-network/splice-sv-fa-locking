@@ -913,14 +913,14 @@ template GovernanceLockSubstitution with
     owner : Party -- ^ Party that proposed the substitution
     amount : Decimal -- ^ Amount being substituted
     lockedAmulet : ContractId LockedAmulet -- ^ Amulet providing the funds
-    withdrawProposalControllers : ControllerSpecification  -- ^ Controllers that may withdraw the substitution proposal.
+    withdrawSubstitutionControllers : ControllerSpecification  -- ^ Controllers that may withdraw the substitution proposal.
     pendingSubstituteApprovals : Map.Map Party SubstitutionApproval
     requestedAt : Time -- ^ Time of the request to create the proposal.
-    originalProposalCid : Optional (ContractId V2.AllocationInstruction)
+    originalSubstitutionCid : Optional (ContractId V2.AllocationInstruction)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
     signatory target.dso, owner
-    observer allControllers $ substitutable_substituteController target <> withdrawProposalControllers
+    observer allControllers $ substitutable_substituteController target <> withdrawSubstitutionControllers
     ensure target.specification.kind == newLockSpecification.kind
 
     choice GovernanceLockSubstitution_Accept : GovernanceLockSubstitution_AcceptResult
@@ -941,16 +941,16 @@ template GovernanceLockSubstitution with
     interface instance V2.AllocationInstruction for GovernanceLockSubstitution where
       -- Mirrors the metadata that the `GovernanceLock` created on acceptance will report through its own
       -- `V2.Allocation` view, so that `AllocationView.allocation` only loses the encoded target on acceptance.
-      view = substitution_allocationView target.dso target.specification.kind owner amount (encodeGovernanceLockSpecMetadata newLockSpecification newLockMeta) requestedAt lockedAmulet originalProposalCid
-        (substitutable_substituteController target) withdrawProposalControllers pendingSubstituteApprovals (governanceLockKeyToMeta target)
+      view = substitution_allocationView target.dso target.specification.kind owner amount (encodeGovernanceLockSpecMetadata newLockSpecification newLockMeta) requestedAt lockedAmulet originalSubstitutionCid
+        (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (governanceLockKeyToMeta target)
 
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
         -- `AllocationInstruction_Accept` is nonconsuming, so archive here
         potentiallyUnsafeArchive self
         result <- governanceLockSubstitution_acceptImpl (coerceContractId self) this actors extraArgs
         pure $ case result of
-          GovernanceLockSubstitution_AcceptResult_Pending proposalCid ->
-            substitutionInstructionResult_pending (toInterfaceContractId proposalCid) substitutionAcceptMeta
+          GovernanceLockSubstitution_AcceptResult_Pending substitutionCid ->
+            substitutionInstructionResult_pending (toInterfaceContractId substitutionCid) substitutionAcceptMeta
           GovernanceLockSubstitution_AcceptResult_Complete lockCid _ ->
             substitutionInstructionResult_completed (toInterfaceContractId lockCid)
       allocationInstruction_withdrawImpl self V2.AllocationInstruction_Withdraw{..} = do
@@ -958,8 +958,8 @@ template GovernanceLockSubstitution with
         potentiallyUnsafeArchive self
         result <- governanceLockSubstitution_withdrawImpl (coerceContractId self) this actors
         pure $ case result of
-          GovernanceLockSubstitution_WithdrawResult_Pending proposalCid ->
-            substitutionInstructionResult_pending (toInterfaceContractId proposalCid) substitutionWithdrawMeta
+          GovernanceLockSubstitution_WithdrawResult_Pending substitutionCid ->
+            substitutionInstructionResult_pending (toInterfaceContractId substitutionCid) substitutionWithdrawMeta
           GovernanceLockSubstitution_WithdrawResult_Withdrawn unlockedAmulet ->
             substitutionInstructionResult_failed unlockedAmulet
       allocationInstruction_acceptExtraObservers _ = observer this
@@ -972,14 +972,14 @@ template VestingLockSubstitution with
     owner : Party -- ^ Party that proposed the substitution
     amount : Decimal -- ^ Amount being substituted
     lockedAmulet : ContractId LockedAmulet -- ^ Amulet providing the funds
-    withdrawProposalControllers : ControllerSpecification
+    withdrawSubstitutionControllers : ControllerSpecification
     pendingSubstituteApprovals : Map.Map Party SubstitutionApproval
     requestedAt : Time -- ^ Time of the request to create the proposal.
-    originalProposalCid : Optional (ContractId V2.AllocationInstruction)
+    originalSubstitutionCid : Optional (ContractId V2.AllocationInstruction)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
     signatory target.dso, owner
-    observer allControllers $ substitutable_substituteController target <> withdrawProposalControllers
+    observer allControllers $ substitutable_substituteController target <> withdrawSubstitutionControllers
     ensure target.specification.kind == newLockSpecification.kind
 
     choice VestingLockSubstitution_Accept : VestingLockSubstitution_AcceptResult
@@ -998,15 +998,15 @@ template VestingLockSubstitution with
         vestingLockSubstitution_withdrawImpl self this actors
 
     interface instance V2.AllocationInstruction for VestingLockSubstitution where
-      view = substitution_allocationView target.dso target.specification.kind owner amount newLockMeta requestedAt lockedAmulet originalProposalCid
-        (substitutable_substituteController target) withdrawProposalControllers pendingSubstituteApprovals (vestingLockKeyToMeta target)
+      view = substitution_allocationView target.dso target.specification.kind owner amount newLockMeta requestedAt lockedAmulet originalSubstitutionCid
+        (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (vestingLockKeyToMeta target)
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
         -- `AllocationInstruction_Accept` is nonconsuming, so archive here
         potentiallyUnsafeArchive self
         result <- vestingLockSubstitution_acceptImpl (coerceContractId self) this actors extraArgs
         pure $ case result of
-          VestingLockSubstitution_AcceptResult_Pending proposalCid ->
-            substitutionInstructionResult_pending (toInterfaceContractId proposalCid) substitutionAcceptMeta
+          VestingLockSubstitution_AcceptResult_Pending substitutionCid ->
+            substitutionInstructionResult_pending (toInterfaceContractId substitutionCid) substitutionAcceptMeta
           VestingLockSubstitution_AcceptResult_Complete lockCid _ ->
             substitutionInstructionResult_completed (toInterfaceContractId lockCid)
       allocationInstruction_withdrawImpl self V2.AllocationInstruction_Withdraw{..} = do
@@ -1014,8 +1014,8 @@ template VestingLockSubstitution with
         potentiallyUnsafeArchive self
         result <- vestingLockSubstitution_withdrawImpl (coerceContractId self) this actors
         pure $ case result of
-          VestingLockSubstitution_WithdrawResult_Pending proposalCid ->
-            substitutionInstructionResult_pending (toInterfaceContractId proposalCid) substitutionWithdrawMeta
+          VestingLockSubstitution_WithdrawResult_Pending substitutionCid ->
+            substitutionInstructionResult_pending (toInterfaceContractId substitutionCid) substitutionWithdrawMeta
           VestingLockSubstitution_WithdrawResult_Withdrawn unlockedAmulet ->
             substitutionInstructionResult_failed unlockedAmulet
       allocationInstruction_acceptExtraObservers _ = observer this
@@ -1028,7 +1028,7 @@ data SubstitutionApproval
 
 data GovernanceLockSubstitution_AcceptResult
   = GovernanceLockSubstitution_AcceptResult_Pending with
-      proposalCid : ContractId GovernanceLockSubstitution
+      substitutionCid : ContractId GovernanceLockSubstitution
   | GovernanceLockSubstitution_AcceptResult_Complete with
       lockCid : ContractId GovernanceLock
       remainderCid : Optional (ContractId GovernanceLock)
@@ -1041,7 +1041,7 @@ data GovernanceLockSubstitution_WithdrawResult
 
 data VestingLockSubstitution_AcceptResult
   = VestingLockSubstitution_AcceptResult_Pending with
-      proposalCid : ContractId VestingLockSubstitution
+      substitutionCid : ContractId VestingLockSubstitution
   | VestingLockSubstitution_AcceptResult_Complete with
     lockCid : ContractId VestingLock
     remainderCid : Optional (ContractId VestingLock)
@@ -1134,7 +1134,7 @@ governanceLockSubstitution_acceptImpl self this@GovernanceLockSubstitution{..} a
   case recorded of
     Left stillPending -> GovernanceLockSubstitution_AcceptResult_Pending <$> create this with
       pendingSubstituteApprovals = stillPending
-      originalProposalCid = Some $ fromOptional (toInterfaceContractId self) originalProposalCid
+      originalSubstitutionCid = Some $ fromOptional (toInterfaceContractId self) originalSubstitutionCid
     Right _ -> governanceLockSubstitution_executeAccept this $ GovernanceLockSubstitution_Accept actors extraArgs
 
 vestingLockSubstitution_acceptImpl : ContractId VestingLockSubstitution -> VestingLockSubstitution -> [Party] -> ExtraArgs -> Update VestingLockSubstitution_AcceptResult
@@ -1148,27 +1148,27 @@ vestingLockSubstitution_acceptImpl self this@VestingLockSubstitution{..} actors 
   case recorded of
     Left stillPending -> VestingLockSubstitution_AcceptResult_Pending <$> create this with
       pendingSubstituteApprovals = stillPending
-      originalProposalCid = Some $ fromOptional (toInterfaceContractId self) originalProposalCid
+      originalSubstitutionCid = Some $ fromOptional (toInterfaceContractId self) originalSubstitutionCid
     Right _ -> vestingLockSubstitution_executeAccept this $ VestingLockSubstitution_Accept actors extraArgs
 
 governanceLockSubstitution_withdrawImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> Update GovernanceLockSubstitution_WithdrawResult
 governanceLockSubstitution_withdrawImpl self this actors = do
-  recorded <- updateApprovals this.withdrawProposalControllers actors SubstitutionApproval_Withdraw this.pendingSubstituteApprovals (== SubstitutionApproval_Withdraw)
+  recorded <- updateApprovals this.withdrawSubstitutionControllers actors SubstitutionApproval_Withdraw this.pendingSubstituteApprovals (== SubstitutionApproval_Withdraw)
   case recorded of
     Left stillPending -> GovernanceLockSubstitution_WithdrawResult_Pending <$> create this with
       pendingSubstituteApprovals = stillPending
-      originalProposalCid = Some $ fromOptional (toInterfaceContractId self) this.originalProposalCid
+      originalSubstitutionCid = Some $ fromOptional (toInterfaceContractId self) this.originalSubstitutionCid
     Right _ -> do
       (unlockedAmulet, _) <- unlockAmulet (ForOwner with dso = this.target.dso; owner = this.owner) this.lockedAmulet
       pure $ GovernanceLockSubstitution_WithdrawResult_Withdrawn unlockedAmulet
 
 vestingLockSubstitution_withdrawImpl : ContractId VestingLockSubstitution -> VestingLockSubstitution -> [Party] -> Update VestingLockSubstitution_WithdrawResult
 vestingLockSubstitution_withdrawImpl self this actors = do
-  recorded <- updateApprovals this.withdrawProposalControllers actors SubstitutionApproval_Withdraw this.pendingSubstituteApprovals (== SubstitutionApproval_Withdraw)
+  recorded <- updateApprovals this.withdrawSubstitutionControllers actors SubstitutionApproval_Withdraw this.pendingSubstituteApprovals (== SubstitutionApproval_Withdraw)
   case recorded of
     Left stillPending -> VestingLockSubstitution_WithdrawResult_Pending <$> create this with
       pendingSubstituteApprovals = stillPending
-      originalProposalCid = Some $ fromOptional (toInterfaceContractId self) this.originalProposalCid
+      originalSubstitutionCid = Some $ fromOptional (toInterfaceContractId self) this.originalSubstitutionCid
     Right _ -> do
       (unlockedAmulet, _) <- unlockAmulet (ForOwner with dso = this.target.dso; owner = this.owner) this.lockedAmulet
       pure $ VestingLockSubstitution_WithdrawResult_Withdrawn unlockedAmulet
@@ -1234,9 +1234,9 @@ substitution_allocationView
   -> Map.Map Party SubstitutionApproval
   -> Metadata -- ^ Encoded target, added to `allocation.meta`.
   -> V2.AllocationInstructionView
-substitution_allocationView admin kind proposer amount newLockMeta requestedAt lockedAmulet originalProposalCid acceptControllers withdrawControllers pendingSubstituteApprovals targetMeta =
+substitution_allocationView admin kind proposer amount newLockMeta requestedAt lockedAmulet originalSubstitutionCid acceptControllers withdrawControllers pendingSubstituteApprovals targetMeta =
   V2.AllocationInstructionView with
-    originalInstructionCid = originalProposalCid
+    originalInstructionCid = originalSubstitutionCid
     settlement = V2.SettlementInfo with
       executors = [admin]
       id = fst $ governanceLockKindToTypeAndSubject kind
@@ -1266,7 +1266,7 @@ substitutionAcceptMeta : Metadata
 substitutionAcceptMeta = simpleHoldingTxMeta TxKind_Unlock (Some "substitute governance lock") None
 
 substitutionWithdrawMeta : Metadata
-substitutionWithdrawMeta = simpleHoldingTxMeta TxKind_Unlock (Some "withdraw governance lock substitution proposal") None
+substitutionWithdrawMeta = simpleHoldingTxMeta TxKind_Unlock (Some "withdraw governance lock substitution") None
 
 substitutionInstructionResult_pending : ContractId V2.AllocationInstruction -> Metadata -> V2.AllocationInstructionResult
 substitutionInstructionResult_pending allocationInstructionCid meta = V2.AllocationInstructionResult with
@@ -1299,7 +1299,7 @@ data AnySubstitution
 
 -- | Type to simplify passing in all the arguments required to create a substitution proposal.
 --
-data CreateSubstitutionProposalArgs = CreateSubstitutionProposalArgs with
+data CreateSubstitutionArgs = CreateSubstitutionArgs with
     dso : Party
     substitution : AnySubstitution
     newLockMeta : Metadata
@@ -1311,8 +1311,8 @@ data CreateSubstitutionProposalArgs = CreateSubstitutionProposalArgs with
   deriving (Eq, Show, Serializable)
 
 
-createSubstitutionProposal : CreateSubstitutionProposalArgs -> Update (ContractId V2.AllocationInstruction, V2.AllocationInstruction, Optional (ContractId Amulet))
-createSubstitutionProposal CreateSubstitutionProposalArgs {..} = do
+createSubstitution : CreateSubstitutionArgs -> Update (ContractId V2.AllocationInstruction, V2.AllocationInstruction, Optional (ContractId Amulet))
+createSubstitution CreateSubstitutionArgs {..} = do
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
   requireMinimumLock state amount
   let lockProperties = LockProperties with
@@ -1324,33 +1324,33 @@ createSubstitutionProposal CreateSubstitutionProposalArgs {..} = do
   let forOwner = ForOwner with dso; owner
   case substitution of
     (AS_Governance with ..) -> do
-      proposalCid <- create GovernanceLockSubstitution with
+      substitutionCid <- create GovernanceLockSubstitution with
         target = governanceLockKey
         newLockSpecification = governanceSpecification
         newLockMeta
         owner
         amount
         lockedAmulet
-        withdrawProposalControllers = ownerControlled owner
+        withdrawSubstitutionControllers = ownerControlled owner
         pendingSubstituteApprovals = mempty
         requestedAt
-        originalProposalCid = None
-      proposal <- fetchChecked forOwner proposalCid
-      pure (toInterfaceContractId proposalCid, toInterface proposal, changeHolding)
+        originalSubstitutionCid = None
+      substitution <- fetchChecked forOwner substitutionCid
+      pure (toInterfaceContractId substitutionCid, toInterface substitution, changeHolding)
     (AS_Vesting with ..) -> do
-      proposalCid <- create VestingLockSubstitution with
+      substitutionCid <- create VestingLockSubstitution with
         target = vestingLockKey
         newLockSpecification = vestingSpecification
         newLockMeta
         owner
         amount
         lockedAmulet
-        withdrawProposalControllers = ownerControlled owner
+        withdrawSubstitutionControllers = ownerControlled owner
         pendingSubstituteApprovals = mempty
         requestedAt
-        originalProposalCid = None
-      proposal <- fetchChecked forOwner proposalCid
-      pure (toInterfaceContractId proposalCid, toInterface proposal, changeHolding)
+        originalSubstitutionCid = None
+      substitution <- fetchChecked forOwner substitutionCid
+      pure (toInterfaceContractId substitutionCid, toInterface substitution, changeHolding)
 
 -- Helpers for handling LockedAmulet
 -- =================================
@@ -1604,7 +1604,7 @@ governanceLock_allocationFactoryV2_allocateImpl dso V2.AllocationFactory_Allocat
   let inputs = fmap downcast inputHoldingCids
   meta <- parseGovernanceLockMetadata allocation.meta
   if TextMap.member substitutionTargetOwnerMetaKey meta.values
-    then governanceLock_allocationFactoryV2_proposeSubstitutionImpl dso owner settlement allocation meta requestedAt inputs extraArgs
+    then governanceLock_allocationFactoryV2_createSubstitutionImpl dso owner settlement allocation meta requestedAt inputs extraArgs
     else governanceLock_allocationFactoryV2_lockImpl dso owner settlement allocation requestedAt inputs extraArgs
 
 governanceLock_allocationFactoryV2_lockImpl
@@ -1628,14 +1628,14 @@ governanceLock_allocationFactoryV2_lockImpl dso owner settlement allocation requ
     output = V2.AllocationInstructionResult_Completed with allocationCid = toInterfaceContractId lockCid
     meta = simpleHoldingTxMeta TxKind_MergeSplit (Some "lock for governance") None
 
-governanceLock_allocationFactoryV2_proposeSubstitutionImpl
+governanceLock_allocationFactoryV2_createSubstitutionImpl
   : Party -> Party -> V2.SettlementInfo -> V2.AllocationSpecification -> Metadata -> Time -> [ContractId Holding] -> ExtraArgs
   -> Update V2.AllocationInstructionResult
-governanceLock_allocationFactoryV2_proposeSubstitutionImpl dso owner settlement allocation meta requestedAt inputs extraArgs = do
+governanceLock_allocationFactoryV2_createSubstitutionImpl dso owner settlement allocation meta requestedAt inputs extraArgs = do
   substitution <- assertParsed "substitution" substitutionTSv2Parser (dso, settlement.id, meta, owner)
   amount <- assertParsed "allocation.nextIterationFunding" fundingAmountParser allocation.nextIterationFunding
 
-  (proposalCid, proposal, changeCid) <- createSubstitutionProposal CreateSubstitutionProposalArgs with
+  (substitutionCid, substitution, changeCid) <- createSubstitution CreateSubstitutionArgs with
     dso
     substitution
     newLockMeta = removeGovernanceMetadataKeys meta
@@ -1645,14 +1645,14 @@ governanceLock_allocationFactoryV2_proposeSubstitutionImpl dso owner settlement 
     extraArgs
     requestedAt
 
-  let proposalView = view proposal
-  requireMatchExpected ("substitution proposal settlement", proposalView.settlement) settlement
-  requireMatchExpected ("substitution proposal allocation", proposalView.allocation) allocation with meta = proposalView.allocation.meta
+  let substitutionView = view substitution
+  requireMatchExpected ("substitution settlement", substitutionView.settlement) settlement
+  requireMatchExpected ("substitution allocation", substitutionView.allocation) allocation with meta = substitutionView.allocation.meta
 
   pure V2.AllocationInstructionResult with
     authorizerChangeCids = TextMap.fromList [(amuletInstrumentIdName, fmap toInterfaceContractId $ optionalToList changeCid)]
-    output = V2.AllocationInstructionResult_Pending with allocationInstructionCid = proposalCid
-    meta = simpleHoldingTxMeta TxKind_MergeSplit (Some "propose governance lock substitution") None
+    output = V2.AllocationInstructionResult_Pending with allocationInstructionCid = substitutionCid
+    meta = simpleHoldingTxMeta TxKind_MergeSplit (Some "create governance lock substitution") None
 
 governanceLockKindFromTypeAndSubject : CanAssert m => Text -> Text -> m GovernanceLockKind
 governanceLockKindFromTypeAndSubject type_ subject

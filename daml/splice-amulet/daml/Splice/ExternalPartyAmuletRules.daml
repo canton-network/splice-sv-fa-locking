@@ -158,10 +158,10 @@ template ExternalPartyAmuletRules
 
     nonconsuming choice ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution : ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult
       with
-        args : CreateSubstitutionProposalArgs
+        args : CreateSubstitutionArgs
       controller args.owner
       do
-        (proposal, _, changeHolding) <- createSubstitutionProposal args
+        (proposal, _, changeHolding) <- createSubstitution args
         pure ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult with
           proposal
           changeHolding
