@@ -56,7 +56,7 @@ test_lockTypeToCompatibilityPartyAndReason = do
     -- Fully explicit case, to ensure that the specification lines up.
     assertEq
       (lockTypeToCompatibilityPartyAndReason $ GLK_SuperValidatorRightsOwner "someSv")
-      (superValidatorLockCanonicalParty, "lock-subject=someSv")
+      (superValidatorLockCanonicalParty, lockSubjectMemo "someSv")
 
 -- | Round-trip testing to cover the GovernanceLockKind space in the parsers
 test_governanceLockSpecificationTSv1_roundTrip : Script ()
@@ -65,9 +65,9 @@ test_governanceLockSpecificationTSv1_roundTrip = do
                  svName = "some-other-sv"
     assertRoundTrip serializeThenParse $ ownerControlledSpecification testOwner $ GLK_FeaturedApp with
                  provider = fromSome $ partyFromText "some-other-sv"
-    assertRoundTrip parseThenSerialize $ (featuredAppLockCanonicalParty, "lock-subject=someFA::122abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcab")
+    assertRoundTrip parseThenSerialize $ (featuredAppLockCanonicalParty, lockSubjectMemo "someFA::122abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcab")
   where
-    specificationFromReceiverAndReason' (party, reason) = parseGovernanceLockSpecificationTSv1 testOwner party $ Metadata $ TextMap.singleton reasonMetaKey reason
+    specificationFromReceiverAndReason' (party, reason) = fst <$> parseGovernanceLockSpecificationTSv1 testOwner party (Metadata $ TextMap.singleton reasonMetaKey reason)
     serializeThenParse : GovernanceLockSpecification -> Script GovernanceLockSpecification
     serializeThenParse = specificationFromReceiverAndReason' . lockTypeToCompatibilityPartyAndReason . (.kind)
     parseThenSerialize : (Party, Text) -> Script (Party, Text)

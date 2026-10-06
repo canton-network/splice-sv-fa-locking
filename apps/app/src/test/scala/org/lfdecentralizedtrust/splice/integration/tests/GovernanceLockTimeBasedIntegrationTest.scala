@@ -88,7 +88,7 @@ class GovernanceLockTimeBasedIntegrationTest
         view.transfer.receiver shouldBe superValidatorLockMagicParty.toProtoPrimitive
         BigDecimal(view.transfer.amount) shouldBe lockAmount
         view.transfer.meta.values
-          .get(TokenStandardMetadata.reasonMetaKey) shouldBe makeGovernanceLockSubject(lockSubject)
+          .get(TokenStandardMetadata.reasonMetaKey) shouldBe makeGovernanceLockMemo(lockSubject)
       }
 
       clue("Scan serves a withdraw choice context for the GovernanceLock") {

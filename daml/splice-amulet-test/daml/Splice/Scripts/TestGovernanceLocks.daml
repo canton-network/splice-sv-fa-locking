@@ -232,12 +232,8 @@ testGovernanceLockCompatPartialUnlockFromMetaScenario ops = do
   aliceLock <- expectSuccess $ ops.governanceLock env alice 30000.0 someFaKind emptyMetadata
 
   -- The unlock amount must be a valid decimal
-  actionMustFail (expectMessageContains "Invalid decimal in cip-0105/unlock-amount metadata field: 'not-a-decimal'") $
+  actionMustFail (expectMessageContains $ "Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: 'not-a-decimal'") $
     ops.governanceUnlock env aliceLock alice (unlockAmountMeta "not-a-decimal")
-
-  -- The unlock amount must not exceed the locked amount
-  actionMustFail (expectMessageContains "'unlockAmount' is greater than 'amount'") $
-    ops.governanceUnlock env aliceLock alice (unlockAmountMeta "40000.0")
 
   -- Both the unlocked and the remaining amount must meet the minimum lock amount
   actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $
@@ -256,6 +252,35 @@ testGovernanceLockCompatPartialUnlockFromMetaScenario ops = do
   remainingLock.amount === 20000.0
   remainingLock.specification.kind === someFaKind
   checkLockedHolding alice remainingLockCid 20000.0
+
+testGovernanceLockCompatUnlockAmountCappedTSv1 : Script ()
+testGovernanceLockCompatUnlockAmountCappedTSv1 = testGovernanceLockCompatUnlockAmountCappedScenario tsv1Operations
+
+testGovernanceLockCompatUnlockAmountCappedTSv2 : Script ()
+testGovernanceLockCompatUnlockAmountCappedTSv2 = testGovernanceLockCompatUnlockAmountCappedScenario tsv2Operations
+
+-- | An unlock amount larger than the locked amount unlocks the full locked amount.
+testGovernanceLockCompatUnlockAmountCappedScenario : CompatGovernanceLockOperations -> Script ()
+testGovernanceLockCompatUnlockAmountCappedScenario ops = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      someFaKind = GLK_FeaturedApp bob
+
+  AmuletRegistryV2.tapFaucet registry alice 30000.0
+
+  aliceLock <- expectSuccess $ ops.governanceLock env alice 30000.0 someFaKind emptyMetadata
+
+  -- Request to unlock 40k of the 30k, which starts vesting all 30k
+  aliceVesting <- expectSuccess $ ops.governanceUnlock env aliceLock alice $
+    Metadata $ TM.fromList [(unlockAmountMetaKey, "40000.0")]
+
+  Some vestingLock <- queryContractId alice aliceVesting
+  vestingLock.vestingAmount === 30000.0
+  checkLockedHolding alice aliceVesting 30000.0
+
+  -- No governance lock remains
+  remainingLocks <- query @GovernanceLock alice
+  length remainingLocks === 0
 
 testGovernanceLockMinimumLocksLockUnlockWithdraw : Script ()
 testGovernanceLockMinimumLocksLockUnlockWithdraw = testGovernanceLockMinimumLocksLockUnlockWithdrawScenario rawOperations
@@ -578,128 +603,6 @@ testGovernanceLockProvisionalPartialWithdrawScenario ops = do
   -- The remaining 10k stays locked
   checkLockedHolding alice remainingLock 20000.0
 
--- FIXME: test proposal withdrawal
--- FIXME: test with vesting locks
--- FIXME: test that the resulting locks are as expected wrt their properties
-
-testSubstitution_governanceLock : Script ()
-testSubstitution_governanceLock = do
-  env@TestEnv{..} <- setupTest
-  let registry = registriesEnv.amuletV2
-
-  let dso = env.instrId.admin
-  let someSvKind = GLK_SuperValidatorRightsOwner "TestSV"
-
-
-  let testLockAmount = 180000.0
-  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice (testLockAmount - 1000.0) -- Env creates 1000.0 for alice, so we top up to 180k
-  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob testLockAmount
-
-  governanceLockRawChoice registry alice testLockAmount someSvKind
-
-  -- check balances
-  let checkBalances (aliceUnlocked, aliceLocked) (bobUnlocked, bobLocked) = do
-        WalletClientV2.checkUnlockedBalance alice env.instrId aliceUnlocked
-        WalletClientV2.checkBalance alice env.instrId (aliceUnlocked + aliceLocked)
-        WalletClientV2.checkUnlockedBalance bob env.instrId bobUnlocked
-        WalletClientV2.checkBalance bob env.instrId (bobUnlocked + bobLocked)
-
-  checkBalances (0.0, testLockAmount) (testLockAmount, 0.0)
-
-  -- propose two partial substs
-  let testSubstAmount = 50000.0
-
-  -- FIXME: share that submission code with the other instances
-  [(rulesCid, _)] <- query @ExternalPartyAmuletRules dso
-  disc <- queryDisclosure' dso rulesCid
-  let proposeSubstitution amount = do
-        inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
-        result <- submitWithTransferContext registry (actAs [bob] <> discloseMany' disc) $ \context ->
-          exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
-            args = CreateSubstitutionProposalArgs with
-              dso
-              substitution = AS_Governance with
-                governanceLockKey = GovernanceLockKey with
-                  dso
-                  owner = alice
-                  specification = ownerControlledSpecification alice someSvKind
-                  meta = emptyMetadata
-                governanceSpecification = GovernanceLockSpecification with
-                  kind = GLK_SuperValidatorRightsOwner "TestSV"
-                  unlockControllers = ControllerSpecification [[bob]]
-                  substitutionControllers = ControllerSpecification [[bob]]
-                  vestingControllers = ControllerSpecification [[bob]]
-              owner = bob
-              amount
-              inputHoldingCids = map downcast inputHoldingCids
-              newLockMeta = mempty
-              extraArgs = emptyExtraArgs with context
-        errorIfLeft result
-
-  proposeSubstitution (testSubstAmount / 2.0)
-  proposeSubstitution (testSubstAmount / 2.0)
-
-  checkBalances (0.0, testLockAmount) (testLockAmount - testSubstAmount, testSubstAmount)
-
-  -- accept substitution
-  let acceptOneProposal = do
-        (proposalCid, _)::_ <- query @GovernanceLockSubstitution dso
-        result <- submitWithTransferContext registry (actAs [alice]) $ \context ->
-          exerciseCmd proposalCid GovernanceLockSubstitution_Accept with
-            actors = [ alice ]
-            extraArgs = emptyExtraArgs with context
-        errorIfLeft result
-
-  acceptOneProposal
-  query @GovernanceLock alice >>= (debug . show)
-  acceptOneProposal
-  checkBalances (testSubstAmount, testLockAmount - testSubstAmount) (testLockAmount - testSubstAmount, testSubstAmount)
-
-  -- propose full subst
-  [(rulesCid, _)] <- query @ExternalPartyAmuletRules dso
-  disc <- queryDisclosure' dso rulesCid
-  inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
-  result <- submitWithTransferContext registry (actAs [bob] <> discloseMany' disc) $ \context ->
-    exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
-      args = CreateSubstitutionProposalArgs with
-        dso
-        substitution = AS_Governance with
-                governanceLockKey = GovernanceLockKey with
-                  dso
-                  owner = alice
-                  specification = ownerControlledSpecification alice someSvKind
-                  meta = emptyMetadata
-                governanceSpecification = GovernanceLockSpecification with
-                  kind = GLK_SuperValidatorRightsOwner "TestSV"
-                  unlockControllers = ControllerSpecification [[bob]]
-                  substitutionControllers = ControllerSpecification [[bob]]
-                  vestingControllers = ControllerSpecification [[bob]]
-        owner = bob
-        amount = testLockAmount - testSubstAmount
-        inputHoldingCids = map downcast inputHoldingCids
-        newLockMeta = mempty
-        extraArgs = emptyExtraArgs with context
-  errorIfLeft result
-
-  checkBalances (testSubstAmount, testLockAmount - testSubstAmount) (0.0, testLockAmount)
-
-  -- accept substitution
-  acceptOneProposal
-  {-
-  [(aliceLock, _ )] <- query @GovernanceLock alice
-  [(proposalCid, _)] <- query @SubstitutionProposal dso
-  result <- submitWithTransferContext registry (actAs [alice]) $ \context ->
-    exerciseCmd proposalCid SubstitutionProposal_Accept with
-      target = ST_GovernanceLock aliceLock
-      extraArgs = emptyExtraArgs with context
-  errorIfLeft result
-  -}
-
-  checkBalances (testLockAmount, 0.0) (0.0, testLockAmount)
-
-  pure ()
-
-
 -- Utilities
 ------------
 
@@ -999,7 +902,7 @@ governanceLockV1 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata
 governanceLockV1 env owner amount kind meta = do
   now <- getTime
   inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
-  let encodedReason = "lock-subject=" <> case kind of
+  let encodedReason = lockSubjectMemo $ case kind of
                         GLK_FeaturedApp party -> partyToText party
                         GLK_ProvisionalFeaturedApp party -> partyToText party
                         GLK_SuperValidatorRightsOwner svName -> svName

@@ -54,6 +54,12 @@ data ExternalPartyAmuletRules_LockForGovernanceResult = ExternalPartyAmuletRules
     changeHolding : Optional (ContractId Amulet)
   deriving (Eq, Show, Serializable)
 
+data ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult = ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult
+  with
+    proposal : ContractId V2.AllocationInstruction
+    changeHolding : Optional (ContractId Amulet)
+  deriving (Eq, Show, Serializable)
+
 -- | Rules contract that can be used in transactions that require signatures
 -- from an external party. This is intended to get archived and recreated as rarely as possible
 -- to support long delays between preparing and signing a transaction.
@@ -150,13 +156,15 @@ template ExternalPartyAmuletRules
           governanceLock
           changeHolding
 
-    nonconsuming choice ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution : () -- FIXME
+    nonconsuming choice ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution : ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult
       with
-        args : CreateSubstitutionProposalArgs
+        args : CreateSubstitutionArgs
       controller args.owner
       do
-        (_proposal, _changeHolding) <- createSubstitutionProposal args
-        pure ()
+        (proposal, _, changeHolding) <- createSubstitution args
+        pure ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult with
+          proposal
+          changeHolding
 
     interface instance Api.Token.TransferInstructionV1.TransferFactory for ExternalPartyAmuletRules where
       view = Api.Token.TransferInstructionV1.TransferFactoryView with

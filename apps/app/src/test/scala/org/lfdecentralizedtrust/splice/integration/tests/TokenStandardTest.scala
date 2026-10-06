@@ -213,20 +213,22 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
     })
   }
 
+  private val governanceLockCipPrefix = "cip-127"
+
   private def makeLockMagicParty(kind: String): PartyId =
     PartyId.tryFromProtoPrimitive(
-      s"cip-0105_$kind::1220000000000000000000000000000000000000000000000000000000000000abcd"
+      s"${governanceLockCipPrefix}_$kind::1220000000000000000000000000000000000000000000000000000000000000abcd"
     )
 
   val superValidatorLockMagicParty = makeLockMagicParty("sv-lock")
   val featuredAppLockMagicParty = makeLockMagicParty("fa-lock")
   val provisionalFeaturedAppLockMagicParty = makeLockMagicParty("provisional-fa-lock")
 
-  def makeGovernanceLockSubject(lockSubject: String): String =
-    s"lock-subject=$lockSubject"
+  def makeGovernanceLockMemo(lockSubject: String): String =
+    s"$governanceLockCipPrefix/memo:lock-subject=$lockSubject"
 
-  val governanceLockUnlockAtMetaKey = "cip-0105/unlock-at"
-  val vestingLockWithdrawAtMetaKey = "cip-0105/withdraw-at"
+  val governanceLockUnlockAtMetaKey = s"$governanceLockCipPrefix/unlock-at"
+  val vestingLockWithdrawAtMetaKey = s"$governanceLockCipPrefix/withdraw-at"
 
   def createGovernanceLockViaTokenStandard(
       participant: ParticipantClientReference,
@@ -247,7 +249,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       lockParty,
       amount,
       transferinstruction.v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer,
-      description = Some(makeGovernanceLockSubject(lockSubject)),
+      description = Some(makeGovernanceLockMemo(lockSubject)),
     )
     listTransferInstructions(participant, owner.partyId).collect {
       case (cid, view)
