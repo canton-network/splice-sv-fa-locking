@@ -76,13 +76,13 @@ testParserWithErrors numErrors =
 
 test_assertParsed : Script ()
 test_assertParsed = do
-    run "exactly 1" (testParserWithErrors 1) === Left (errorsText 1)
-    run "less than 5" (testParserWithErrors 2) === Left ("Found 2 errors parsing less than 5:\n\n" <> errorsText 2)
-    run "exactly 5" (testParserWithErrors 5) === Left ("Found 5 errors parsing exactly 5:\n\n" <> errorsText 5)
-    run "more than 5" (testParserWithErrors 6) === Left ("Found 6 errors parsing more than 5. First five errors:\n\n" <> errorsText 5)
+    run (testParserWithErrors 1) === Left (errorsText 1)
+    run (testParserWithErrors 2) === Left ("Found 2 parsing errors:\n\n" <> errorsText 2)
+    run (testParserWithErrors 5) === Left ("Found 5 parsing errors:\n\n" <> errorsText 5)
+    run (testParserWithErrors 6) === Left ("Found 6 parsing errors. First five errors:\n\n" <> errorsText 5)
   where
-    run : Text -> Parser () () -> Either Text ()
-    run parsedType parser = assertParsed parsedType parser ()
+    run : Parser () () -> Either Text ()
+    run parser = assertParsed parser ()
 
     errorsText : Int -> Text
     errorsText numErrors = Text.intercalate "\n" (mkTestErrors numErrors)
