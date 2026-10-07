@@ -24,7 +24,7 @@ import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
-import Splice.TokenStandard.Utils.Internal.Conversions (timeToMeta)
+import Splice.TokenStandard.Utils.Internal.Conversions (timeToMeta, toAnyContractId)
 
 -- | Controllers from the CIP example: owner A, featured app X, staking app S.
 -- Any two of the three can unlock or substitute; S or A alone can withdraw vested funds.
@@ -347,7 +347,7 @@ testCustomControllersCompatPendingTSv2 = do
   None <- queryContractId alice lockCid
   Some pendingLock <- queryContractId alice pendingLockCid
   Map.keys pendingLock.pendingUnlockApprovals === [bob]
-  pendingLock.originalLockCid === Some lockCid
+  pendingLock.originalLockCid === Some (toAnyContractId lockCid)
   checkLockedHolding alice pendingLockCid 20000.0
 
   -- alice completes the unlock

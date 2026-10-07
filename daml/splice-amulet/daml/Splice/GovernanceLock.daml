@@ -101,7 +101,7 @@ template GovernanceLock
     amount : Decimal  -- ^ Locked amount
     lockedAmulet : ContractId LockedAmulet
     specification : GovernanceLockSpecification
-    originalLockCid : Optional (ContractId GovernanceLock)
+    originalLockCid : Optional AnyContractId
     requestedAt : Time  -- ^ Time of the request to create this lock.
     meta : Metadata
       -- ^ Metadata provided upon creation of the lock,
@@ -190,7 +190,7 @@ template GovernanceLock
         newGovernanceLock <- create this with
           amount = newLockAmount
           lockedAmulet = newLockedAmulet
-          originalLockCid = Some $ fromOptional self originalLockCid
+          originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
 
         pure $ GovernanceLock_MergeAndTopUpResult with
           governanceLock = newGovernanceLock
@@ -223,7 +223,7 @@ template GovernanceLock
 
     interface instance V1.TransferInstruction for GovernanceLock where
       view = V1.TransferInstructionView with
-          originalInstructionCid = toInterfaceContractId <$> originalLockCid
+          originalInstructionCid = toInterfaceContractId . (fromAnyContractId @GovernanceLock) <$> originalLockCid
           transfer = V1.Transfer with
             sender = owner
             receiver
@@ -331,7 +331,7 @@ governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount unlockAt 
           Left stillPending -> do
             pendingLock <- create this with
               pendingUnlockApprovals = stillPending
-              originalLockCid = Some $ fromOptional self originalLockCid
+              originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
             pure GovernanceLock_UnlockResult_Pending with pendingLock
           Right approvedUnlockAt -> governanceLock_executeUnlock self this unlockAmount approvedUnlockAt context state
 
@@ -1078,7 +1078,7 @@ governanceLock_substituteImpl self this@GovernanceLock{..} substitutedAmount ext
       remainderCid <- create this with
         amount = remainingAmount
         lockedAmulet = newLockedAmulet
-        originalLockCid = Some $ fromOptional self originalLockCid
+        originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
       pure GovernanceLock_DsoSubstituteResult with
         remainderCid = Some remainderCid
         unlockedAmulet
@@ -1135,7 +1135,7 @@ governanceLockSubstitution_acceptImpl self this@GovernanceLockSubstitution{..} a
     Left stillPending -> GovernanceLockSubstitution_AcceptResult_Pending <$> create this with
       pendingSubstituteApprovals = stillPending
       originalSubstitutionCid = Some $ fromOptional (toInterfaceContractId self) originalSubstitutionCid
-    Right _ -> governanceLockSubstitution_executeAccept this $ GovernanceLockSubstitution_Accept actors extraArgs
+    Right _ -> governanceLockSubstitution_executeAccept self this $ GovernanceLockSubstitution_Accept actors extraArgs
 
 vestingLockSubstitution_acceptImpl : ContractId VestingLockSubstitution -> VestingLockSubstitution -> [Party] -> ExtraArgs -> Update VestingLockSubstitution_AcceptResult
 vestingLockSubstitution_acceptImpl self this@VestingLockSubstitution{..} actors extraArgs = do
@@ -1149,7 +1149,7 @@ vestingLockSubstitution_acceptImpl self this@VestingLockSubstitution{..} actors 
     Left stillPending -> VestingLockSubstitution_AcceptResult_Pending <$> create this with
       pendingSubstituteApprovals = stillPending
       originalSubstitutionCid = Some $ fromOptional (toInterfaceContractId self) originalSubstitutionCid
-    Right _ -> vestingLockSubstitution_executeAccept this $ VestingLockSubstitution_Accept actors extraArgs
+    Right _ -> vestingLockSubstitution_executeAccept self this $ VestingLockSubstitution_Accept actors extraArgs
 
 governanceLockSubstitution_withdrawImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> Update GovernanceLockSubstitution_WithdrawResult
 governanceLockSubstitution_withdrawImpl self this actors = do
@@ -1174,9 +1174,9 @@ vestingLockSubstitution_withdrawImpl self this actors = do
       pure $ VestingLockSubstitution_WithdrawResult_Withdrawn unlockedAmulet
 
 
-governanceLockSubstitution_executeAccept : GovernanceLockSubstitution -> GovernanceLockSubstitution_Accept -> Update GovernanceLockSubstitution_AcceptResult
-governanceLockSubstitution_executeAccept (GovernanceLockSubstitution with ..) (GovernanceLockSubstitution_Accept with ..) = do
-  (lockCid, lock) <- fetchByKey @GovernanceLock target
+governanceLockSubstitution_executeAccept : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> GovernanceLockSubstitution_Accept -> Update GovernanceLockSubstitution_AcceptResult
+governanceLockSubstitution_executeAccept self (GovernanceLockSubstitution with ..) (GovernanceLockSubstitution_Accept with ..) = do
+  (lockCid, _lock) <- fetchByKey @GovernanceLock target
   substituteResult <- exercise lockCid GovernanceLock_DsoSubstitute with
     substitutedAmount = amount
     extraArgs
@@ -1186,16 +1186,16 @@ governanceLockSubstitution_executeAccept (GovernanceLockSubstitution with ..) (G
     amount
     lockedAmulet
     specification = newLockSpecification
-    originalLockCid = None
-    requestedAt = lock.requestedAt -- The time this amount of amulet became locked.
+    originalLockCid = Some $ toAnyContractId self
+    requestedAt = requestedAt
     meta = newLockMeta
     pendingUnlockApprovals = mempty
   pure GovernanceLockSubstitution_AcceptResult_Complete with
     lockCid = newLockCid
     remainderCid = substituteResult.remainderCid
 
-vestingLockSubstitution_executeAccept : VestingLockSubstitution -> VestingLockSubstitution_Accept -> Update VestingLockSubstitution_AcceptResult
-vestingLockSubstitution_executeAccept (VestingLockSubstitution with ..) (VestingLockSubstitution_Accept with ..) = do
+vestingLockSubstitution_executeAccept : ContractId VestingLockSubstitution -> VestingLockSubstitution -> VestingLockSubstitution_Accept -> Update VestingLockSubstitution_AcceptResult
+vestingLockSubstitution_executeAccept self (VestingLockSubstitution with ..) (VestingLockSubstitution_Accept with ..) = do
   (lockCid, lock) <- fetchByKey @VestingLock target
   substituteResult <- exercise lockCid VestingLock_DsoSubstitute with
     substitutedAmount = amount
@@ -1208,7 +1208,7 @@ vestingLockSubstitution_executeAccept (VestingLockSubstitution with ..) (Vesting
     vestingPeriod = lock.vestingPeriod
     endTime = lock.endTime
     specification = newLockSpecification
-    originalLockCid = None
+    originalLockCid = Some $ toAnyContractId self
     meta = newLockMeta
     pendingWithdrawApprovals = mempty
   pure VestingLockSubstitution_AcceptResult_Complete with
