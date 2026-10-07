@@ -710,7 +710,7 @@ governanceLockRawChoice registry owner amount kind = errorIfLeft =<< governanceL
 
 governanceLockRawChoice' : AmuletRegistryV2.AmuletRegistry -> Party -> Decimal -> GovernanceLockKind -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockRawChoice' registry owner amount kind =
-  governanceLockWithSpecRawChoice' registry owner amount (ownerControlledSpecification owner kind)
+  governanceLockWithSpecRawChoice' registry owner amount (ownerControlledSpecification owner kind emptyMetadata)
 
 governanceLockWithSpecRawChoice : AmuletRegistryV2.AmuletRegistry -> Party -> Decimal -> GovernanceLockSpecification -> Script (ContractId GovernanceLock)
 governanceLockWithSpecRawChoice registry owner amount specification = errorIfLeft =<< governanceLockWithSpecRawChoice' registry owner amount specification
@@ -728,7 +728,6 @@ governanceLockWithSpecRawChoice' registry owner amount specification = do
       extraArgs = emptyExtraArgs with context
       owner
       requestedAt = now
-      meta = emptyMetadata
   pure $ (.governanceLock) <$> result
 
 governanceUnlockRawChoice
@@ -952,7 +951,7 @@ governanceUnlockV1 env lockCid actor meta = do
   now <- getTime
   Some lock <- queryContractId actor lockCid
   let registry = env.registriesEnv.amuletV2
-      targetMeta = Metadata $ TM.fromList [(targetLockMetaMetaKeyPrefix <> k, v) | (k, v) <- TM.toList lock.meta.values]
+      targetMeta = Metadata $ TM.fromList [(targetLockMetaMetaKeyPrefix <> k, v) | (k, v) <- TM.toList lock.specification.meta.values]
   (rulesCid, rulesDisclosure) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
   result <- submitWithTransferContext registry (actAs actor <> discloseMany' rulesDisclosure) \context ->
     exerciseCmd (toInterfaceContractId @V1.TransferFactory rulesCid) V1.TransferFactory_Transfer with

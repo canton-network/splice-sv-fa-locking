@@ -44,9 +44,9 @@ expectParseError needle (Errors es) =
 -- | Proposes a substitution through `ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution`,
 -- funded with all unlocked holdings of the proposer.
 createSubstitutionRaw
-  :  TestEnv -> Party -> AnySubstitution -> Decimal -> Metadata
+  :  TestEnv -> Party -> AnySubstitution -> Decimal
   -> Script (Either SubmitError ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult)
-createSubstitutionRaw env proposer substitution amount newLockMeta = do
+createSubstitutionRaw env proposer substitution amount = do
   now <- getTime
   (rulesCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures env.registriesEnv.amuletV2
   inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount proposer) proposer env.instrId
@@ -55,7 +55,6 @@ createSubstitutionRaw env proposer substitution amount newLockMeta = do
       args = CreateSubstitutionArgs with
         dso = env.instrId.admin
         substitution
-        newLockMeta
         owner = proposer
         amount
         inputHoldingCids = map downcast inputHoldingCids
@@ -179,9 +178,8 @@ testSubstitutionMeta_lockedTargetDefaults = do
     governanceLockKey = GovernanceLockKey with
       dso = admin
       owner = alice
-      specification = ownerControlledSpecification alice kind
-      meta = emptyMetadata
-    governanceSpecification = ownerControlledSpecification bob kind
+      specification = ownerControlledSpecification alice kind emptyMetadata
+    governanceSpecification = ownerControlledSpecification bob kind (Metadata $ TextMap.fromList [("app/id", "B-7")])
 
 testSubstitutionMeta_lockedTargetRoundTrip : Script ()
 testSubstitutionMeta_lockedTargetRoundTrip = do
@@ -199,12 +197,13 @@ testSubstitutionMeta_lockedTargetRoundTrip = do
           unlockControllers = ControllerSpecification [[s, x], [alice]]
           substitutionControllers = ControllerSpecification [[s, x]]
           vestingControllers = ControllerSpecification [[s], [alice]]
-        meta = Metadata $ TextMap.fromList [("app/id", "A-1")]
+          meta = Metadata $ TextMap.fromList [("app/id", "A-1")]
       newSpec = GovernanceLockSpecification with
         kind
         unlockControllers = ControllerSpecification [[bob, s]]
         substitutionControllers = ControllerSpecification [[bob]]
         vestingControllers = ControllerSpecification [[bob], [s]]
+        meta = Metadata $ TextMap.fromList [("app/id", "B-7")]
       meta = unionMetadata (encodeGovernanceLockTargetMetadata targetKey) $ Metadata $ TextMap.fromList
         [ (lockSubjectMetaKey, partyToText x)
         , ("app/id", "B-7") -- metadata of the new lock, not of the target
@@ -229,12 +228,13 @@ testSubstitutionMeta_vestingTargetRoundTrip = do
         specification = VestingLockSpecification with
           kind
           vestingControllers = ControllerSpecification [[s], [alice]]
+          meta = Metadata $ TextMap.fromList [("app/id", "A-1")]
         vestingPeriod = days 60
         endTime = now `addRelTime` days 45
-        meta = Metadata $ TextMap.fromList [("app/id", "A-1")]
       newSpec = VestingLockSpecification with
         kind
         vestingControllers = ControllerSpecification [[s, bob]]
+        meta = Metadata $ TextMap.fromList [("app/id", "B-7")]
       meta = unionMetadata (encodeVestingLockTargetMetadata targetKey) $ Metadata $ TextMap.fromList
         [ (lockSubjectMetaKey, "TestSV")
         , ("app/id", "B-7") -- metadata of the new lock, not of the target
@@ -315,17 +315,16 @@ testSubstitution_governanceLock = do
                 governanceLockKey = GovernanceLockKey with
                   dso
                   owner = alice
-                  specification = ownerControlledSpecification alice someSvKind
-                  meta = emptyMetadata
+                  specification = ownerControlledSpecification alice someSvKind emptyMetadata
                 governanceSpecification = GovernanceLockSpecification with
                   kind = GLK_SuperValidatorRightsOwner "TestSV"
                   unlockControllers = ControllerSpecification [[bob]]
                   substitutionControllers = ControllerSpecification [[bob]]
                   vestingControllers = ControllerSpecification [[bob]]
+                  meta = emptyMetadata
               owner = bob
               amount
               inputHoldingCids = map downcast inputHoldingCids
-              newLockMeta = mempty
               extraArgs = emptyExtraArgs with context
               requestedAt = now
         errorIfLeft result
@@ -361,17 +360,16 @@ testSubstitution_governanceLock = do
                 governanceLockKey = GovernanceLockKey with
                   dso
                   owner = alice
-                  specification = ownerControlledSpecification alice someSvKind
-                  meta = emptyMetadata
+                  specification = ownerControlledSpecification alice someSvKind emptyMetadata
                 governanceSpecification = GovernanceLockSpecification with
                   kind = GLK_SuperValidatorRightsOwner "TestSV"
                   unlockControllers = ControllerSpecification [[bob]]
                   substitutionControllers = ControllerSpecification [[bob]]
                   vestingControllers = ControllerSpecification [[bob]]
+                  meta = emptyMetadata
         owner = bob
         amount = testLockAmount - testSubstAmount
         inputHoldingCids = map downcast inputHoldingCids
-        newLockMeta = mempty
         extraArgs = emptyExtraArgs with context
         requestedAt = now
   _ <- errorIfLeft result
@@ -403,15 +401,15 @@ testSubstitutionRaw_twoStepApprovalWithoutOwner = do
   AmuletRegistryV2.tapFaucet registry alice 49000.0 -- alice starts with 1000.0
   AmuletRegistryV2.tapFaucet registry bob 20000.0
 
-  let targetSpec = (ownerControlledSpecification alice kind) with
+  let targetSpec = (ownerControlledSpecification alice kind emptyMetadata) with
         substitutionControllers = ControllerSpecification [[charlie, dave]]
   targetCid <- governanceLockWithSpecRawChoice registry alice 50000.0 targetSpec
 
   expectSuccess $ createSubstitutionRaw env bob
     (AS_Governance with
-      governanceLockKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec; meta = emptyMetadata
-      governanceSpecification = ownerControlledSpecification bob kind)
-    20000.0 emptyMetadata
+      governanceLockKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
+      governanceSpecification = ownerControlledSpecification bob kind emptyMetadata)
+    20000.0
   [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob
 
   GovernanceLockSubstitution_AcceptResult_Pending pendingCid <-
@@ -433,7 +431,7 @@ testSubstitutionRaw_vestingWithoutOwner = do
   AmuletRegistryV2.tapFaucet registry alice 49000.0
   AmuletRegistryV2.tapFaucet registry bob 20000.0
 
-  let lockSpec = (ownerControlledSpecification alice kind) with
+  let lockSpec = (ownerControlledSpecification alice kind emptyMetadata) with
         vestingControllers = ControllerSpecification [[charlie]]
   lockCid <- governanceLockWithSpecRawChoice registry alice 50000.0 lockSpec
   unlockAt <- (`addRelTime` hours 1) <$> getTime
@@ -448,9 +446,8 @@ testSubstitutionRaw_vestingWithoutOwner = do
         specification = vestingLock.specification
         vestingPeriod = vestingLock.vestingPeriod
         endTime = vestingLock.endTime
-        meta = vestingLock.meta
-      vestingSpecification = VestingLockSpecification with kind; vestingControllers = ControllerSpecification [[bob]])
-    20000.0 emptyMetadata
+      vestingSpecification = VestingLockSpecification with kind; vestingControllers = ControllerSpecification [[bob]]; meta = emptyMetadata)
+    20000.0
   [(substitutionCid, _)] <- query @VestingLockSubstitution bob
 
   disclosures <- targetDisclosures alice vestingCid
@@ -478,11 +475,11 @@ setupRawSubstitution = do
   AmuletRegistryV2.tapFaucet registry alice 49000.0
   AmuletRegistryV2.tapFaucet registry bob 20000.0
   targetCid <- governanceLockRawChoice registry alice 50000.0 kind
-  let targetKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = ownerControlledSpecification alice kind; meta = emptyMetadata
-      newSpec = ownerControlledSpecification bob kind
+  let targetKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = ownerControlledSpecification alice kind emptyMetadata
+      newSpec = ownerControlledSpecification bob kind appMeta
   result <- expectSuccess $ createSubstitutionRaw env bob
     (AS_Governance with governanceLockKey = targetKey; governanceSpecification = newSpec)
-    20000.0 appMeta
+    20000.0
   pure (env, targetCid, targetKey, newSpec, result.proposal)
 
 appMeta : Metadata
@@ -515,7 +512,6 @@ testSubstitutionV2_acceptRawSubstitution = do
   newLock.owner === bob
   newLock.amount === 20000.0
   newLock.specification === newSpec
-  newLock.meta === appMeta
   WalletClientV2.checkUnlockedBalance alice instrId 20000.0
   WalletClientV2.checkBalance alice instrId 50000.0
 
@@ -551,7 +547,7 @@ testSubstitutionV2_partialCompatTarget = do
 
   Some newLock <- queryContractId bob (fromInterfaceContractId @GovernanceLock newLockCid)
   newLock.amount === 20000.0
-  newLock.specification === ownerControlledSpecification bob kind
+  newLock.specification === ownerControlledSpecification bob kind emptyMetadata
   [(_, remainder)] <- query @GovernanceLock alice
   remainder.amount === 30000.0
   WalletClientV2.checkUnlockedBalance alice instrId 20000.0
@@ -588,13 +584,13 @@ testSubstitutionV2_customNewLock = do
         dso = targetLock.dso
         owner = targetLock.owner
         specification = targetLock.specification
-        meta = targetLock.meta
 
   let newSpec = GovernanceLockSpecification with
         kind
         unlockControllers = ControllerSpecification [[bob, charlie]]
         substitutionControllers = ControllerSpecification [[bob], [charlie]]
         vestingControllers = ControllerSpecification [[charlie]]
+        meta = appMeta
   substitutionCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 20000.0 kind $
     Metadata $ TextMap.fromList
       [ (targetLockOwnerMetaKey, partyToText alice)
@@ -612,7 +608,6 @@ testSubstitutionV2_customNewLock = do
   expectSubstitutionAllocation (encodeGovernanceLockTargetMetadata targetKey) substitutionView.allocation newLockView.allocation
   Some newLock <- queryContractId bob (fromInterfaceContractId @GovernanceLock newLockCid)
   newLock.specification === newSpec
-  newLock.meta === appMeta
 
 testSubstitutionV2_withdraw : Script ()
 testSubstitutionV2_withdraw = do
@@ -646,7 +641,6 @@ testSubstitutionV2_vestingTarget = do
         specification = vestingLock.specification
         vestingPeriod = vestingLock.vestingPeriod
         endTime = vestingLock.endTime
-        meta = vestingLock.meta
 
   substitutionCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 20000.0 kind $
     encodeVestingLockTargetMetadata targetKey)
@@ -664,7 +658,7 @@ testSubstitutionV2_vestingTarget = do
   newLock.vestingAmount === 20000.0
   newLock.vestingPeriod === vestingLock.vestingPeriod
   newLock.endTime === vestingLock.endTime
-  newLock.specification === VestingLockSpecification with kind; vestingControllers = ControllerSpecification [[bob]]
+  newLock.specification === VestingLockSpecification with kind; vestingControllers = ControllerSpecification [[bob]]; meta = emptyMetadata
   [(_, remainder)] <- filter (\(_, l) -> l.owner == alice) <$> query @VestingLock alice
   remainder.vestingAmount === 30000.0
   WalletClientV2.checkUnlockedBalance alice instrId 20000.0
@@ -678,7 +672,7 @@ testSubstitutionV2_twoStepApproval = do
   AmuletRegistryV2.tapFaucet registry alice 49000.0
   AmuletRegistryV2.tapFaucet registry bob 20000.0
   let targetSubstitutionControllers = ControllerSpecification [[charlie, dave]]
-      targetSpec = (ownerControlledSpecification alice kind) with substitutionControllers = targetSubstitutionControllers
+      targetSpec = (ownerControlledSpecification alice kind emptyMetadata) with substitutionControllers = targetSubstitutionControllers
   WalletClientV2.createBatchingUtility charlie
   WalletClientV2.createBatchingUtility dave
   targetCid <- governanceLockWithSpecRawChoice registry alice 50000.0 targetSpec

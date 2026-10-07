@@ -65,12 +65,11 @@ test_tsv1Encoding = do
 test_parseGovernanceLockRequestTSv1_memo : Script ()
 test_parseGovernanceLockRequestTSv1_memo = do
     let memo = "cip-127/memo:request=create-lock&lock-kind=sv-lock&lock-subject=someSv&unlock-controllers=some-owner"
-    GLR_CreateGovernanceLock{specification, meta} <- parse $ Metadata $ TextMap.fromList
+    GLR_CreateGovernanceLock{specification} <- parse $ Metadata $ TextMap.fromList
       [ (reasonMetaKey, memo)
       , ("app/id", "A-1")
       ]
-    specification === ownerControlledSpecification testOwner (GLK_SuperValidatorRightsOwner "someSv")
-    meta === Metadata (TextMap.singleton "app/id" "A-1")
+    specification === ownerControlledSpecification testOwner (GLK_SuperValidatorRightsOwner "someSv") (Metadata (TextMap.singleton "app/id" "A-1"))
   where
     parse = parseGovernanceLockRequestTSv1 testOwner lockManagerParty
 
@@ -78,12 +77,15 @@ test_parseGovernanceLockRequestTSv1_memo = do
 -- A lock's memo, with a request added, parses back to the lock's specification.
 test_governanceLockSpecificationTSv1_roundTrip : Script ()
 test_governanceLockSpecificationTSv1_roundTrip = do
-    assertRoundTrip serializeThenParse $ ownerControlledSpecification testOwner $ GLK_SuperValidatorRightsOwner with
-                 svName = "some-other-sv"
-    assertRoundTrip serializeThenParse $ ownerControlledSpecification testOwner $ GLK_FeaturedApp with
-                 provider = fromSome $ partyFromText "some-other-sv"
-    assertRoundTrip serializeThenParse $ ownerControlledSpecification testOwner $ GLK_ProvisionalFeaturedApp with
-                 provider = fromSome $ partyFromText "someFA::122abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcab"
+    assertRoundTrip serializeThenParse $ ownerControlledSpecification testOwner
+      (GLK_SuperValidatorRightsOwner with svName = "some-other-sv")
+      emptyMetadata
+    assertRoundTrip serializeThenParse $ ownerControlledSpecification testOwner
+      (GLK_FeaturedApp with provider = fromSome $ partyFromText "some-other-sv")
+      emptyMetadata
+    assertRoundTrip serializeThenParse $ ownerControlledSpecification testOwner
+      (GLK_ProvisionalFeaturedApp with provider = fromSome $ partyFromText "someFA::122abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcab")
+      emptyMetadata
   where
     serializeThenParse : GovernanceLockSpecification -> Script GovernanceLockSpecification
     serializeThenParse specification = do

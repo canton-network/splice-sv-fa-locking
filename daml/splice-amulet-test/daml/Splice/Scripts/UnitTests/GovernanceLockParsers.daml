@@ -263,6 +263,7 @@ test_governanceLockSpecificationParser' run = do
         unlockControllers = ControllerSpecification [[alice, bob]]
         substitutionControllers = ControllerSpecification [[bob]]
         vestingControllers = ControllerSpecification [[alice], [charlie]]
+        meta = emptyMetadata
   expectSuccess fullSpecification $
     run (governanceLockTagToText GLT_FeaturedApp)
       [ (lockSubjectMetaKey, "provider")
@@ -272,7 +273,7 @@ test_governanceLockSpecificationParser' run = do
       ]
 
   -- Only the subject set, so all controllers default to the owner
-  expectSuccess (ownerControlledSpecification testOwner $ GLK_SuperValidatorRightsOwner "someSv") $
+  expectSuccess (ownerControlledSpecification testOwner (GLK_SuperValidatorRightsOwner "someSv") emptyMetadata) $
     run (governanceLockTagToText GLT_SuperValidator) [(lockSubjectMetaKey, "someSv")]
 
   -- One invalid field
@@ -328,14 +329,13 @@ test_governanceLockRequestTSv1Parser = do
   let run receiver entries = runParser governanceLockRequestTSv1Parser (testOwner, receiver, mkMeta entries)
       request r = (requestMetaKey, r)
       faLock = [(lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp), (lockSubjectMetaKey, "provider")]
-      faSpecification = ownerControlledSpecification testOwner $ GLK_FeaturedApp testProvider
+      faSpecification = ownerControlledSpecification testOwner (GLK_FeaturedApp testProvider) emptyMetadata
       invalidReceiverError p = "Invalid receiver: '" <> show p <> "'"
 
   -- Create a lock: the specification is parsed, and the other governance fields are removed from the lock metadata
   expectRequest (run lockManagerParty $ request "create-lock" :: ("app/id", "A-1") :: (unlockAmountMetaKey, "1.0") :: faLock) \case
-    GLR_CreateGovernanceLock{specification, meta} -> do
-      specification === faSpecification
-      meta === mkMeta [("app/id", "A-1")]
+    GLR_CreateGovernanceLock{specification} ->
+      specification === (faSpecification with meta = mkMeta [("app/id", "A-1")])
     _ -> fail "Expected GLR_CreateGovernanceLock"
 
   -- Create a lock with custom controllers
@@ -354,27 +354,24 @@ test_governanceLockRequestTSv1Parser = do
         :: ("app/id", "B-7")
         :: faLock)
     \case
-      GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt, targetMeta} -> do
-        specification === faSpecification
+      GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt} -> do
+        specification === (faSpecification with meta = mkMeta [("app/id", "A-1")])
         unlockAmount === Some 10000.0
         unlockAt === Some (time (date 2026 Jan 1) 0 0 0)
-        targetMeta === mkMeta [("app/id", "A-1")]
       _ -> fail "Expected GLR_UnlockGovernanceLock"
 
   -- Unlock without the optional fields
   expectRequest (run lockManagerParty $ request "unlock-and-start-vesting" :: faLock) \case
-    GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt, targetMeta} -> do
+    GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt} -> do
       specification === faSpecification
       unlockAmount === None
       unlockAt === None
-      targetMeta === emptyMetadata
     _ -> fail "Expected GLR_UnlockGovernanceLock"
 
   -- Transfer a lock: the receiver is the new owner, so it is not checked
   expectRequest (run alice $ request "transfer-lock" :: (targetLockMetaMetaKeyPrefix <> "app/id", "A-1") :: faLock) \case
-    GLR_TransferGovernanceLock{specification, targetMeta} -> do
-      specification === faSpecification
-      targetMeta === mkMeta [("app/id", "A-1")]
+    GLR_TransferGovernanceLock{specification} ->
+      specification === (faSpecification with meta = mkMeta [("app/id", "A-1")])
     _ -> fail "Expected GLR_TransferGovernanceLock"
 
   -- The request is required and must be known; the value has no `cipMetaPrefix`
@@ -439,9 +436,8 @@ test_substitutionTSv2Parser_examples = do
       governanceLockKey = GovernanceLockKey with
         dso = testAdmin
         owner = alice
-        specification = ownerControlledSpecification alice $ GLK_SuperValidatorRightsOwner "someSv"
-        meta = emptyMetadata
-      governanceSpecification = ownerControlledSpecification bob $ GLK_SuperValidatorRightsOwner "someSv")
+        specification = ownerControlledSpecification alice (GLK_SuperValidatorRightsOwner "someSv") emptyMetadata
+      governanceSpecification = ownerControlledSpecification bob (GLK_SuperValidatorRightsOwner "someSv") emptyMetadata)
     $ run "sv-lock"
         [ ("cip-127/request", "substitute-receiver-lock-on-accept")
         , ("cip-127/lock-subject", "someSv")
@@ -462,12 +458,13 @@ test_substitutionTSv2Parser_examples = do
           unlockControllers = ControllerSpecification [[charlie, testProvider]]
           substitutionControllers = ControllerSpecification [[charlie, testProvider]]
           vestingControllers = ControllerSpecification [[charlie], [alice]]
-        meta = mkMeta [("app/id", "A-1")]
+          meta = mkMeta [("app/id", "A-1")]
       governanceSpecification = GovernanceLockSpecification with
         kind = GLK_FeaturedApp testProvider
         unlockControllers = ControllerSpecification [[charlie, bob], [charlie, testProvider]]
         substitutionControllers = ControllerSpecification [[charlie, bob], [charlie, testProvider]]
-        vestingControllers = ControllerSpecification [[charlie], [bob]])
+        vestingControllers = ControllerSpecification [[charlie], [bob]]
+        meta = mkMeta [("app/id", "B-7")])
     $ run "fa-lock"
         [ ("cip-127/request", "substitute-receiver-lock-on-accept")
         -- the new lock
@@ -495,12 +492,13 @@ test_substitutionTSv2Parser_examples = do
         specification = VestingLockSpecification with
           kind = GLK_SuperValidatorRightsOwner "someSv"
           vestingControllers = ControllerSpecification [[charlie], [alice]]
+          meta = emptyMetadata
         vestingPeriod = days 60
         endTime = time (date 2026 Jan 1) 0 0 0
-        meta = emptyMetadata
       vestingSpecification = VestingLockSpecification with
         kind = GLK_SuperValidatorRightsOwner "someSv"
-        vestingControllers = ControllerSpecification [[charlie, bob]])
+        vestingControllers = ControllerSpecification [[charlie, bob]]
+        meta = emptyMetadata)
     $ run "sv-lock"
         [ ("cip-127/request", "substitute-receiver-lock-on-accept")
         -- the new lock
