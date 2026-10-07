@@ -903,6 +903,13 @@ template GovernanceLockSubstitution with
       do
         governanceLockSubstitution_withdrawImpl self this actors
 
+    choice GovernanceLockSubstitution_DsoWithdrawExpired : GovernanceLockSubstitution_DsoWithdrawExpiredResult
+      controller target.dso
+      do
+        assertDeadlineExceeded "GovernanceLockSubstitution.expiresAt" expiresAt
+        _ <- unlockAmulet (ForOwner with dso = target.dso; owner) lockedAmulet
+        pure GovernanceLockSubstitution_DsoWithdrawExpiredResult
+
     interface instance V2.AllocationInstruction for GovernanceLockSubstitution where
       -- Mirrors the metadata that the `GovernanceLock` created on acceptance will report through its own
       -- `V2.Allocation` view, so that `AllocationView.allocation` only loses the substitution request and
@@ -964,6 +971,13 @@ template VestingLockSubstitution with
       do
         vestingLockSubstitution_withdrawImpl self this actors
 
+    choice VestingLockSubstitution_DsoWithdrawExpired : VestingLockSubstitution_DsoWithdrawExpiredResult
+      controller target.dso
+      do
+        assertDeadlineExceeded "VestingLockSubstitution.expiresAt" expiresAt
+        _ <- unlockAmulet (ForOwner with dso = target.dso; owner) lockedAmulet
+        pure VestingLockSubstitution_DsoWithdrawExpiredResult
+
     interface instance V2.AllocationInstruction for VestingLockSubstitution where
       -- Mirrors the metadata that the `VestingLock` created on acceptance will report through its own
       -- `V2.Allocation` view. The new lock keeps the vesting period and end time of the target.
@@ -1011,6 +1025,9 @@ data GovernanceLockSubstitution_WithdrawResult
     | GovernanceLockSubstitution_WithdrawResult_Withdrawn (ContractId Amulet)
   deriving (Eq, Show, Serializable)
 
+data GovernanceLockSubstitution_DsoWithdrawExpiredResult = GovernanceLockSubstitution_DsoWithdrawExpiredResult
+  deriving (Serializable)
+
 data VestingLockSubstitution_AcceptResult
   = VestingLockSubstitution_AcceptResult_Pending with
       substitutionCid : ContractId VestingLockSubstitution
@@ -1023,6 +1040,9 @@ data VestingLockSubstitution_WithdrawResult
     = VestingLockSubstitution_WithdrawResult_Pending (ContractId VestingLockSubstitution)
     | VestingLockSubstitution_WithdrawResult_Withdrawn (ContractId Amulet)
   deriving (Eq, Show, Serializable)
+
+data VestingLockSubstitution_DsoWithdrawExpiredResult = VestingLockSubstitution_DsoWithdrawExpiredResult
+  deriving (Serializable)
 
 data GovernanceLock_DsoSubstituteResult = GovernanceLock_DsoSubstituteResult with
     remainderCid : Optional (ContractId GovernanceLock)
