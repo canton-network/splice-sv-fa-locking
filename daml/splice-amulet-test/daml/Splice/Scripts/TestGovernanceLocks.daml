@@ -933,7 +933,7 @@ governanceLockV1 env owner amount kind meta = do
       amount
       instrumentId = env.registriesEnv.amuletV1.instrumentId
       requestedAt = now
-      executeBefore = now
+      executeBefore = now `addRelTime` hours 1
       inputHoldingCids = downcast <$> inputs
       meta = reasonToMeta (tsv1RequestMemo governanceLockRequestCreateLock kind) meta
     extraArgs = emptyExtraArgs
@@ -963,7 +963,7 @@ governanceUnlockV1 env lockCid actor meta = do
         amount = 0.0
         instrumentId = env.registriesEnv.amuletV1.instrumentId
         requestedAt = now
-        executeBefore = now
+        executeBefore = now `addRelTime` hours 1
         inputHoldingCids = []
         meta = reasonToMeta (tsv1RequestMemo governanceLockRequestUnlockAndStartVesting lock.specification.kind) $
           unionMetadata meta targetMeta

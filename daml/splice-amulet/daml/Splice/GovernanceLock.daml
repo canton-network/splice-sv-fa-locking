@@ -1778,6 +1778,9 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
 
   -- validate call to factory and retrieve context
   requireMatchExpected ("admin", expectedAdmin) dso
+  requireMatchExpected ("instrumentId", transfer.instrumentId) (amuletInstrumentId dso)
+  assertDeadlineExceeded "transfer.requestedAt" transfer.requestedAt
+  assertWithinDeadline "transfer.executeBefore" transfer.executeBefore
 
   request <- parseGovernanceLockRequestTSv1 dso transfer.sender transfer.receiver transfer.meta
 
@@ -1797,8 +1800,15 @@ governanceLock_transferFactoryV1_lockImpl
   -> GovernanceLockSpecification
   -> Update V1.TransferInstructionResult
 governanceLock_transferFactoryV1_lockImpl dso V1.TransferFactory_Transfer{transfer, extraArgs} specification = do
-  (_, lockCid, changeCid) <- governanceLock_lockForGovernance_impl
+  (lock, lockCid, changeCid) <- governanceLock_lockForGovernance_impl
     dso transfer.amount transfer.inputHoldingCids specification extraArgs transfer.sender transfer.requestedAt
+
+  let lockTransfer = (view $ toInterface @V1.TransferInstruction lock).transfer
+  requireMatchExpected ("lock transfer", lockTransfer) transfer with
+    executeBefore = lockTransfer.executeBefore
+    inputHoldingCids = lockTransfer.inputHoldingCids
+    meta = lockTransfer.meta
+
   pure $ V1.TransferInstructionResult with
     output = V1.TransferInstructionResult_Pending with
       transferInstructionCid = toInterfaceContractId $ lockCid
@@ -1859,6 +1869,14 @@ governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{
     inputHoldingCids = transfer.inputHoldingCids
     extraArgs
     requestedAt = transfer.requestedAt
+
+  let substitutionTransfer = (view substitution).transfer
+  requireMatchExpected ("substitution transfer", substitutionTransfer) transfer with
+    -- The receiver of the substitution is the owner of the target lock, not `lockManagerParty`
+    receiver = substitutionTransfer.receiver
+    executeBefore = substitutionTransfer.executeBefore
+    inputHoldingCids = substitutionTransfer.inputHoldingCids
+    meta = substitutionTransfer.meta
 
   pure V1.TransferInstructionResult with
     output = V1.TransferInstructionResult_Pending with
