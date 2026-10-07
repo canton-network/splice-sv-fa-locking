@@ -160,7 +160,7 @@ createSubstitutionV2 env proposer amount kind meta = do
 
 parseSubstitutionTSv2 : (Party, Text, Metadata, Party) -> Validation Text AnySubstitution
 parseSubstitutionTSv2 (admin, id, meta, proposer) =
-  runParser substitutionTSv2Parser (admin, id, unionMetadata substitutionRequestMetadata meta, proposer)
+  runParser (substitutionTSv2Parser admin id proposer) (unionMetadata substitutionRequestMetadata meta)
 
 testSubstitutionMeta_lockedTargetDefaults : Script ()
 testSubstitutionMeta_lockedTargetDefaults = do
