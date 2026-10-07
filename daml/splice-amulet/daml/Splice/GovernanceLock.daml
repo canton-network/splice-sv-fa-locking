@@ -1919,11 +1919,6 @@ substitutionControllersParser = controllersParser substitutionControllersMetaKey
 vestingControllersParser : ControllerSpecificationParser
 vestingControllersParser = controllersParser vestingControllersMetaKey
 
-parseGovernanceLockTag : CanAssert m => Text -> m GovernanceLockTag
-parseGovernanceLockTag t = case governanceLockTagFromText t of
-  Some tag -> pure tag
-  None -> assertFail $ "Invalid lock kind: '" <> t <> "'"
-
 governanceLockTagParser' : Parser Text GovernanceLockTag
 governanceLockTagParser' = Parser \t -> (governanceLockTagFromText t) <?> ("Invalid lock kind: '" <> t <> "'")
 
