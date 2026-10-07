@@ -142,10 +142,10 @@ createSubstitutionV2
   -> Script (Either SubmitError V2.AllocationInstructionResult)
 createSubstitutionV2 env proposer amount kind meta = do
   let admin = env.instrId.admin
-      (lockType, lockSubject) = governanceLockKindToTypeAndSubject kind
+      (tag, lockSubject) = governanceLockKindToTagAndSubject kind
       settlement = V2.SettlementInfo with
         executors = [admin]
-        id = lockType
+        id = governanceLockTagToText tag
         cid = None
         meta = emptyMetadata
       allocation = V2.AllocationSpecification with
@@ -170,7 +170,7 @@ testSubstitutionMeta_lockedTargetDefaults = do
         , (substitutionTargetOwnerMetaKey, partyToText alice)
         , ("app/id", "B-7") -- metadata of the new lock, not of the target
         ]
-  parsed <- expectParsed $ runParser substitutionTSv2Parser (admin, superValidatorLockType, meta, bob)
+  parsed <- expectParsed $ runParser substitutionTSv2Parser (admin, governanceLockTagToText GLT_SuperValidator, meta, bob)
   parsed === AS_Governance with
     governanceLockKey = GovernanceLockKey with
       dso = admin
@@ -208,7 +208,7 @@ testSubstitutionMeta_lockedTargetRoundTrip = do
         , (substitutionControllersMetaKey, encodeControllerSpecification newSpec.substitutionControllers)
         , (vestingControllersMetaKey, encodeControllerSpecification newSpec.vestingControllers)
         ]
-  parsed <- expectParsed $ runParser substitutionTSv2Parser (admin, featuredAppLockType, meta, bob)
+  parsed <- expectParsed $ runParser substitutionTSv2Parser (admin, governanceLockTagToText GLT_FeaturedApp, meta, bob)
   parsed === AS_Governance with governanceLockKey = targetKey; governanceSpecification = newSpec
 
 testSubstitutionMeta_vestingTargetRoundTrip : Script ()
@@ -236,7 +236,7 @@ testSubstitutionMeta_vestingTargetRoundTrip = do
         , ("app/id", "B-7") -- metadata of the new lock, not of the target
         , (vestingControllersMetaKey, encodeControllerSpecification newSpec.vestingControllers)
         ]
-  parsed <- expectParsed $ runParser substitutionTSv2Parser (admin, superValidatorLockType, meta, bob)
+  parsed <- expectParsed $ runParser substitutionTSv2Parser (admin, governanceLockTagToText GLT_SuperValidator, meta, bob)
   parsed === AS_Vesting with vestingLockKey = targetKey; vestingSpecification = newSpec
 
 testSubstitutionMeta_errors : Script ()
@@ -248,7 +248,7 @@ testSubstitutionMeta_errors = do
         [ (lockSubjectMetaKey, "TestSV")
         , (substitutionTargetOwnerMetaKey, partyToText alice)
         ]
-      parse values = runParser substitutionTSv2Parser (admin, superValidatorLockType, Metadata values, bob)
+      parse values = runParser substitutionTSv2Parser (admin, governanceLockTagToText GLT_SuperValidator, Metadata values, bob)
 
   expectParseError substitutionTargetStateMetaKey $
     parse $ TextMap.insert substitutionTargetStateMetaKey "unlocking" base
@@ -258,14 +258,14 @@ testSubstitutionMeta_errors = do
     parse $ TextMap.delete lockSubjectMetaKey base
   expectParseError unlockControllersMetaKey $
     parse $ TextMap.insert unlockControllersMetaKey (partyToText bob) $
-      TextMap.insert substitutionTargetStateMetaKey substitutionTargetStateVesting base
+      TextMap.insert substitutionTargetStateMetaKey (lockStateToText LS_Vesting) base
   expectParseError substitutionTargetSubstitutionControllersMetaKey $
     parse $ TextMap.insert substitutionTargetSubstitutionControllersMetaKey (partyToText alice) $
-      TextMap.insert substitutionTargetStateMetaKey substitutionTargetStateVesting base
+      TextMap.insert substitutionTargetStateMetaKey (lockStateToText LS_Vesting) base
   expectParseError substitutionTargetVestingPeriodMetaKey $
-    parse $ TextMap.insert substitutionTargetStateMetaKey substitutionTargetStateVesting base
+    parse $ TextMap.insert substitutionTargetStateMetaKey (lockStateToText LS_Vesting) base
   expectParseError substitutionTargetEndTimeMetaKey $
-    parse $ TextMap.insert substitutionTargetStateMetaKey substitutionTargetStateVesting base
+    parse $ TextMap.insert substitutionTargetStateMetaKey (lockStateToText LS_Vesting) base
 
 -- FIXME: test proposal withdrawal
 -- FIXME: test with vesting locks
@@ -497,7 +497,7 @@ testSubstitutionV2_rawSubstitutionView = do
   length substitutionView.inputHoldingCids === 1
   substitutionView.allocation.authorizer === basicAccount bob
   substitutionView.allocation.nextIterationFunding === Some (TextMap.singleton instrId.id 20000.0)
-  substitutionView.settlement.id === superValidatorLockType
+  substitutionView.settlement.id === governanceLockTagToText GLT_SuperValidator
 
 testSubstitutionV2_acceptRawSubstitution : Script ()
 testSubstitutionV2_acceptRawSubstitution = do
@@ -733,6 +733,6 @@ testSubstitutionV2_failures = do
     (Metadata $ TextMap.fromList $ (substitutionTargetStateMetaKey, "unlocking") :: targetOwnerMeta)
   expectFailureContaining unlockControllersMetaKey =<< createSubstitutionV2 env bob 10000.0 kind
     (Metadata $ TextMap.fromList $
-      (substitutionTargetStateMetaKey, substitutionTargetStateVesting)
+      (substitutionTargetStateMetaKey, lockStateToText LS_Vesting)
       :: (unlockControllersMetaKey, partyToText bob)
       :: targetOwnerMeta)

@@ -913,7 +913,8 @@ template GovernanceLockSubstitution with
     interface instance V2.AllocationInstruction for GovernanceLockSubstitution where
       -- Mirrors the metadata that the `GovernanceLock` created on acceptance will report through its own
       -- `V2.Allocation` view, so that `AllocationView.allocation` only loses the encoded target on acceptance.
-      view = substitution_allocationView target.dso target.specification.kind LS_Locked owner amount (encodeGovernanceLockSpecMetadata newLockSpecification newLockMeta) requestedAt lockedAmulet originalSubstitutionCid
+      view = substitution_allocationView target.dso target.specification.kind (encodeGovernanceLockSpecCompatMemo newLockSpecification.kind)
+        owner amount (encodeGovernanceLockSpecMetadata newLockSpecification newLockMeta) requestedAt lockedAmulet originalSubstitutionCid
         (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (governanceLockKeyToMeta target)
 
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
@@ -970,7 +971,12 @@ template VestingLockSubstitution with
         vestingLockSubstitution_withdrawImpl self this actors
 
     interface instance V2.AllocationInstruction for VestingLockSubstitution where
-      view = substitution_allocationView target.dso target.specification.kind LS_Vesting owner amount newLockMeta requestedAt lockedAmulet originalSubstitutionCid
+      -- Mirrors the metadata that the `VestingLock` created on acceptance will report through its own
+      -- `V2.Allocation` view. The new lock keeps the vesting period and end time of the target.
+      view = substitution_allocationView target.dso target.specification.kind
+        (encodeLockCompatMemo $ encodeVestingLockSpecCompatMetadata newLockSpecification.kind target.vestingPeriod target.endTime)
+        owner amount (encodeVestingLockSpecMetadata newLockSpecification target.vestingPeriod target.endTime newLockMeta)
+        requestedAt lockedAmulet originalSubstitutionCid
         (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (vestingLockKeyToMeta target)
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
         -- `AllocationInstruction_Accept` is nonconsuming, so archive here
@@ -1195,7 +1201,7 @@ vestingLockSubstitution_executeAccept self (VestingLockSubstitution with ..) (Ve
 substitution_allocationView
   :  Party -- ^ Registry admin.
   -> GovernanceLockKind
-  -> LockState
+  -> Text -- ^ Memo of the new lock, set as the reason in `allocation.meta`.
   -> Party -- ^ Proposer.
   -> Decimal
   -> Metadata -- ^ Metadata of the new lock.
@@ -1207,7 +1213,7 @@ substitution_allocationView
   -> Map.Map Party SubstitutionApproval
   -> Metadata -- ^ Encoded target, added to `allocation.meta`.
   -> V2.AllocationInstructionView
-substitution_allocationView admin kind state proposer amount newLockMeta requestedAt lockedAmulet originalSubstitutionCid acceptControllers withdrawControllers pendingSubstituteApprovals targetMeta =
+substitution_allocationView admin kind memo proposer amount newLockMeta requestedAt lockedAmulet originalSubstitutionCid acceptControllers withdrawControllers pendingSubstituteApprovals targetMeta =
   V2.AllocationInstructionView with
     originalInstructionCid = originalSubstitutionCid
     settlement = V2.SettlementInfo with
@@ -1222,7 +1228,7 @@ substitution_allocationView admin kind state proposer amount newLockMeta request
       settlementDeadline = Some maxComparableTime
       nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName amount
       committed = False
-      meta = reasonToMeta (encodeLockCompatMemo $ encodeCommonLockMetadata kind state mempty) $ unionMetadata newLockMeta targetMeta
+      meta = reasonToMeta memo $ unionMetadata newLockMeta targetMeta
     requestedAt
     inputHoldingCids = [toInterfaceContractId lockedAmulet]
     expiresAt = Some maxBound
@@ -1574,16 +1580,24 @@ encodeVestingLockCompatMetadata (VestingLock
   _originalLockCid
   _meta
   _pendingWithdrawApprovals) =
-    encodeCommonLockMetadata kind LS_Vesting $ Metadata $ TextMap.fromList
-      [ (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
-      , (lockVestingEndTimeMetaKey, encodeTime endTime)
-      , (lockVestingInfoMetaKey, "vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime)
-      ]
+    encodeVestingLockSpecCompatMetadata kind vestingPeriod endTime
+
+encodeVestingLockSpecCompatMetadata : GovernanceLockKind -> RelTime -> Time -> Metadata
+encodeVestingLockSpecCompatMetadata kind vestingPeriod endTime =
+  encodeCommonLockMetadata kind LS_Vesting $ Metadata $ TextMap.fromList
+    [ (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
+    , (lockVestingEndTimeMetaKey, encodeTime endTime)
+    , (lockVestingInfoMetaKey, "vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime)
+    ]
+
+encodeVestingLockSpecMetadata : VestingLockSpecification -> RelTime -> Time -> Metadata -> Metadata
+encodeVestingLockSpecMetadata (VestingLockSpecification kind vestingControllers) vestingPeriod endTime meta =
+  unionMetadata meta $ unionMetadata (encodeVestingLockSpecCompatMetadata kind vestingPeriod endTime) $
+    Metadata $ TextMap.singleton vestingControllersMetaKey (encodeControllerSpecification vestingControllers)
 
 encodeVestingLockMetadata : VestingLock -> Metadata
-encodeVestingLockMetadata lock@VestingLock{specification, meta} =
-  unionMetadata meta $ unionMetadata (encodeVestingLockCompatMetadata lock) $
-    Metadata $ TextMap.singleton vestingControllersMetaKey (encodeControllerSpecification specification.vestingControllers)
+encodeVestingLockMetadata VestingLock{specification, vestingPeriod, endTime, meta} =
+  encodeVestingLockSpecMetadata specification vestingPeriod endTime meta
 
 encodeLockCompatMemo : Metadata -> Text
 encodeLockCompatMemo meta =
@@ -1591,9 +1605,13 @@ encodeLockCompatMemo meta =
       keyValues = fmap encodeKeyValue $ TextMap.toList $ meta.values
   in cipMemoPrefix <> Text.intercalate "&" keyValues
 
+encodeGovernanceLockSpecCompatMemo : GovernanceLockKind -> Text
+encodeGovernanceLockSpecCompatMemo kind =
+  encodeLockCompatMemo $ encodeCommonLockMetadata kind LS_Locked mempty
+
 encodeGovernanceLockCompatMemo : GovernanceLock -> Text
 encodeGovernanceLockCompatMemo GovernanceLock{specification} =
-  encodeLockCompatMemo $ encodeCommonLockMetadata specification.kind LS_Locked mempty
+  encodeGovernanceLockSpecCompatMemo specification.kind
 
 encodeVestingLockCompatMemo : VestingLock -> Text
 encodeVestingLockCompatMemo lock =
@@ -1922,6 +1940,10 @@ parseGovernanceLockSpecificationTSv2 id owner rawMeta = do
   tag <- assertParsed governanceLockTagParser' id
   (, meta) <$> assertParsed (governanceLockSpecificationParser $ governanceLockKindParser' tag) (owner, meta)
 
+governanceLockRequestCreateLock = "create-lock"
+governanceLockRequestUnlockAndStartVesting = "unlock-and-start-vesting"
+governanceLockRequestTransferLock = "transfer-lock"
+
 governanceLockRequestTSv1Parser : Parser (Party, Party, Metadata) GovernanceLockRequest
 governanceLockRequestTSv1Parser = Parser \(sender, receiver, meta) ->
   let parseSpecification = runParser (governanceLockSpecificationParser governanceLockKindParser) (sender, meta)
@@ -1929,19 +1951,19 @@ governanceLockRequestTSv1Parser = Parser \(sender, receiver, meta) ->
       checkReceiverIsLockManager = (guard $ receiver == lockManagerParty) <?> ("Invalid receiver: '" <> show receiver <> "'")
   in case validate (getRequiredMetadata requestMetaKey meta) of
     Errors es -> Errors es
-    Success r | r == "create-lock" ->
+    Success r | r == governanceLockRequestCreateLock ->
       (\() specification meta -> GLR_CreateGovernanceLock with ..) <$>
         checkReceiverIsLockManager <*>
         parseSpecification <*>
         (ok $ removeGovernanceMetadataKeys meta)
-    Success r | r == "unlock-and-start-vesting" ->
+    Success r | r == governanceLockRequestUnlockAndStartVesting ->
       (\() specification unlockAmount unlockAt targetMeta -> GLR_UnlockGovernanceLock with ..) <$>
         checkReceiverIsLockManager <*>
         parseSpecification <*>
         runParser unlockAmountParser meta <*>
         runParser unlockAtTimeParser meta <*>
         parseTargetMeta
-    Success r | r == "transfer-lock" ->
+    Success r | r == governanceLockRequestTransferLock ->
       GLR_TransferGovernanceLock <$>
         parseSpecification <*>
         parseTargetMeta

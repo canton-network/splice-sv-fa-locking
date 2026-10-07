@@ -880,9 +880,9 @@ tsv1Operations = CompatGovernanceLockOperations with
     vestingWithdraw
   where
     governanceLock = governanceLockV1
-    optGovernanceUnlock = withdrawTransferInstructionV1
+    optGovernanceUnlock = governanceUnlockV1
     governanceUnlock env cid actor meta = ((<$>) fromSome) <$> optGovernanceUnlock env cid actor meta
-    pendingGovernanceUnlock = withdrawTransferInstructionV1
+    pendingGovernanceUnlock = governanceUnlockV1
     vestingWithdraw = withdrawTransferInstructionV1
 
 tsv2Operations = CompatGovernanceLockOperations with
@@ -898,40 +898,76 @@ tsv2Operations = CompatGovernanceLockOperations with
     pendingGovernanceUnlock = withdrawAllocationV2
     vestingWithdraw = withdrawAllocationV2
 
+-- | The TSv1 memo of a lock request. A wallet sets it as the transfer reason.
+tsv1RequestMemo : Text -> GovernanceLockKind -> Text
+tsv1RequestMemo request kind =
+  let (tag, subject) = governanceLockKindToTagAndSubject kind
+  in encodeLockCompatMemo $ Metadata $ TM.fromList
+       [ (requestMetaKey, request)
+       , (lockKindMetaKey, governanceLockTagToText tag)
+       , (lockSubjectMetaKey, subject)
+       ]
+
 governanceLockV1 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockV1 env owner amount kind meta = do
   now <- getTime
   inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
-  let encodedReason = lockSubjectMemo $ case kind of
-                        GLK_FeaturedApp party -> partyToText party
-                        GLK_ProvisionalFeaturedApp party -> partyToText party
-                        GLK_SuperValidatorRightsOwner svName -> svName
   let
    transfer = V1.TransferFactory_Transfer with
     expectedAdmin = env.instrId.admin
     transfer = V1.Transfer with
       sender = owner
-      receiver = case kind of
-                   GLK_FeaturedApp _ -> featuredAppLockCanonicalParty
-                   GLK_ProvisionalFeaturedApp _ -> provisionalFeaturedAppLockCanonicalParty
-                   GLK_SuperValidatorRightsOwner _ -> superValidatorLockCanonicalParty
+      receiver = lockManagerParty
       amount
       instrumentId = env.registriesEnv.amuletV1.instrumentId
       requestedAt = now
       executeBefore = now
       inputHoldingCids = downcast <$> inputs
-      meta = reasonToMeta encodedReason meta
+      meta = reasonToMeta (tsv1RequestMemo governanceLockRequestCreateLock kind) meta
     extraArgs = emptyExtraArgs
   optContractId <- WalletClientV2.transferV1 env.registries owner $ transfer
   pure $ optionalToEither (UnknownError "Unexpected none in lock[") $ fromInterfaceContractId <$> optContractId
 
+governanceUnlockV1
+  :  forall t. HasFromInterface t V1.TransferInstruction
+  => TestEnv
+  -> ContractId GovernanceLock
+  -> Party
+  -> Metadata
+  -> Script (Either SubmitError (Optional (ContractId t)))
+governanceUnlockV1 env lockCid actor meta = do
+  now <- getTime
+  Some lock <- queryContractId actor lockCid
+  let registry = env.registriesEnv.amuletV2
+      targetMeta = Metadata $ TM.fromList [(targetMetaMetaKeyPrefix <> k, v) | (k, v) <- TM.toList lock.meta.values]
+  [(rulesCid, _)] <- query @ExternalPartyAmuletRules registry.dso
+  rulesDisclosure <- queryDisclosure' registry.dso rulesCid
+  result <- submitWithTransferContext registry (actAs actor <> discloseMany' rulesDisclosure) \context ->
+    exerciseCmd (toInterfaceContractId @V1.TransferFactory rulesCid) V1.TransferFactory_Transfer with
+      expectedAdmin = env.instrId.admin
+      transfer = V1.Transfer with
+        sender = lock.owner
+        receiver = lockManagerParty
+        -- The amount of an unlock is ignored, so the owner needs no unlocked funds to unlock.
+        amount = 0.0
+        instrumentId = env.registriesEnv.amuletV1.instrumentId
+        requestedAt = now
+        executeBefore = now
+        inputHoldingCids = []
+        meta = reasonToMeta (tsv1RequestMemo governanceLockRequestUnlockAndStartVesting lock.specification.kind) $
+          Metadata $ TM.union meta.values targetMeta.values
+      extraArgs = ExtraArgs with context; meta = emptyMetadata
+  pure $ flip fmap result \r -> case r.output of
+    V1.TransferInstructionResult_Pending cid -> Some $ fromInterfaceContractId @t cid
+    _ -> None
+
 governanceLockV2 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockV2 env owner amount kind meta = do
-  let (lockType, lockSubject) = governanceLockKindToTypeAndSubject kind
+  let (tag, lockSubject) = governanceLockKindToTagAndSubject kind
       lockMeta = Metadata $ meta.values <> TM.fromList [(lockSubjectMetaKey, lockSubject)]
       settlementInfo = V2.SettlementInfo with
         executors = [env.instrId.admin]
-        id = lockType
+        id = governanceLockTagToText tag
         cid = None
         meta = emptyMetadata
       allocation = V2.AllocationSpecification with

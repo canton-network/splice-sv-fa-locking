@@ -132,31 +132,53 @@ test_vestingControllersParser = testControllersParser vestingControllersMetaKey 
 -- Lock kind parser
 -------------------
 
+test_governanceLockTagParser : Script ()
+test_governanceLockTagParser = do
+  -- `GovernanceLockTag` has no `Show` instance, so compare the tags by their text
+  let run = runParser governanceLockTagParser'
+      expectTag tag = expectSuccess (governanceLockTagToText tag) . fmap governanceLockTagToText
+
+  expectTag GLT_FeaturedApp $ run "fa-lock"
+  expectTag GLT_ProvisionalFeaturedApp $ run "provisional-fa-lock"
+  expectTag GLT_SuperValidator $ run "sv-lock"
+
+  -- The tag must be known, and the TSv1 receiver party format is not accepted
+  expectErrors ["Invalid lock kind: 'unknown-lock'"] $ governanceLockTagToText <$> run "unknown-lock"
+  expectErrors ["Invalid lock kind: 'cip-127_sv-lock'"] $ governanceLockTagToText <$> run "cip-127_sv-lock"
+
 test_governanceLockKindParser : Script ()
 test_governanceLockKindParser = do
-  let run lockType entries = runParser governanceLockKindParser (lockType, mkMeta entries)
-      subject s = [(lockSubjectMetaKey, s)]
+  let run entries = runParser governanceLockKindParser (mkMeta entries)
+      kind' k = (lockKindMetaKey, k)
+      kind k = kind' $ governanceLockTagToText k
+      subject s = (lockSubjectMetaKey, s)
 
-  expectSuccess (GLK_FeaturedApp testProvider) $ run featuredAppLockType (subject "provider")
-  expectSuccess (GLK_ProvisionalFeaturedApp testProvider) $ run provisionalFeaturedAppLockType (subject "provider")
-  expectSuccess (GLK_SuperValidatorRightsOwner "someSv") $ run superValidatorLockType (subject "someSv")
+  expectSuccess (GLK_FeaturedApp testProvider) $ run [kind GLT_FeaturedApp, subject "provider"]
+  expectSuccess (GLK_ProvisionalFeaturedApp testProvider) $ run [kind GLT_ProvisionalFeaturedApp, subject "provider"]
+  expectSuccess (GLK_SuperValidatorRightsOwner "someSv") $ run [kind GLT_SuperValidator, subject "someSv"]
 
-  -- Subject is required
-  expectErrors ["Missing metadata field '" <> lockSubjectMetaKey <> "'"] $ run featuredAppLockType []
-  expectErrors ["Missing metadata field '" <> lockSubjectMetaKey <> "'"] $ run superValidatorLockType []
+  -- Kind and subject are required; a missing kind is reported before the subject is checked
+  expectErrors ["Missing metadata field '" <> lockSubjectMetaKey <> "'"] $ run [kind GLT_FeaturedApp]
+  expectErrors ["Missing metadata field '" <> lockSubjectMetaKey <> "'"] $ run [kind GLT_SuperValidator]
+  expectErrors ["Missing metadata field '" <> lockKindMetaKey <> "'"] $ run [subject "provider"]
+  expectErrors ["Missing metadata field '" <> lockKindMetaKey <> "'"] $ run []
 
-  -- The lock type must be known
-  expectErrors ["Invalid lock type: unknown-lock"] $ run "unknown-lock" (subject "provider")
+  -- The lock kind must be known
+  expectErrors ["Invalid lock kind: 'unknown-lock'"] $ run [kind' "unknown-lock", subject "provider"]
 
   -- The subject of a featured app lock must be a party
-  expectErrors ["Invalid provider for " <> featuredAppLockType <> ": " <> invalidParty] $
-    run featuredAppLockType (subject invalidParty)
-  expectErrors ["Invalid provider for " <> provisionalFeaturedAppLockType <> ": " <> invalidParty] $
-    run provisionalFeaturedAppLockType (subject invalidParty)
+  expectErrors ["Invalid provider for fa-lock: " <> invalidParty] $
+    run [kind GLT_FeaturedApp, subject invalidParty]
+  expectErrors ["Invalid provider for provisional-fa-lock: " <> invalidParty] $
+    run [kind GLT_ProvisionalFeaturedApp, subject invalidParty]
 
   -- The subject of an SV lock must only contain alphanumeric characters or hyphens
-  expectErrors ["Invalid SV name for " <> superValidatorLockType <> ": " <> invalidSVName] $
-    run superValidatorLockType (subject invalidSVName)
+  expectErrors ["Invalid SV name for sv-lock: " <> invalidSVName] $
+    run [kind GLT_SuperValidator, subject invalidSVName]
+
+  -- `governanceLockKindParser'` takes the tag as an argument and ignores the kind field
+  expectSuccess (GLK_SuperValidatorRightsOwner "someSv") $
+    runParser (governanceLockKindParser' GLT_SuperValidator) (mkMeta [kind GLT_FeaturedApp, subject "someSv"])
 
 -- Metadata parser
 ------------------
@@ -233,19 +255,16 @@ test_governanceLockMetadataParser = do
 -- TODO(canton-network/splice-sv-fa-locking#68) test character check implementation
 
 test_governanceLockSpecificationParser'
-  :  (Text -> [(Text, Text)] -> i)
-  -> Parser i GovernanceLockSpecification
+  :  (Text -> [(Text, Text)] -> Validation Text GovernanceLockSpecification)
   -> Script ()
-test_governanceLockSpecificationParser' mkInput parser = do
-  let run lockType entries = runParser parser $ mkInput lockType entries
-
+test_governanceLockSpecificationParser' run = do
   let fullSpecification = GovernanceLockSpecification with
         kind = GLK_FeaturedApp testProvider
         unlockControllers = ControllerSpecification [[alice, bob]]
         substitutionControllers = ControllerSpecification [[bob]]
         vestingControllers = ControllerSpecification [[alice], [charlie]]
   expectSuccess fullSpecification $
-    run featuredAppLockType
+    run (governanceLockTagToText GLT_FeaturedApp)
       [ (lockSubjectMetaKey, "provider")
       , (unlockControllersMetaKey, "alice,bob")
       , (substitutionControllersMetaKey, "bob")
@@ -254,39 +273,132 @@ test_governanceLockSpecificationParser' mkInput parser = do
 
   -- Only the subject set, so all controllers default to the owner
   expectSuccess (ownerControlledSpecification testOwner $ GLK_SuperValidatorRightsOwner "someSv") $
-    run superValidatorLockType [(lockSubjectMetaKey, "someSv")]
+    run (governanceLockTagToText GLT_SuperValidator) [(lockSubjectMetaKey, "someSv")]
 
   -- One invalid field
   expectErrors [invalidPartyError substitutionControllersMetaKey invalidParty] $
-    run superValidatorLockType
+    run (governanceLockTagToText GLT_SuperValidator)
       [ (lockSubjectMetaKey, "someSv")
       , (substitutionControllersMetaKey, invalidParty)
       ]
 
   -- All invalid fields are reported
   expectErrors
-    [ "Invalid provider for " <> featuredAppLockType <> ": " <> invalidParty
+    [ "Invalid provider for fa-lock: " <> invalidParty
     , invalidPartyError unlockControllersMetaKey "bad$unlock"
     , invalidPartyError vestingControllersMetaKey "bad$vesting"
     ]
-    $ run featuredAppLockType
+    $ run (governanceLockTagToText GLT_FeaturedApp)
         [ (lockSubjectMetaKey, invalidParty)
         , (unlockControllersMetaKey, "alice,bad$unlock")
         , (substitutionControllersMetaKey, "bob")
         , (vestingControllersMetaKey, "bad$vesting")
         ]
 
+-- | The lock kind is read from the `lockKindMetaKey` field, as in TSv1.
 test_governanceLockSpecificationParser : Script ()
 test_governanceLockSpecificationParser =
-  test_governanceLockSpecificationParser'
-    (\lockType -> \entries -> (lockType, mkMeta entries, testOwner))
-    governanceLockSpecificationParser
+  test_governanceLockSpecificationParser' \kind entries ->
+    runParser (governanceLockSpecificationParser governanceLockKindParser)
+      (testOwner, mkMeta $ (lockKindMetaKey, kind) :: entries)
 
-test_governanceLockSpecificationTSv1Parser : Script ()
-test_governanceLockSpecificationTSv1Parser =
-  test_governanceLockSpecificationParser'
-    (\lockType -> \entries -> (testOwner, fromSome (partyFromText (lockType <> magicNamespace)), mkMeta entries))
-    governanceLockSpecificationTSv1Parser
+-- | The lock kind is given separately, as by the `settlement.id` in TSv2.
+test_governanceLockSpecificationParserWithTag : Script ()
+test_governanceLockSpecificationParserWithTag =
+  test_governanceLockSpecificationParser' \kind entries ->
+    runParser governanceLockTagParser' kind `bindValidation` \tag ->
+      runParser (governanceLockSpecificationParser $ governanceLockKindParser' tag) (testOwner, mkMeta entries)
+
+-- TSv1 request parser
+----------------------
+
+-- | `GovernanceLockRequest` has no `Eq` or `Show` instance, so the tests match on the parsed request.
+expectRequest : Validation Text GovernanceLockRequest -> (GovernanceLockRequest -> Script ()) -> Script ()
+expectRequest result check = case result of
+  Success request -> check request
+  Errors errors -> fail $ "Expected success, but got errors: " <> show errors
+
+expectRequestErrors : [Text] -> Validation Text GovernanceLockRequest -> Script ()
+expectRequestErrors expected result = case result of
+  Errors errors -> NonEmpty.toList errors === expected
+  Success _ -> fail "Expected errors, but got success"
+
+test_governanceLockRequestTSv1Parser : Script ()
+test_governanceLockRequestTSv1Parser = do
+  let run receiver entries = runParser governanceLockRequestTSv1Parser (testOwner, receiver, mkMeta entries)
+      request r = (requestMetaKey, r)
+      faLock = [(lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp), (lockSubjectMetaKey, "provider")]
+      faSpecification = ownerControlledSpecification testOwner $ GLK_FeaturedApp testProvider
+      invalidReceiverError p = "Invalid receiver: '" <> show p <> "'"
+
+  -- Create a lock: the specification is parsed, and the other governance fields are removed from the lock metadata
+  expectRequest (run lockManagerParty $ request "create-lock" :: ("app/id", "A-1") :: (unlockAmountMetaKey, "1.0") :: faLock) \case
+    GLR_CreateGovernanceLock{specification, meta} -> do
+      specification === faSpecification
+      meta === mkMeta [("app/id", "A-1")]
+    _ -> fail "Expected GLR_CreateGovernanceLock"
+
+  -- Create a lock with custom controllers
+  expectRequest (run lockManagerParty $ request "create-lock" :: (unlockControllersMetaKey, "alice,bob") :: faLock) \case
+    GLR_CreateGovernanceLock{specification} ->
+      specification === (faSpecification with unlockControllers = ControllerSpecification [[alice, bob]])
+    _ -> fail "Expected GLR_CreateGovernanceLock"
+
+  -- Unlock with all optional fields set
+  expectRequest
+    (run lockManagerParty $
+      request "unlock-and-start-vesting"
+        :: (unlockAmountMetaKey, "10000.0")
+        :: (unlockAtMetaKey, "1767225600000000")
+        :: (targetMetaMetaKeyPrefix <> "app/id", "A-1")
+        :: ("app/id", "B-7")
+        :: faLock)
+    \case
+      GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt, targetMeta} -> do
+        specification === faSpecification
+        unlockAmount === Some 10000.0
+        unlockAt === Some (time (date 2026 Jan 1) 0 0 0)
+        targetMeta === mkMeta [("app/id", "A-1")]
+      _ -> fail "Expected GLR_UnlockGovernanceLock"
+
+  -- Unlock without the optional fields
+  expectRequest (run lockManagerParty $ request "unlock-and-start-vesting" :: faLock) \case
+    GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt, targetMeta} -> do
+      specification === faSpecification
+      unlockAmount === None
+      unlockAt === None
+      targetMeta === emptyMetadata
+    _ -> fail "Expected GLR_UnlockGovernanceLock"
+
+  -- Transfer a lock: the receiver is the new owner, so it is not checked
+  expectRequest (run alice $ request "transfer-lock" :: (targetMetaMetaKeyPrefix <> "app/id", "A-1") :: faLock) \case
+    GLR_TransferGovernanceLock{specification, targetMeta} -> do
+      specification === faSpecification
+      targetMeta === mkMeta [("app/id", "A-1")]
+    _ -> fail "Expected GLR_TransferGovernanceLock"
+
+  -- The request is required and must be known; the value has no `cipMetaPrefix`
+  expectRequestErrors [missingMetadataMessage requestMetaKey] $ run lockManagerParty faLock
+  expectRequestErrors ["Invalid request: 'unlock'"] $ run lockManagerParty (request "unlock" :: faLock)
+  expectRequestErrors ["Invalid request: '" <> cipMetaPrefix <> "create-lock'"] $
+    run lockManagerParty (request (cipMetaPrefix <> "create-lock") :: faLock)
+
+  -- Creating and unlocking a lock needs the lock manager as the receiver
+  expectRequestErrors [invalidReceiverError alice] $ run alice (request "create-lock" :: faLock)
+  expectRequestErrors [invalidReceiverError alice] $ run alice (request "unlock-and-start-vesting" :: faLock)
+
+  -- All invalid fields are reported
+  expectRequestErrors
+    [ invalidReceiverError alice
+    , "Invalid provider for fa-lock: " <> invalidParty
+    , "Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: 'not-a-decimal'"
+    ]
+    $ run alice
+        [ request "unlock-and-start-vesting"
+        , (lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp)
+        , (lockSubjectMetaKey, invalidParty)
+        , (unlockAmountMetaKey, "not-a-decimal")
+        ]
 
 -- Substitution parser
 ----------------------
@@ -298,7 +410,8 @@ testAdmin = testParty "registry-admin"
 -- | Examples of the `allocation.meta` of an `AllocationFactory_Allocate` call that proposes a substitution.
 --
 -- The metadata keys are written out on purpose, so that these tests also serve as examples of how to call the API.
--- The second argument of `substitutionTSv2Parser` is the `settlement.id` of the call, which names the lock type.
+-- The second argument of `substitutionTSv2Parser` is the `settlement.id` of the call, which names the lock kind:
+-- `fa-lock`, `provisional-fa-lock` or `sv-lock`.
 -- Keys without a `substitution-target-` prefix specify the new lock; keys with that prefix specify the target lock.
 -- The `AllocationFactory_Allocate` implementation stores the keys without a `cip-127/` prefix,
 -- e.g., `app/id`, as the metadata of the new lock.
@@ -316,7 +429,7 @@ test_substitutionTSv2Parser_examples = do
         specification = ownerControlledSpecification alice $ GLK_SuperValidatorRightsOwner "someSv"
         meta = emptyMetadata
       governanceSpecification = ownerControlledSpecification bob $ GLK_SuperValidatorRightsOwner "someSv")
-    $ run "cip-127_sv-lock"
+    $ run "sv-lock"
         [ ("cip-127/lock-subject", "someSv")
         , ("cip-127/substitution-target-owner", "alice")
         ]
@@ -341,7 +454,7 @@ test_substitutionTSv2Parser_examples = do
         unlockControllers = ControllerSpecification [[charlie, bob], [charlie, testProvider]]
         substitutionControllers = ControllerSpecification [[charlie, bob], [charlie, testProvider]]
         vestingControllers = ControllerSpecification [[charlie], [bob]])
-    $ run "cip-127_fa-lock"
+    $ run "fa-lock"
         -- the new lock
         [ ("cip-127/lock-subject", "provider")
         , ("cip-127/unlock-controllers", "charlie,bob;charlie,provider")
@@ -373,7 +486,7 @@ test_substitutionTSv2Parser_examples = do
       vestingSpecification = VestingLockSpecification with
         kind = GLK_SuperValidatorRightsOwner "someSv"
         vestingControllers = ControllerSpecification [[charlie, bob]])
-    $ run "cip-127_sv-lock"
+    $ run "sv-lock"
         -- the new lock
         [ ("cip-127/lock-subject", "someSv")
         , ("cip-127/vesting-controllers", "charlie,bob")
@@ -387,11 +500,11 @@ test_substitutionTSv2Parser_examples = do
 
 test_substitutionTSv2Parser_errors : Script ()
 test_substitutionTSv2Parser_errors = do
-  let run entries = runParser substitutionTSv2Parser (testAdmin, superValidatorLockType, mkMeta entries, bob)
+  let run entries = runParser substitutionTSv2Parser (testAdmin, governanceLockTagToText GLT_SuperValidator, mkMeta entries, bob)
       subject = (lockSubjectMetaKey, "someSv")
       targetOwner = (substitutionTargetOwnerMetaKey, "alice")
       vestingTarget =
-        [ (substitutionTargetStateMetaKey, substitutionTargetStateVesting)
+        [ (substitutionTargetStateMetaKey, lockStateToText LS_Vesting)
         , (substitutionTargetVestingPeriodMetaKey, "5184000000000")
         , (substitutionTargetEndTimeMetaKey, "1767225600000000")
         ]
@@ -400,6 +513,10 @@ test_substitutionTSv2Parser_errors = do
   expectErrors ["Missing metadata field '" <> substitutionTargetOwnerMetaKey <> "'"] $ run [subject]
   expectErrors [invalidPartyError substitutionTargetOwnerMetaKey invalidParty] $
     run [subject, (substitutionTargetOwnerMetaKey, invalidParty)]
+
+  -- The `settlement.id` must name a lock kind; the TSv1 receiver party format is not accepted
+  expectErrors ["Invalid lock kind: 'cip-127_sv-lock'"] $
+    runParser substitutionTSv2Parser (testAdmin, "cip-127_sv-lock", mkMeta [subject, targetOwner], bob)
 
   -- The target state must be `locked` or `vesting`; an invalid state and an invalid owner are both reported
   expectErrors
@@ -435,7 +552,7 @@ test_substitutionTSv2Parser_errors = do
     [ "Missing metadata field '" <> substitutionTargetVestingPeriodMetaKey <> "'"
     , "Missing metadata field '" <> substitutionTargetEndTimeMetaKey <> "'"
     ]
-    $ run [subject, targetOwner, (substitutionTargetStateMetaKey, substitutionTargetStateVesting)]
+    $ run [subject, targetOwner, (substitutionTargetStateMetaKey, lockStateToText LS_Vesting)]
 
 -- Funding amount parser
 ------------------------

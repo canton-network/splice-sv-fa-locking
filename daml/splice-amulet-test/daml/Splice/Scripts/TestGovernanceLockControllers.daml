@@ -6,7 +6,6 @@ module Splice.Scripts.TestGovernanceLockControllers where
 
 import DA.Assert
 import DA.Foldable (forA_)
-import DA.List (sort)
 import DA.Map qualified as Map
 import DA.Text qualified as Text
 import DA.TextMap qualified as TextMap
@@ -373,8 +372,10 @@ testCustomControllersCompatPendingTSv2 = do
   remainingVesting.vestingAmount === 15000.0
   checkLockedHolding alice remainingVestingCid 15000.0
 
-testCustomControllersTSv1Withdraw : Script ()
-testCustomControllersTSv1Withdraw = do
+-- | The TSv1 view of a governance lock with custom controllers has no pending actions, as TSv1 can't approve unlocks.
+-- The approvals use the raw choices. The TSv1 view of the resulting vesting lock lists its withdraw controllers.
+testCustomControllersTSv1PendingActions : Script ()
+testCustomControllersTSv1PendingActions = do
   env@TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry alice 20000.0
@@ -383,17 +384,19 @@ testCustomControllersTSv1Withdraw = do
   lockCid <- governanceLockWithSpecRawChoice registry alice 20000.0 spec
 
   pendingParties <- transferInstructionPendingParties alice (toInterfaceContractId lockCid)
-  pendingParties === sort [alice, charlie]
+  pendingParties === []
 
-  -- alice withdraws the TSv1 transfer instruction
-  Some pendingInstructionCid <- WalletClientV2.withdrawTransferInstructionV1 env.registries alice (toInterfaceContractId lockCid)
-  let pendingLockCid = fromInterfaceContractId @GovernanceLock pendingInstructionCid
-  Some _ <- queryContractId alice pendingLockCid
-  pendingParties <- transferInstructionPendingParties alice pendingInstructionCid
-  pendingParties === [charlie]
+  -- The TSv1 transfer instruction can't be withdrawn
+  actionMustFail (expectMessageContains "Transfers representing governance locks cannot be withdrawn") $
+    WalletClientV2.tryWithdrawTransferInstructionV1 env.registries alice (toInterfaceContractId lockCid) emptyMetadata
+
+  -- alice approves the unlock
+  unlockAt <- (`addRelTime` hours 1) <$> getTime
+  pendingLockCid <- expectPendingUnlock =<< expectSuccess (unlockAs registry alice lockCid None unlockAt [alice])
+  pendingParties <- transferInstructionPendingParties alice (toInterfaceContractId pendingLockCid)
+  pendingParties === []
 
   -- charlie completes the unlock
-  unlockAt <- (`addRelTime` hours 1) <$> getTime
   (Some vestingLockCid, None, None) <- expectCompletedUnlock =<< expectSuccess
     (unlockAs registry alice pendingLockCid None unlockAt [charlie])
 
