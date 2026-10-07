@@ -36,7 +36,7 @@ import Splice.Expiry hiding (maxTime)
 import Splice.Fees (relTimeToDays, relTimeToSeconds)
 import Splice.ExternalPartyConfigState
 import Splice.Round
-import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
+import Splice.TokenStandard.Utils hiding (require, receiverMetaKey, reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime, relTimeFromMeta, timeFromMeta)
 import Splice.Types
 import Splice.Util
@@ -1410,6 +1410,9 @@ cipMemoPrefix = cipMetaPrefix <> "memo:"
 -- | Metadata key that specifies the requested lock operation.
 requestMetaKey = cipMetaPrefix <> "request"
 
+-- | Metadata key that specifies the receiver of a lock transfer.
+receiverMetaKey = cipMetaPrefix <> "receiver"
+
 -- | Metadata key of a `GovernanceLock` unlock that sets the time at which vesting starts.
 -- Encoded as microseconds since the epoch.
 unlockAtMetaKey = cipMetaPrefix <> "unlock-at"
@@ -1640,8 +1643,8 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
       governanceLock_transferFactoryV1_lockImpl dso arg specification
     GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt} ->
       governanceLock_transferFactoryV1_unlockImpl dso arg specification unlockAmount unlockAt
-    GLR_TransferGovernanceLock{specification} ->
-      governanceLock_transferFactoryV1_transferLockImpl dso arg specification
+    GLR_TransferGovernanceLock{specification, receiver} ->
+      governanceLock_transferFactoryV1_transferLockImpl dso arg specification receiver
     GLR_SubstituteLock{} ->
       assertFail tsv1SubstitutionRequestUnsupported
 
@@ -1694,8 +1697,9 @@ governanceLock_transferFactoryV1_transferLockImpl
   :  Party
   -> V1.TransferFactory_Transfer
   -> GovernanceLockSpecification
+  -> Party
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_transferLockImpl _dso V1.TransferFactory_Transfer{..} _specification = do
+governanceLock_transferFactoryV1_transferLockImpl _dso V1.TransferFactory_Transfer{..} _specification _receiver = do
   error "unimplemented"
 
 governanceLock_allocationFactoryV2_allocateImpl : Party -> V2.AllocationFactory_Allocate -> Update V2.AllocationInstructionResult
@@ -1712,8 +1716,8 @@ governanceLock_allocationFactoryV2_allocateImpl dso arg@V2.AllocationFactory_All
       governanceLock_allocationFactoryV2_lockImpl dso owner arg specification
     GLR_UnlockGovernanceLock{} ->
       assertFail tsv2UnlockRequestUnsupported
-    GLR_TransferGovernanceLock{specification} ->
-      governanceLock_allocationFactoryV2_transferImpl dso owner arg specification
+    GLR_TransferGovernanceLock{specification, receiver} ->
+      governanceLock_allocationFactoryV2_transferImpl dso owner arg specification receiver
     GLR_SubstituteLock{substitution} ->
       governanceLock_allocationFactoryV2_substituteImpl dso owner arg substitution
 
@@ -1744,8 +1748,9 @@ governanceLock_allocationFactoryV2_transferImpl
   -> Party
   -> V2.AllocationFactory_Allocate
   -> GovernanceLockSpecification
+  -> Party
   -> Update V2.AllocationInstructionResult
-governanceLock_allocationFactoryV2_transferImpl _dso _owner V2.AllocationFactory_Allocate{..} _specification = do
+governanceLock_allocationFactoryV2_transferImpl _dso _owner V2.AllocationFactory_Allocate{..} _specification _receiver = do
   error "unimplemented"
 
 governanceLock_allocationFactoryV2_substituteImpl
@@ -1803,6 +1808,7 @@ data GovernanceLockRequest
       unlockAt : Optional Time
   | GLR_TransferGovernanceLock with
       specification : GovernanceLockSpecification
+      receiver : Party
   | GLR_SubstituteLock with
       substitution : AnySubstitution
   deriving (Show)
@@ -1872,16 +1878,20 @@ keyValueParser = Parser \keyValues ->
 invalidPartyMessage : Text -> Text -> Text
 invalidPartyMessage key party = "Invalid party in metadata field '" <> key <> "': " <> party
 
+partyFromTextParser : Text -> Parser Text Party
+partyFromTextParser key = Parser \party -> (partyFromText party) <?> (invalidPartyMessage key party)
+
+partyFromMetadataParser : Text -> Parser Metadata Party
+partyFromMetadataParser key = Parser \meta ->
+  (validate $ getRequiredMetadata key meta) `bindValidation` (runParser (partyFromTextParser key))
+
 controllersParser : Text -> ControllerSpecificationParser
 controllersParser key =
     Parser \(meta, owner) ->
       ControllerSpecification <$> optional (pure [[owner]]) (runParser partiesParser) (TextMap.lookup key meta.values)
   where
     partiesParser : Parser Text [[Party]]
-    partiesParser = Parser \t -> forA (Text.splitOn ";" t) \ps -> forA (Text.splitOn "," ps) (runParser partyParser)
-
-    partyParser : Parser Text Party
-    partyParser = Parser \p -> (partyFromText p) <?> (invalidPartyMessage key p)
+    partiesParser = Parser \t -> forA (Text.splitOn ";" t) \ps -> forA (Text.splitOn "," ps) (runParser (partyFromTextParser key))
 
 unlockControllersParser : ControllerSpecificationParser
 unlockControllersParser = controllersParser unlockControllersMetaKey
@@ -1912,12 +1922,9 @@ governanceLockKindParser : Parser Metadata GovernanceLockKind
 governanceLockKindParser = Parser \meta ->
   (runParser governanceLockTagParser meta) `bindValidation` (\tag -> runParser (governanceLockKindParser' tag) meta)
 
-getGovernanceLockReason : Metadata -> Optional Text
-getGovernanceLockReason meta = Text.stripPrefix cipMemoPrefix $ reasonFromMeta meta
-
 governanceLockMetadataParser : Parser Metadata Metadata
 governanceLockMetadataParser = Parser \meta ->
-  case getGovernanceLockReason meta of
+  case Text.stripPrefix cipMemoPrefix $ reasonFromMeta meta of
     Some reason ->
       let
         -- Prefix all parsed keys with the CIP prefix to avoid clashes
@@ -1972,7 +1979,9 @@ glr_unlockGovernanceLock_parser kindParser = Parser \(owner, meta) ->
 
 glr_transferGovernanceLock_parser : Parser Metadata GovernanceLockKind -> Parser (Party, Metadata) GovernanceLockRequest
 glr_transferGovernanceLock_parser kindParser = Parser \(owner, meta) ->
-  GLR_TransferGovernanceLock <$> runParser (targetGovernanceLockSpecificationParser kindParser) (owner, meta)
+  GLR_TransferGovernanceLock <$>
+    runParser (targetGovernanceLockSpecificationParser kindParser) (owner, meta) <*>
+    runParser (partyFromMetadataParser receiverMetaKey) meta
 
 targetLockStateParser : Parser Metadata LockState
 targetLockStateParser = Parser \meta ->
@@ -2050,7 +2059,8 @@ governanceLockRequestTSv1Parser = Parser \(sender, receiver, meta) ->
         runWithKindParser glr_createGovernanceLock_parser
     Success r | r == governanceLockRequestUnlockAndStartVesting ->
       checkReceiverIsLockManager *> runWithKindParser glr_unlockGovernanceLock_parser
-    Success r | r == governanceLockRequestTransferLock -> runWithKindParser glr_transferGovernanceLock_parser
+    Success r | r == governanceLockRequestTransferLock ->
+      checkReceiverIsLockManager *> runWithKindParser glr_transferGovernanceLock_parser
     Success r | r == governanceLockRequestSubstituteLock -> invalid tsv1SubstitutionRequestUnsupported
     Success r -> invalid $ "Invalid request: '" <> r <> "'"
 

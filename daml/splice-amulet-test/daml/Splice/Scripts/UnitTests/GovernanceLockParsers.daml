@@ -368,11 +368,18 @@ test_governanceLockRequestTSv1Parser = do
       unlockAt === None
     _ -> fail "Expected GLR_UnlockGovernanceLock"
 
-  -- Transfer a lock: the receiver is the new owner, so it is not checked
-  expectRequest (run alice $ request "transfer-lock" :: (targetLockMetaMetaKeyPrefix <> "app/id", "A-1") :: faLock) \case
-    GLR_TransferGovernanceLock{specification} ->
-      specification === (faSpecification with meta = mkMeta [("app/id", "A-1")])
-    _ -> fail "Expected GLR_TransferGovernanceLock"
+  -- Transfer a lock: the new owner is read from the metadata
+  expectRequest
+    (run lockManagerParty $
+      request "transfer-lock"
+        :: (receiverMetaKey, "alice")
+        :: (targetLockMetaMetaKeyPrefix <> "app/id", "A-1")
+        :: faLock)
+    \case
+      GLR_TransferGovernanceLock{specification, receiver} -> do
+        specification === (faSpecification with meta = mkMeta [("app/id", "A-1")])
+        receiver === alice
+      _ -> fail "Expected GLR_TransferGovernanceLock"
 
   -- The request is required and must be known; the value has no `cipMetaPrefix`
   expectRequestErrors [missingMetadataMessage requestMetaKey] $ run lockManagerParty faLock
@@ -380,9 +387,13 @@ test_governanceLockRequestTSv1Parser = do
   expectRequestErrors ["Invalid request: '" <> cipMetaPrefix <> "create-lock'"] $
     run lockManagerParty (request (cipMetaPrefix <> "create-lock") :: faLock)
 
-  -- Creating and unlocking a lock needs the lock manager as the receiver
+  -- Creating, unlocking and transferring a lock needs the lock manager as the receiver
   expectRequestErrors [invalidReceiverError alice] $ run alice (request "create-lock" :: faLock)
   expectRequestErrors [invalidReceiverError alice] $ run alice (request "unlock-and-start-vesting" :: faLock)
+  expectRequestErrors [invalidReceiverError alice, missingMetadataMessage receiverMetaKey] $
+    run alice (request "transfer-lock" :: faLock)
+  -- Substituting a lock is not supported via TSv1
+  expectRequestErrors [tsv1SubstitutionRequestUnsupported] $ run alice (request "substitute-receiver-lock-on-accept" :: faLock)
 
   -- All invalid fields are reported
   expectRequestErrors
