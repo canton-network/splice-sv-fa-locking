@@ -939,7 +939,7 @@ governanceUnlockV1 env lockCid actor meta = do
   now <- getTime
   Some lock <- queryContractId actor lockCid
   let registry = env.registriesEnv.amuletV2
-      targetMeta = Metadata $ TM.fromList [(targetMetaMetaKeyPrefix <> k, v) | (k, v) <- TM.toList lock.meta.values]
+      targetMeta = Metadata $ TM.fromList [(targetLockMetaMetaKeyPrefix <> k, v) | (k, v) <- TM.toList lock.meta.values]
   [(rulesCid, _)] <- query @ExternalPartyAmuletRules registry.dso
   rulesDisclosure <- queryDisclosure' registry.dso rulesCid
   result <- submitWithTransferContext registry (actAs actor <> discloseMany' rulesDisclosure) \context ->
@@ -955,7 +955,7 @@ governanceUnlockV1 env lockCid actor meta = do
         executeBefore = now
         inputHoldingCids = []
         meta = reasonToMeta (tsv1RequestMemo governanceLockRequestUnlockAndStartVesting lock.specification.kind) $
-          Metadata $ TM.union meta.values targetMeta.values
+          unionMetadata meta targetMeta
       extraArgs = ExtraArgs with context; meta = emptyMetadata
   pure $ flip fmap result \r -> case r.output of
     V1.TransferInstructionResult_Pending cid -> Some $ fromInterfaceContractId @t cid

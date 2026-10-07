@@ -12,7 +12,7 @@ import DA.Optional (fromOptional)
 import DA.Text qualified as Text
 import DA.TextMap qualified as TextMap
 import DA.Time
-import DA.Validation (Validation(..))
+import DA.Validation
 
 import Daml.Script
 import Splice.Amulet
@@ -24,6 +24,7 @@ import Splice.ExternalPartyAmuletRules
 import Splice.GovernanceLock
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
+import Splice.Scripts.UnitTests.GovernanceLockParsers (substitutionTSv2Parser)
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
@@ -112,11 +113,11 @@ expectTargetInAllocationMeta targetMeta allocation =
   TextMap.filterWithKey (\k _ -> TextMap.member k targetMeta.values) allocation.meta.values === targetMeta.values
 
 -- | Checks that the `allocation` of a substitution proposal view equals the `allocation` of the lock
--- that the accepted proposal created, plus the encoded target in `allocation.meta`.
+-- that the accepted proposal created, plus the substitution request and the encoded target in `allocation.meta`.
 expectSubstitutionAllocation : Metadata -> V2.AllocationSpecification -> V2.AllocationSpecification -> Script ()
 expectSubstitutionAllocation targetMeta allocation newLockAllocation =
   allocation === newLockAllocation with
-    meta = Metadata $ TextMap.union newLockAllocation.meta.values targetMeta.values
+    meta = unionMetadata newLockAllocation.meta $ unionMetadata substitutionRequestMetadata targetMeta
 
 expectInstructionPending : V2.AllocationInstructionResult -> Script (ContractId V2.AllocationInstruction)
 expectInstructionPending result = case result.output of
@@ -136,7 +137,7 @@ expectInstructionFailed env result = case result.output of
   output -> fail $ "Expected AllocationInstructionResult_Failed, got " <> show output
 
 -- | Proposes a substitution through `AllocationFactory_Allocate`, funded with all unlocked
--- holdings of the proposer. `meta` gets the lock subject of `kind` added.
+-- holdings of the proposer. `meta` gets the substitution request and the lock subject of `kind` added.
 createSubstitutionV2
   :  TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata
   -> Script (Either SubmitError V2.AllocationInstructionResult)
@@ -155,9 +156,14 @@ createSubstitutionV2 env proposer amount kind meta = do
         settlementDeadline = Some maxComparableTime
         nextIterationFunding = Some $ TextMap.singleton env.instrId.id amount
         committed = False
-        meta = Metadata $ TextMap.insert lockSubjectMetaKey lockSubject meta.values
+        meta = Metadata $ TextMap.insert lockSubjectMetaKey lockSubject $
+          (unionMetadata substitutionRequestMetadata meta).values
 
   WalletClientV2.tryAllocateV2 env.registries proposer settlement allocation
+
+parseSubstitutionTSv2 : (Party, Text, Metadata, Party) -> Validation Text AnySubstitution
+parseSubstitutionTSv2 (admin, id, meta, proposer) =
+  runParser substitutionTSv2Parser (admin, id, unionMetadata substitutionRequestMetadata meta, proposer)
 
 testSubstitutionMeta_lockedTargetDefaults : Script ()
 testSubstitutionMeta_lockedTargetDefaults = do
@@ -167,10 +173,10 @@ testSubstitutionMeta_lockedTargetDefaults = do
   let kind = GLK_SuperValidatorRightsOwner "TestSV"
       meta = Metadata $ TextMap.fromList
         [ (lockSubjectMetaKey, "TestSV")
-        , (substitutionTargetOwnerMetaKey, partyToText alice)
+        , (targetLockOwnerMetaKey, partyToText alice)
         , ("app/id", "B-7") -- metadata of the new lock, not of the target
         ]
-  parsed <- expectParsed $ runParser substitutionTSv2Parser (admin, governanceLockTagToText GLT_SuperValidator, meta, bob)
+  parsed <- expectParsed $ parseSubstitutionTSv2 (admin, governanceLockTagToText GLT_SuperValidator, meta, bob)
   parsed === AS_Governance with
     governanceLockKey = GovernanceLockKey with
       dso = admin
@@ -201,14 +207,14 @@ testSubstitutionMeta_lockedTargetRoundTrip = do
         unlockControllers = ControllerSpecification [[bob, s]]
         substitutionControllers = ControllerSpecification [[bob]]
         vestingControllers = ControllerSpecification [[bob], [s]]
-      meta = Metadata $ TextMap.union (governanceLockKeyToMeta targetKey).values $ TextMap.fromList
+      meta = unionMetadata (encodeGovernanceLockTargetMetadata targetKey) $ Metadata $ TextMap.fromList
         [ (lockSubjectMetaKey, partyToText x)
         , ("app/id", "B-7") -- metadata of the new lock, not of the target
         , (unlockControllersMetaKey, encodeControllerSpecification newSpec.unlockControllers)
         , (substitutionControllersMetaKey, encodeControllerSpecification newSpec.substitutionControllers)
         , (vestingControllersMetaKey, encodeControllerSpecification newSpec.vestingControllers)
         ]
-  parsed <- expectParsed $ runParser substitutionTSv2Parser (admin, governanceLockTagToText GLT_FeaturedApp, meta, bob)
+  parsed <- expectParsed $ parseSubstitutionTSv2 (admin, governanceLockTagToText GLT_FeaturedApp, meta, bob)
   parsed === AS_Governance with governanceLockKey = targetKey; governanceSpecification = newSpec
 
 testSubstitutionMeta_vestingTargetRoundTrip : Script ()
@@ -231,12 +237,12 @@ testSubstitutionMeta_vestingTargetRoundTrip = do
       newSpec = VestingLockSpecification with
         kind
         vestingControllers = ControllerSpecification [[s, bob]]
-      meta = Metadata $ TextMap.union (vestingLockKeyToMeta targetKey).values $ TextMap.fromList
+      meta = unionMetadata (encodeVestingLockTargetMetadata targetKey) $ Metadata $ TextMap.fromList
         [ (lockSubjectMetaKey, "TestSV")
         , ("app/id", "B-7") -- metadata of the new lock, not of the target
         , (vestingControllersMetaKey, encodeControllerSpecification newSpec.vestingControllers)
         ]
-  parsed <- expectParsed $ runParser substitutionTSv2Parser (admin, governanceLockTagToText GLT_SuperValidator, meta, bob)
+  parsed <- expectParsed $ parseSubstitutionTSv2 (admin, governanceLockTagToText GLT_SuperValidator, meta, bob)
   parsed === AS_Vesting with vestingLockKey = targetKey; vestingSpecification = newSpec
 
 testSubstitutionMeta_errors : Script ()
@@ -246,26 +252,26 @@ testSubstitutionMeta_errors = do
   bob <- allocateParty "bob"
   let base = TextMap.fromList
         [ (lockSubjectMetaKey, "TestSV")
-        , (substitutionTargetOwnerMetaKey, partyToText alice)
+        , (targetLockOwnerMetaKey, partyToText alice)
         ]
-      parse values = runParser substitutionTSv2Parser (admin, governanceLockTagToText GLT_SuperValidator, Metadata values, bob)
+      parse values = parseSubstitutionTSv2 (admin, governanceLockTagToText GLT_SuperValidator, Metadata values, bob)
 
-  expectParseError substitutionTargetStateMetaKey $
-    parse $ TextMap.insert substitutionTargetStateMetaKey "unlocking" base
-  expectParseError substitutionTargetOwnerMetaKey $
-    parse $ TextMap.insert substitutionTargetOwnerMetaKey "bad$party" base
+  expectParseError targetLockStateMetaKey $
+    parse $ TextMap.insert targetLockStateMetaKey "unlocking" base
+  expectParseError targetLockOwnerMetaKey $
+    parse $ TextMap.insert targetLockOwnerMetaKey "bad$party" base
   expectParseError lockSubjectMetaKey $
     parse $ TextMap.delete lockSubjectMetaKey base
   expectParseError unlockControllersMetaKey $
     parse $ TextMap.insert unlockControllersMetaKey (partyToText bob) $
-      TextMap.insert substitutionTargetStateMetaKey (lockStateToText LS_Vesting) base
-  expectParseError substitutionTargetSubstitutionControllersMetaKey $
-    parse $ TextMap.insert substitutionTargetSubstitutionControllersMetaKey (partyToText alice) $
-      TextMap.insert substitutionTargetStateMetaKey (lockStateToText LS_Vesting) base
-  expectParseError substitutionTargetVestingPeriodMetaKey $
-    parse $ TextMap.insert substitutionTargetStateMetaKey (lockStateToText LS_Vesting) base
-  expectParseError substitutionTargetEndTimeMetaKey $
-    parse $ TextMap.insert substitutionTargetStateMetaKey (lockStateToText LS_Vesting) base
+      TextMap.insert targetLockStateMetaKey (lockStateToText LS_Vesting) base
+  expectParseError targetLockSubstitutionControllersMetaKey $
+    parse $ TextMap.insert targetLockSubstitutionControllersMetaKey (partyToText alice) $
+      TextMap.insert targetLockStateMetaKey (lockStateToText LS_Vesting) base
+  expectParseError targetLockVestingDurationMetaKey $
+    parse $ TextMap.insert targetLockStateMetaKey (lockStateToText LS_Vesting) base
+  expectParseError targetLockVestingEndTimeMetaKey $
+    parse $ TextMap.insert targetLockStateMetaKey (lockStateToText LS_Vesting) base
 
 -- FIXME: test proposal withdrawal
 -- FIXME: test with vesting locks
@@ -492,7 +498,7 @@ testSubstitutionV2_rawSubstitutionView = do
   Some substitutionView <- queryInterfaceContractId bob substitutionCid
   substitutionView.availableActions === Map.fromList [(V2.AIA_Accept, [[alice]]), (V2.AIA_Withdraw, [[bob]])]
   substitutionView.meta === emptyMetadata
-  expectTargetInAllocationMeta (governanceLockKeyToMeta targetKey) substitutionView.allocation
+  expectTargetInAllocationMeta (encodeGovernanceLockTargetMetadata targetKey) substitutionView.allocation
   substitutionView.originalInstructionCid === None
   length substitutionView.inputHoldingCids === 1
   substitutionView.allocation.authorizer === basicAccount bob
@@ -507,7 +513,7 @@ testSubstitutionV2_acceptRawSubstitution = do
   newLockCid <- expectInstructionCompleted =<< expectSuccess (acceptSubstitutionV2 env options substitutionCid alice)
 
   Some newLockView <- queryInterfaceContractId bob newLockCid
-  expectSubstitutionAllocation (governanceLockKeyToMeta targetKey) substitutionView.allocation newLockView.allocation
+  expectSubstitutionAllocation (encodeGovernanceLockTargetMetadata targetKey) substitutionView.allocation newLockView.allocation
   newLockView.settlement === substitutionView.settlement
   Some newLock <- queryContractId bob (fromInterfaceContractId @GovernanceLock newLockCid)
   newLock.owner === bob
@@ -540,7 +546,7 @@ testSubstitutionV2_partialCompatTarget = do
   errorIfLeft =<< governanceLockV1 env alice 50000.0 kind emptyMetadata
 
   result <- expectSuccess $ createSubstitutionV2 env bob 20000.0 kind $
-    Metadata $ TextMap.fromList [(substitutionTargetOwnerMetaKey, partyToText alice)]
+    Metadata $ TextMap.fromList [(targetLockOwnerMetaKey, partyToText alice)]
   TextMap.lookup instrId.id result.authorizerChangeCids === Some []
   substitutionCid <- expectInstructionPending result
   [(targetCid, _)] <- query @GovernanceLock alice
@@ -564,7 +570,7 @@ testSubstitutionV2_full = do
   targetCid <- governanceLockRawChoice registry alice 50000.0 kind
 
   substitutionCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 50000.0 kind $
-    Metadata $ TextMap.fromList [(substitutionTargetOwnerMetaKey, partyToText alice)])
+    Metadata $ TextMap.fromList [(targetLockOwnerMetaKey, partyToText alice)])
   options <- targetDisclosures alice targetCid
   expectInstructionCompleted =<< expectSuccess (acceptSubstitutionV2 env options substitutionCid alice)
 
@@ -595,11 +601,11 @@ testSubstitutionV2_customNewLock = do
         vestingControllers = ControllerSpecification [[charlie]]
   substitutionCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 20000.0 kind $
     Metadata $ TextMap.fromList
-      [ (substitutionTargetOwnerMetaKey, partyToText alice)
+      [ (targetLockOwnerMetaKey, partyToText alice)
       , (unlockControllersMetaKey, encodeControllerSpecification newSpec.unlockControllers)
       , (substitutionControllersMetaKey, encodeControllerSpecification newSpec.substitutionControllers)
       , (vestingControllersMetaKey, encodeControllerSpecification newSpec.vestingControllers)
-      , (substitutionTargetMetaMetaKeyPrefix <> "app/id", "A-1") -- metadata of the target lock
+      , (targetLockMetaMetaKeyPrefix <> "app/id", "A-1") -- metadata of the target lock
       , ("app/id", "42") -- metadata of the new lock
       ])
   Some substitutionView <- queryInterfaceContractId bob substitutionCid
@@ -607,7 +613,7 @@ testSubstitutionV2_customNewLock = do
   newLockCid <- expectInstructionCompleted =<< expectSuccess (acceptSubstitutionV2 env options substitutionCid alice)
 
   Some newLockView <- queryInterfaceContractId bob newLockCid
-  expectSubstitutionAllocation (governanceLockKeyToMeta targetKey) substitutionView.allocation newLockView.allocation
+  expectSubstitutionAllocation (encodeGovernanceLockTargetMetadata targetKey) substitutionView.allocation newLockView.allocation
   Some newLock <- queryContractId bob (fromInterfaceContractId @GovernanceLock newLockCid)
   newLock.specification === newSpec
   newLock.meta === appMeta
@@ -622,7 +628,7 @@ testSubstitutionV2_withdraw = do
   governanceLockRawChoice registry alice 50000.0 kind
 
   substitutionCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 20000.0 kind $
-    Metadata $ TextMap.fromList [(substitutionTargetOwnerMetaKey, partyToText alice)])
+    Metadata $ TextMap.fromList [(targetLockOwnerMetaKey, partyToText alice)])
   WalletClientV2.checkUnlockedBalance bob instrId 0.0
   expectInstructionFailed env =<< expectSuccess (withdrawSubstitutionV2 env substitutionCid bob)
   WalletClientV2.checkUnlockedBalance bob instrId 20000.0
@@ -647,16 +653,16 @@ testSubstitutionV2_vestingTarget = do
         meta = vestingLock.meta
 
   substitutionCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 20000.0 kind $
-    vestingLockKeyToMeta targetKey)
+    encodeVestingLockTargetMetadata targetKey)
   Some substitutionView <- queryInterfaceContractId bob substitutionCid
   substitutionView.meta === emptyMetadata
-  expectTargetInAllocationMeta (vestingLockKeyToMeta targetKey) substitutionView.allocation
+  expectTargetInAllocationMeta (encodeVestingLockTargetMetadata targetKey) substitutionView.allocation
 
   options <- targetDisclosures alice vestingCid
   newLockCid <- expectInstructionCompleted =<< expectSuccess (acceptSubstitutionV2 env options substitutionCid alice)
 
   Some newLockView <- queryInterfaceContractId bob newLockCid
-  expectSubstitutionAllocation (vestingLockKeyToMeta targetKey) substitutionView.allocation newLockView.allocation
+  expectSubstitutionAllocation (encodeVestingLockTargetMetadata targetKey) substitutionView.allocation newLockView.allocation
   Some newLock <- queryContractId bob (fromInterfaceContractId @VestingLock newLockCid)
   newLock.owner === bob
   newLock.vestingAmount === 20000.0
@@ -683,8 +689,8 @@ testSubstitutionV2_twoStepApproval = do
 
   firstCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 20000.0 kind $
     Metadata $ TextMap.fromList
-      [ (substitutionTargetOwnerMetaKey, partyToText alice)
-      , (substitutionTargetSubstitutionControllersMetaKey, encodeControllerSpecification targetSubstitutionControllers)
+      [ (targetLockOwnerMetaKey, partyToText alice)
+      , (targetLockSubstitutionControllersMetaKey, encodeControllerSpecification targetSubstitutionControllers)
       ])
   Some firstView <- queryInterfaceContractId charlie firstCid
   firstView.availableActions === Map.fromList [(V2.AIA_Accept, [[charlie, dave]]), (V2.AIA_Withdraw, [[bob]])]
@@ -704,7 +710,7 @@ testSubstitutionV2_failures = do
   env@TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
       kind = GLK_SuperValidatorRightsOwner "TestSV"
-      targetOwnerMeta = [(substitutionTargetOwnerMetaKey, partyToText alice)]
+      targetOwnerMeta = [(targetLockOwnerMetaKey, partyToText alice)]
   AmuletRegistryV2.tapFaucet registry alice 19000.0
   AmuletRegistryV2.tapFaucet registry bob 60000.0
   targetCid <- governanceLockRawChoice registry alice 20000.0 kind
@@ -717,7 +723,7 @@ testSubstitutionV2_failures = do
 
   -- the target controllers do not match the lock of alice
   mismatchCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 10000.0 kind $
-    Metadata $ TextMap.fromList $ (substitutionTargetUnlockControllersMetaKey, encodeControllerSpecification (ControllerSpecification [[alice], [bob]])) :: targetOwnerMeta)
+    Metadata $ TextMap.fromList $ (targetLockUnlockControllersMetaKey, encodeControllerSpecification (ControllerSpecification [[alice], [bob]])) :: targetOwnerMeta)
   result <- acceptSubstitutionV2 env options mismatchCid alice
   case result of
     Left _ -> pure ()
@@ -729,10 +735,10 @@ testSubstitutionV2_failures = do
   expectFailureContaining "substituted lock has less funds" =<< acceptSubstitutionV2 env options largeCid alice
 
   -- invalid metadata
-  expectFailureContaining substitutionTargetStateMetaKey =<< createSubstitutionV2 env bob 10000.0 kind
-    (Metadata $ TextMap.fromList $ (substitutionTargetStateMetaKey, "unlocking") :: targetOwnerMeta)
+  expectFailureContaining targetLockStateMetaKey =<< createSubstitutionV2 env bob 10000.0 kind
+    (Metadata $ TextMap.fromList $ (targetLockStateMetaKey, "unlocking") :: targetOwnerMeta)
   expectFailureContaining unlockControllersMetaKey =<< createSubstitutionV2 env bob 10000.0 kind
     (Metadata $ TextMap.fromList $
-      (substitutionTargetStateMetaKey, lockStateToText LS_Vesting)
+      (targetLockStateMetaKey, lockStateToText LS_Vesting)
       :: (unlockControllersMetaKey, partyToText bob)
       :: targetOwnerMeta)
