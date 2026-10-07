@@ -24,7 +24,7 @@ import DA.Validation
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
-import Splice.AmuletConfig (governanceLockFeaturedAppLockVestingDuration, governanceLockMinimumLockAmount, governanceLockSearchTimeGranularity, governanceLockSuperValidatorLockVestingDuration)
+import Splice.AmuletConfig (getTokenStandardMaxTTL, governanceLockFeaturedAppLockVestingDuration, governanceLockMinimumLockAmount, governanceLockSearchTimeGranularity, governanceLockSuperValidatorLockVestingDuration)
 import Splice.AmuletRules
 import Splice.Api.Token.AllocationV2 qualified as V2
 import Splice.Api.Token.AllocationInstructionV2 qualified as V2
@@ -880,6 +880,7 @@ template GovernanceLockSubstitution with
     withdrawSubstitutionControllers : ControllerSpecification  -- ^ Controllers that may withdraw the substitution proposal.
     pendingSubstituteApprovals : Map.Map Party SubstitutionApproval
     requestedAt : Time -- ^ Time of the request to create the proposal.
+    expiresAt : Time -- ^ Time after which the DSO may withdraw the proposal.
     originalSubstitutionCid : Optional (ContractId V2.AllocationInstruction)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
@@ -907,7 +908,7 @@ template GovernanceLockSubstitution with
       -- `V2.Allocation` view, so that `AllocationView.allocation` only loses the substitution request and
       -- the encoded target on acceptance.
       view = substitution_allocationView target.dso target.specification.kind (encodeGovernanceLockSpecCompatMemo newLockSpecification.kind)
-        owner amount (encodeGovernanceLockSpecMetadata newLockSpecification) requestedAt lockedAmulet originalSubstitutionCid
+        owner amount (encodeGovernanceLockSpecMetadata newLockSpecification) requestedAt expiresAt lockedAmulet originalSubstitutionCid
         (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (encodeGovernanceLockTargetMetadata target)
 
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
@@ -940,6 +941,7 @@ template VestingLockSubstitution with
     withdrawSubstitutionControllers : ControllerSpecification
     pendingSubstituteApprovals : Map.Map Party SubstitutionApproval
     requestedAt : Time -- ^ Time of the request to create the proposal.
+    expiresAt : Time -- ^ Time after which the DSO may withdraw the proposal.
     originalSubstitutionCid : Optional (ContractId V2.AllocationInstruction)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
@@ -968,7 +970,7 @@ template VestingLockSubstitution with
       view = substitution_allocationView target.dso target.specification.kind
         (encodeLockCompatMemo $ encodeVestingLockSpecCompatMetadata newLockSpecification.kind target.vestingPeriod target.endTime)
         owner amount (encodeVestingLockSpecMetadata newLockSpecification target.vestingPeriod target.endTime)
-        requestedAt lockedAmulet originalSubstitutionCid
+        requestedAt expiresAt lockedAmulet originalSubstitutionCid
         (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (encodeVestingLockTargetMetadata target)
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
         -- `AllocationInstruction_Accept` is nonconsuming, so archive here
@@ -1196,7 +1198,8 @@ substitution_allocationView
   -> Party -- ^ Proposer.
   -> Decimal
   -> Metadata -- ^ Metadata of the new lock.
-  -> Time
+  -> Time -- ^ Time of the request to create the proposal.
+  -> Time -- ^ Time after which the DSO may withdraw the proposal.
   -> ContractId LockedAmulet
   -> Optional (ContractId V2.AllocationInstruction)
   -> ControllerSpecification -- ^ Controllers that can accept.
@@ -1204,7 +1207,7 @@ substitution_allocationView
   -> Map.Map Party SubstitutionApproval
   -> Metadata -- ^ Encoded target, added to `allocation.meta`.
   -> V2.AllocationInstructionView
-substitution_allocationView admin kind memo proposer amount newLockMeta requestedAt lockedAmulet originalSubstitutionCid acceptControllers withdrawControllers pendingSubstituteApprovals targetMeta =
+substitution_allocationView admin kind memo proposer amount newLockMeta requestedAt expiresAt lockedAmulet originalSubstitutionCid acceptControllers withdrawControllers pendingSubstituteApprovals targetMeta =
   V2.AllocationInstructionView with
     originalInstructionCid = originalSubstitutionCid
     settlement = V2.SettlementInfo with
@@ -1222,7 +1225,7 @@ substitution_allocationView admin kind memo proposer amount newLockMeta requeste
       meta = reasonToMeta memo $ unionMetadata newLockMeta $ unionMetadata substitutionRequestMetadata targetMeta
     requestedAt
     inputHoldingCids = [toInterfaceContractId lockedAmulet]
-    expiresAt = Some maxBound
+    expiresAt = Some expiresAt
     -- availableActions = Map.singleton V2.AA_Withdraw (governanceLockRemainingUnlockControllers this).controllers
     availableActions = Map.fromList
       [ (V2.AIA_Accept, (remainingControllers (== SubstitutionApproval_Approve) pendingSubstituteApprovals acceptControllers).controllers)
@@ -1292,6 +1295,7 @@ createSubstitution CreateSubstitutionArgs {..} = do
         expiresAt = maxBound
   ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] inputHoldingCids context ""
   let forOwner = ForOwner with dso; owner
+  let expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
   case substitution of
     (AS_Governance with ..) -> do
       substitutionCid <- create GovernanceLockSubstitution with
@@ -1303,6 +1307,7 @@ createSubstitution CreateSubstitutionArgs {..} = do
         withdrawSubstitutionControllers = ownerControlled owner
         pendingSubstituteApprovals = mempty
         requestedAt
+        expiresAt
         originalSubstitutionCid = None
       substitution <- fetchChecked forOwner substitutionCid
       pure (toInterfaceContractId substitutionCid, toInterface substitution, changeHolding)
@@ -1316,6 +1321,7 @@ createSubstitution CreateSubstitutionArgs {..} = do
         withdrawSubstitutionControllers = ownerControlled owner
         pendingSubstituteApprovals = mempty
         requestedAt
+        expiresAt
         originalSubstitutionCid = None
       substitution <- fetchChecked forOwner substitutionCid
       pure (toInterfaceContractId substitutionCid, toInterface substitution, changeHolding)
