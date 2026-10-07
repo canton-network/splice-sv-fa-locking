@@ -1940,7 +1940,7 @@ governanceLockKindParser = Parser \meta ->
   (runParser governanceLockTagParser meta) `bindValidation` (\tag -> runParser (governanceLockKindParser' tag) meta)
 
 getGovernanceLockReason : Metadata -> Optional Text
-getGovernanceLockReason meta = TextMap.lookup reasonMetaKey meta.values >>= Text.stripPrefix cipMemoPrefix
+getGovernanceLockReason meta = Text.stripPrefix cipMemoPrefix $ reasonFromMeta meta
 
 governanceLockMetadataParser : Parser Metadata Metadata
 governanceLockMetadataParser = Parser \meta ->
