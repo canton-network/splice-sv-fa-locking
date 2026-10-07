@@ -50,18 +50,7 @@ createSubstitutionRaw
   -> Script (Either SubmitError ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult)
 createSubstitutionRaw env proposer substitution amount = do
   now <- getTime
-  (rulesCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures env.registriesEnv.amuletV2
-  inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount proposer) proposer env.instrId
-  submitWithTransferContext env.registriesEnv.amuletV2 (actAs [proposer] <> discloseMany' disc) \context ->
-    exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
-      args = CreateSubstitutionArgs with
-        dso = env.instrId.admin
-        substitution
-        owner = proposer
-        amount
-        inputHoldingCids = map downcast inputHoldingCids
-        extraArgs = emptyExtraArgs with context
-        requestedAt = now
+  proposeSubstitutionRawChoice' env.registriesEnv.amuletV2 proposer substitution amount now
 
 -- | Discloses a target lock and its locked amulet, which controllers other than the owner cannot see.
 targetDisclosures
@@ -382,7 +371,7 @@ testSubstitutionRaw_oneStepApprovalWithoutOwner = do
   AmuletRegistryV2.tapFaucet registry alice 49000.0 -- alice starts with 1000.0
   AmuletRegistryV2.tapFaucet registry bob 20000.0
 
-  let targetSpec = (ownerControlledSpecification alice kind emptyMetadata) with
+  let targetSpec = (ownerControlledSpecification alice kind) with
         substitutionControllers = ControllerSpecification [[charlie]]
   governanceLockCid <- governanceLockWithSpecRawChoice registry alice 50000.0 targetSpec
 
@@ -392,12 +381,12 @@ testSubstitutionRaw_oneStepApprovalWithoutOwner = do
   expectSuccess $ createSubstitutionRaw env bob
     (AS_Governance with
       governanceLockKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
-      governanceSpecification = ownerControlledSpecification bob kind emptyMetadata)
+      governanceSpecification = ownerControlledSpecification bob kind)
     20000.0
   [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob
 
   disclosures <- targetDisclosures alice governanceLockCid
-  GovernanceLockSubstitution_AcceptResult_Complete newLockCid (Some remainderCid) <-
+  GovernanceLockSubstitution_AcceptResult_Complete newLockCid (Some remainderCid) _ <-
     expectSuccess $ acceptGovernanceSubstitutionRaw env disclosures substitutionCid [charlie]
 
   checkLockedHolding bob newLockCid 20000.0
@@ -444,26 +433,46 @@ testSubstitutionRaw_failures = do
   AmuletRegistryV2.tapFaucet registry alice 49000.0 -- alice starts with 1000.0
   AmuletRegistryV2.tapFaucet registry bob 60000.0
 
-  let targetSpec = (ownerControlledSpecification alice kind emptyMetadata) with
+  let targetSpec = (ownerControlledSpecification alice kind) with
   _ <- governanceLockWithSpecRawChoice registry alice 50000.0 targetSpec
 
   -- Insufficient funds to create the substitution
   expectFailureContaining "Insufficient funds: you are missing" =<< createSubstitutionRaw env charlie
     (AS_Governance with
       governanceLockKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
-      governanceSpecification = ownerControlledSpecification bob kind emptyMetadata)
+      governanceSpecification = ownerControlledSpecification bob kind)
     60000.0
 
   -- Insufficient lock size on the accepter side
   expectSuccess $ createSubstitutionRaw env bob
     (AS_Governance with
       governanceLockKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
-      governanceSpecification = ownerControlledSpecification bob kind emptyMetadata)
+      governanceSpecification = ownerControlledSpecification bob kind)
     60000.0
   [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob
 
   expectFailureContaining "substituted lock has less funds " =<<
     acceptGovernanceSubstitutionRaw env mempty substitutionCid [alice]
+
+-- | Negative: `expiresAt` is derived from `requestedAt`, so dating a proposal into
+-- the future would let the proposer choose how long the DSO has to wait to withdraw it.
+testSubstitutionRaw_futureRequestedAt : Script ()
+testSubstitutionRaw_futureRequestedAt = do
+  TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      kind = GLK_SuperValidatorRightsOwner "TestSV"
+  AmuletRegistryV2.tapFaucet registry alice 49000.0
+  AmuletRegistryV2.tapFaucet registry bob 20000.0
+
+  let targetSpec = ownerControlledSpecification alice kind
+  _ <- governanceLockWithSpecRawChoice registry alice 50000.0 targetSpec
+
+  requestedAt <- (`addRelTime` days 1) <$> getTime
+  expectFailureContaining "requestedAt" =<< proposeSubstitutionRawChoice' registry bob
+    (AS_Governance with
+      governanceLockKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
+      governanceSpecification = ownerControlledSpecification bob kind)
+    20000.0 requestedAt
 
 testSubstitutionRaw_vestingWithoutOwner : Script ()
 testSubstitutionRaw_vestingWithoutOwner = do
