@@ -58,10 +58,11 @@ testGovernanceLockHappyPathScenario ops = do
   actionMustFail (expectMessageContains "Ledger time is at or past deadline 'unlockAt' at") $
     ops.governanceUnlock registry aliceLock (Some 80000.0) (now `addRelTime` days (-60)) [alice]
 
-  -- Check that bob can't unlock for alice - TODO(canton-network/splice-sv-fa-locking#39): disclose to bob with explicit disclosure for this.
-  -- actionMustFail (expectMessageContains "noodle") $ governanceUnlockRawChoice' registry aliceLock (Some 80000.0) now [bob]
-
   let unlockTime = now `addRelTime` days 1
+
+  -- Check that bob can't unlock for alice, even with the lock disclosed to bob
+  actionMustFail (expectMessageContains "must be a controller") $
+    submitLockChoice alice aliceLock $ governanceUnlockRawChoiceResult registry aliceLock (Some 80000.0) unlockTime [bob]
 
   -- Unlock 80k Amulet such that 1/8th should result in 10k Amulet withdrawable after 1/8th year.
   (Some aliceVesting, Some aliceLock, None) <- expectSuccess $ ops.governanceUnlock registry aliceLock (Some 80000.0) (unlockTime) [alice]
@@ -658,6 +659,18 @@ submitWithTransferContext registry options commands = do
   context <- AmuletRegistryV2.getExternalPartyConfigStateContext registry
   trySubmit (options <> discloseMany' context.disclosures) $ commands context.choiceContext
 
+submitLockChoice
+  :  (Template t, HasEnsure t, HasField "lockedAmulet" t (ContractId LockedAmulet))
+  => Party
+  -> ContractId t
+  -> (SubmitOptions -> Script (Either SubmitError a))
+  -> Script (Either SubmitError a)
+submitLockChoice owner cid run = do
+  Some lock <- queryContractId owner cid
+  lockDisclosure <- queryDisclosure' owner cid
+  amuletDisclosure <- queryDisclosure' owner lock.lockedAmulet
+  run (discloseMany' lockDisclosure <> discloseMany' amuletDisclosure)
+
 expectSuccess : (CanAssert m, Show err) => m (Either err a) -> m a
 expectSuccess a = a >>= errorIfLeft
 
@@ -697,17 +710,15 @@ governanceLockRawChoice registry owner amount kind = errorIfLeft =<< governanceL
 
 governanceLockRawChoice' : AmuletRegistryV2.AmuletRegistry -> Party -> Decimal -> GovernanceLockKind -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockRawChoice' registry owner amount kind =
-  governanceLockWithSpecRawChoice' registry owner amount (ownerControlledSpecification owner kind)
+  governanceLockWithSpecRawChoice' registry owner amount (ownerControlledSpecification owner kind emptyMetadata)
 
 governanceLockWithSpecRawChoice : AmuletRegistryV2.AmuletRegistry -> Party -> Decimal -> GovernanceLockSpecification -> Script (ContractId GovernanceLock)
 governanceLockWithSpecRawChoice registry owner amount specification = errorIfLeft =<< governanceLockWithSpecRawChoice' registry owner amount specification
 
 governanceLockWithSpecRawChoice' : AmuletRegistryV2.AmuletRegistry -> Party -> Decimal -> GovernanceLockSpecification -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockWithSpecRawChoice' registry owner amount specification = do
-  let dso = registry.instrumentId.admin
   now <- getTime
-  [(eparCid, _)] <- query @ExternalPartyAmuletRules dso -- TODO(canton-network/splice-sv-fa-locking#39): low priority: determine if there's already a way to call choices on this in the test env.
-  disc <- queryDisclosure' dso eparCid
+  (eparCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
   inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner registry.instrumentId
   result <- submitWithTransferContext registry (actAs [owner] <> discloseMany' disc) $
     \context -> exerciseCmd eparCid ExternalPartyAmuletRules_LockForGovernance with
@@ -717,7 +728,6 @@ governanceLockWithSpecRawChoice' registry owner amount specification = do
       extraArgs = emptyExtraArgs with context
       owner
       requestedAt = now
-      meta = emptyMetadata
   pure $ (.governanceLock) <$> result
 
 governanceUnlockRawChoice
@@ -880,10 +890,12 @@ tsv1Operations = CompatGovernanceLockOperations with
     vestingWithdraw
   where
     governanceLock = governanceLockV1
-    optGovernanceUnlock = withdrawTransferInstructionV1
+    optGovernanceUnlock = governanceUnlockV1
     governanceUnlock env cid actor meta = ((<$>) fromSome) <$> optGovernanceUnlock env cid actor meta
-    pendingGovernanceUnlock = withdrawTransferInstructionV1
-    vestingWithdraw = withdrawTransferInstructionV1
+    pendingGovernanceUnlock = governanceUnlockV1
+    vestingWithdraw env cid actor meta = do
+      result <- WalletClientV2.tryWithdrawTransferInstructionV1 env.registries actor (toInterfaceContractId cid) meta
+      pure $ fmap fromInterfaceContractId <$> result
 
 tsv2Operations = CompatGovernanceLockOperations with
     governanceLock
@@ -898,40 +910,75 @@ tsv2Operations = CompatGovernanceLockOperations with
     pendingGovernanceUnlock = withdrawAllocationV2
     vestingWithdraw = withdrawAllocationV2
 
+-- | The TSv1 memo of a lock request. A wallet sets it as the transfer reason.
+tsv1RequestMemo : Text -> GovernanceLockKind -> Text
+tsv1RequestMemo request kind =
+  let (tag, subject) = governanceLockKindToTagAndSubject kind
+  in encodeLockCompatMemo $ Metadata $ TM.fromList
+       [ (requestMetaKey, request)
+       , (lockKindMetaKey, governanceLockTagToText tag)
+       , (lockSubjectMetaKey, subject)
+       ]
+
 governanceLockV1 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockV1 env owner amount kind meta = do
   now <- getTime
   inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner env.instrId
-  let encodedReason = lockSubjectMemo $ case kind of
-                        GLK_FeaturedApp party -> partyToText party
-                        GLK_ProvisionalFeaturedApp party -> partyToText party
-                        GLK_SuperValidatorRightsOwner svName -> svName
   let
    transfer = V1.TransferFactory_Transfer with
     expectedAdmin = env.instrId.admin
     transfer = V1.Transfer with
       sender = owner
-      receiver = case kind of
-                   GLK_FeaturedApp _ -> featuredAppLockCanonicalParty
-                   GLK_ProvisionalFeaturedApp _ -> provisionalFeaturedAppLockCanonicalParty
-                   GLK_SuperValidatorRightsOwner _ -> superValidatorLockCanonicalParty
+      receiver = lockManagerParty
       amount
       instrumentId = env.registriesEnv.amuletV1.instrumentId
       requestedAt = now
       executeBefore = now
       inputHoldingCids = downcast <$> inputs
-      meta = reasonToMeta encodedReason meta
+      meta = reasonToMeta (tsv1RequestMemo governanceLockRequestCreateLock kind) meta
     extraArgs = emptyExtraArgs
   optContractId <- WalletClientV2.transferV1 env.registries owner $ transfer
   pure $ optionalToEither (UnknownError "Unexpected none in lock[") $ fromInterfaceContractId <$> optContractId
 
+governanceUnlockV1
+  :  forall t. HasFromInterface t V1.TransferInstruction
+  => TestEnv
+  -> ContractId GovernanceLock
+  -> Party
+  -> Metadata
+  -> Script (Either SubmitError (Optional (ContractId t)))
+governanceUnlockV1 env lockCid actor meta = do
+  now <- getTime
+  Some lock <- queryContractId actor lockCid
+  let registry = env.registriesEnv.amuletV2
+      targetMeta = Metadata $ TM.fromList [(targetLockMetaMetaKeyPrefix <> k, v) | (k, v) <- TM.toList lock.specification.meta.values]
+  (rulesCid, rulesDisclosure) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
+  result <- submitWithTransferContext registry (actAs actor <> discloseMany' rulesDisclosure) \context ->
+    exerciseCmd (toInterfaceContractId @V1.TransferFactory rulesCid) V1.TransferFactory_Transfer with
+      expectedAdmin = env.instrId.admin
+      transfer = V1.Transfer with
+        sender = lock.owner
+        receiver = lockManagerParty
+        -- The amount of an unlock is ignored, so the owner needs no unlocked funds to unlock.
+        amount = 0.0
+        instrumentId = env.registriesEnv.amuletV1.instrumentId
+        requestedAt = now
+        executeBefore = now
+        inputHoldingCids = []
+        meta = reasonToMeta (tsv1RequestMemo governanceLockRequestUnlockAndStartVesting lock.specification.kind) $
+          unionMetadata meta targetMeta
+      extraArgs = ExtraArgs with context; meta = emptyMetadata
+  pure $ flip fmap result \r -> case r.output of
+    V1.TransferInstructionResult_Pending cid -> Some $ fromInterfaceContractId @t cid
+    _ -> None
+
 governanceLockV2 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockV2 env owner amount kind meta = do
-  let (lockType, lockSubject) = governanceLockKindToTypeAndSubject kind
+  let (tag, lockSubject) = governanceLockKindToTagAndSubject kind
       lockMeta = Metadata $ meta.values <> TM.fromList [(lockSubjectMetaKey, lockSubject)]
       settlementInfo = V2.SettlementInfo with
         executors = [env.instrId.admin]
-        id = lockType
+        id = governanceLockTagToText tag
         cid = None
         meta = emptyMetadata
       allocation = V2.AllocationSpecification with
@@ -946,17 +993,6 @@ governanceLockV2 env owner amount kind meta = do
   pure $ case result.output of
     V2.AllocationInstructionResult_Completed cid -> Right $ fromInterfaceContractId cid
     o -> Left $ UnknownError $ "Unexpected AllocationInstructionResult: " <> show o
-
-withdrawTransferInstructionV1
-  :  forall t1 t2. (HasToInterface t1 V1.TransferInstruction, HasFromInterface t2 V1.TransferInstruction)
-  => TestEnv
-  -> ContractId t1
-  -> Party
-  -> Metadata
-  -> Script (Either SubmitError (Optional (ContractId t2)))
-withdrawTransferInstructionV1 env cid actor meta = do
-  result <- WalletClientV2.tryWithdrawTransferInstructionV1 env.registries actor (toInterfaceContractId cid) meta
-  pure $ fmap fromInterfaceContractId <$> result
 
 withdrawAllocationV2
   :  forall t1 t2. (HasToInterface t1 V2.Allocation, HasFromInterface t2 V2.Allocation)

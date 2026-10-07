@@ -6,7 +6,6 @@ module Splice.Scripts.TestGovernanceLockControllers where
 
 import DA.Assert
 import DA.Foldable (forA_)
-import DA.List (sort)
 import DA.Map qualified as Map
 import DA.Text qualified as Text
 import DA.TextMap qualified as TextMap
@@ -14,7 +13,7 @@ import DA.Optional (isNone, isSome)
 import DA.Time
 
 import Daml.Script
-import Splice.Amulet (Amulet, LockedAmulet)
+import Splice.Amulet (Amulet)
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1 (Metadata(..), emptyMetadata)
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
@@ -34,13 +33,14 @@ twoOfThreeSpecification a x s = GovernanceLockSpecification with
   unlockControllers = ControllerSpecification $ [[s, x], [s, a], [a, x]]
   substitutionControllers = ControllerSpecification $ [[s, x], [s, a], [a, x]]
   vestingControllers = ControllerSpecification $ [[s], [a]]
+  meta = emptyMetadata
 
 testCustomControllersCreationValidation : Script ()
 testCustomControllersCreationValidation = do
   TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry alice 50000.0
-  let spec = ownerControlledSpecification alice (GLK_FeaturedApp bob)
+  let spec = ownerControlledSpecification alice (GLK_FeaturedApp bob) emptyMetadata
   let controllerTypes =
         [ ("unlock", \cs -> spec with unlockControllers = ControllerSpecification cs)
         , ("substitution", \cs -> spec with substitutionControllers = ControllerSpecification cs)
@@ -73,7 +73,7 @@ testVestingControllersAreCopiedToVestingLock = do
   let registry = registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry alice 50000.0
 
-  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob)) with vestingControllers = ControllerSpecification [[charlie]]
+  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob) emptyMetadata) with vestingControllers = ControllerSpecification [[charlie]]
   lockCid <- governanceLockWithSpecRawChoice registry alice 50000.0 spec
 
   unlockAt <- (`addRelTime` hours 1) <$> getTime
@@ -82,18 +82,6 @@ testVestingControllersAreCopiedToVestingLock = do
   Some vestingLock <- queryContractId charlie vestingCid
   vestingLock.specification.vestingControllers === ControllerSpecification [[charlie]]
   vestingLock.pendingWithdrawApprovals === Map.empty
-
-submitLockChoice
-  :  (Template t, HasEnsure t, HasField "lockedAmulet" t (ContractId LockedAmulet))
-  => Party
-  -> ContractId t
-  -> (SubmitOptions -> Script (Either SubmitError a))
-  -> Script (Either SubmitError a)
-submitLockChoice owner cid run = do
-  Some lock <- queryContractId owner cid
-  lockDisclosure <- queryDisclosure' owner cid
-  amuletDisclosure <- queryDisclosure' owner lock.lockedAmulet
-  run (discloseMany' lockDisclosure <> discloseMany' amuletDisclosure)
 
 unlockAs
   :  AmuletRegistryV2.AmuletRegistry
@@ -203,7 +191,7 @@ testCustomControllersUnlockTimeOverAllSatisfiedSets = do
   TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry alice 50000.0
-  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob)) with
+  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob) emptyMetadata) with
         unlockControllers = ControllerSpecification [[charlie, bob], [alice, bob]]
   lockCid <- governanceLockWithSpecRawChoice registry alice 50000.0 spec
   now <- getTime
@@ -261,7 +249,7 @@ setupVestingLockWithControllers vestingControllersFor = do
   env@TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry alice 20000.0
-  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob)) with
+  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob) emptyMetadata) with
         vestingControllers = ControllerSpecification $ vestingControllersFor env
   lockCid <- governanceLockWithSpecRawChoice registry alice 20000.0 spec
   unlockAt <- (`addRelTime` hours 1) <$> getTime
@@ -373,27 +361,31 @@ testCustomControllersCompatPendingTSv2 = do
   remainingVesting.vestingAmount === 15000.0
   checkLockedHolding alice remainingVestingCid 15000.0
 
-testCustomControllersTSv1Withdraw : Script ()
-testCustomControllersTSv1Withdraw = do
+-- | The TSv1 view of a governance lock with custom controllers has no pending actions, as TSv1 can't approve unlocks.
+-- The approvals use the raw choices. The TSv1 view of the resulting vesting lock lists its withdraw controllers.
+testCustomControllersTSv1PendingActions : Script ()
+testCustomControllersTSv1PendingActions = do
   env@TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry alice 20000.0
-  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob)) with
+  let spec = (ownerControlledSpecification alice (GLK_FeaturedApp bob) emptyMetadata) with
         unlockControllers = ControllerSpecification [[alice, charlie]]
   lockCid <- governanceLockWithSpecRawChoice registry alice 20000.0 spec
 
   pendingParties <- transferInstructionPendingParties alice (toInterfaceContractId lockCid)
-  pendingParties === sort [alice, charlie]
+  pendingParties === []
 
-  -- alice withdraws the TSv1 transfer instruction
-  Some pendingInstructionCid <- WalletClientV2.withdrawTransferInstructionV1 env.registries alice (toInterfaceContractId lockCid)
-  let pendingLockCid = fromInterfaceContractId @GovernanceLock pendingInstructionCid
-  Some _ <- queryContractId alice pendingLockCid
-  pendingParties <- transferInstructionPendingParties alice pendingInstructionCid
-  pendingParties === [charlie]
+  -- The TSv1 transfer instruction can't be withdrawn
+  actionMustFail (expectMessageContains "Transfers representing governance locks cannot be withdrawn") $
+    WalletClientV2.tryWithdrawTransferInstructionV1 env.registries alice (toInterfaceContractId lockCid) emptyMetadata
+
+  -- alice approves the unlock
+  unlockAt <- (`addRelTime` hours 1) <$> getTime
+  pendingLockCid <- expectPendingUnlock =<< expectSuccess (unlockAs registry alice lockCid None unlockAt [alice])
+  pendingParties <- transferInstructionPendingParties alice (toInterfaceContractId pendingLockCid)
+  pendingParties === []
 
   -- charlie completes the unlock
-  unlockAt <- (`addRelTime` hours 1) <$> getTime
   (Some vestingLockCid, None, None) <- expectCompletedUnlock =<< expectSuccess
     (unlockAs registry alice pendingLockCid None unlockAt [charlie])
 

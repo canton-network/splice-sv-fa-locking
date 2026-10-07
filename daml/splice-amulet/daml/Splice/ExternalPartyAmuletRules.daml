@@ -148,10 +148,9 @@ template ExternalPartyAmuletRules
         extraArgs : ExtraArgs
         owner : Party
         requestedAt : Time
-        meta : Metadata
       controller owner
       do
-        (_, governanceLock, changeHolding) <- governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner requestedAt meta
+        (_, governanceLock, changeHolding) <- governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner requestedAt
         pure $ ExternalPartyAmuletRules_LockForGovernanceResult with
           governanceLock
           changeHolding
@@ -382,7 +381,7 @@ amulet_transferFactoryV1_transferImpl
   -> [Party]
   -> Api.Token.TransferInstructionV1.TransferFactory_Transfer
   -> Update Api.Token.TransferInstructionV1.TransferInstructionResult
-amulet_transferFactoryV1_transferImpl this actors arg | isGovernanceLockTransferParty arg.transfer.receiver =
+amulet_transferFactoryV1_transferImpl this actors arg | arg.transfer.receiver == lockManagerParty =
   governanceLock_transferFactoryV1_transferImpl this.dso actors arg
 amulet_transferFactoryV1_transferImpl this actors arg = do
   let Api.Token.TransferInstructionV1.TransferFactory_Transfer {expectedAdmin, transfer, extraArgs} = arg

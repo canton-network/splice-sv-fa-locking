@@ -32,6 +32,7 @@ module Splice.Testing.Registries.AmuletRegistryV2
   , convertAllFeaturedAppActivityMarkers
 
   -- ** Utilities
+  , getExtAmuletRulesWithDisclosures
   , getExternalPartyConfigStateContext
   ) where
 

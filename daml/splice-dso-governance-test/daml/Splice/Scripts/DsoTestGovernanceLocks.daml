@@ -11,6 +11,7 @@ import DA.Time
 import Daml.Script
 
 import Splice.Amulet (Amulet, FeaturedAppRight(..), LockedAmulet, LockedAmulet_OwnerExpireLockV2(..))
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
 import Splice.DsoRules (DsoRules, DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(..), DsoRules_VestingLock_ExpireVestingLock(..))
 import Splice.GovernanceLock
 import Splice.Scripts.DsoTestUtils (initDevNet)
@@ -87,9 +88,8 @@ setupVestingLock = do
         vestingPeriod = testVestingPeriod
         endTime = unlockAt `addRelTime` testVestingPeriod
         vestingAmount = testVestingAmount
-        specification = governanceToVestingSpecification (ownerControlledSpecification alice.primaryParty testLockKind)
+        specification = governanceToVestingSpecification (ownerControlledSpecification alice.primaryParty testLockKind emptyMetadata)
         originalLockCid = Some (coerceContractId governanceLockCid)
-        meta = mempty
         pendingWithdrawApprovals = Map.empty
 
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
