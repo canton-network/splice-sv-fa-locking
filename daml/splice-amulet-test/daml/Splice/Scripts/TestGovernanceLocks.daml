@@ -730,6 +730,26 @@ governanceLockWithSpecRawChoice' registry owner amount specification = do
       requestedAt = now
   pure $ (.governanceLock) <$> result
 
+proposeSubstitutionRawChoice
+  :  AmuletRegistryV2.AmuletRegistry -> Party -> AnySubstitution -> Decimal
+  -> Script ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult
+proposeSubstitutionRawChoice registry proposer substitution amount = do
+  let dso = registry.instrumentId.admin
+  now <- getTime
+  [(eparCid, _)] <- query @ExternalPartyAmuletRules dso
+  disc <- queryDisclosure' dso eparCid
+  inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount proposer) proposer registry.instrumentId
+  errorIfLeft =<< submitWithTransferContext registry (actAs [proposer] <> discloseMany' disc)
+    \context -> exerciseCmd eparCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
+      args = CreateSubstitutionArgs with
+        dso
+        substitution
+        owner = proposer
+        amount
+        inputHoldingCids = map downcast inputHoldingCids
+        extraArgs = emptyExtraArgs with context
+        requestedAt = now
+
 governanceUnlockRawChoice
   :  AmuletRegistryV2.AmuletRegistry
   -> ContractId GovernanceLock
