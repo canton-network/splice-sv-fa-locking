@@ -22,6 +22,9 @@ import Splice.TokenStandard.Utils
 testOwner : Party
 testOwner = fromSome $ partyFromText "some-owner"
 
+testAdmin : Party
+testAdmin = fromSome $ partyFromText "registry-admin"
+
 test_searchCurrentTimeBounds : Script ()
 test_searchCurrentTimeBounds = do
   sequence_ $ testPasses <$> testCases
@@ -71,7 +74,7 @@ test_parseGovernanceLockRequestTSv1_memo = do
       ]
     specification === ownerControlledSpecification testOwner (GLK_SuperValidatorRightsOwner "someSv") (Metadata (TextMap.singleton "app/id" "A-1"))
   where
-    parse = parseGovernanceLockRequestTSv1 testOwner lockManagerParty
+    parse = parseGovernanceLockRequestTSv1 testAdmin testOwner lockManagerParty
 
 -- | Round-trip testing to cover the GovernanceLockKind space in the parsers.
 -- A lock's memo, with a request added, parses back to the lock's specification.
@@ -91,7 +94,7 @@ test_governanceLockSpecificationTSv1_roundTrip = do
     serializeThenParse specification = do
       let memo = encodeLockCompatMemo $ encodeCommonLockMetadata specification.kind LS_Locked $
             Metadata $ TextMap.singleton requestMetaKey "create-lock"
-      request <- parseGovernanceLockRequestTSv1 testOwner lockManagerParty $ Metadata $ TextMap.singleton reasonMetaKey memo
+      request <- parseGovernanceLockRequestTSv1 testAdmin testOwner lockManagerParty $ Metadata $ TextMap.singleton reasonMetaKey memo
       case request of
         GLR_CreateGovernanceLock{specification} -> pure specification
         _ -> fail "Expected GLR_CreateGovernanceLock"
