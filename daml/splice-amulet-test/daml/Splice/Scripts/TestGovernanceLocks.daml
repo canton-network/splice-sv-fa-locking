@@ -883,7 +883,9 @@ tsv1Operations = CompatGovernanceLockOperations with
     optGovernanceUnlock = governanceUnlockV1
     governanceUnlock env cid actor meta = ((<$>) fromSome) <$> optGovernanceUnlock env cid actor meta
     pendingGovernanceUnlock = governanceUnlockV1
-    vestingWithdraw = withdrawTransferInstructionV1
+    vestingWithdraw env cid actor meta = do
+      result <- WalletClientV2.tryWithdrawTransferInstructionV1 env.registries actor (toInterfaceContractId cid) meta
+      pure $ fmap fromInterfaceContractId <$> result
 
 tsv2Operations = CompatGovernanceLockOperations with
     governanceLock
@@ -982,17 +984,6 @@ governanceLockV2 env owner amount kind meta = do
   pure $ case result.output of
     V2.AllocationInstructionResult_Completed cid -> Right $ fromInterfaceContractId cid
     o -> Left $ UnknownError $ "Unexpected AllocationInstructionResult: " <> show o
-
-withdrawTransferInstructionV1
-  :  forall t1 t2. (HasToInterface t1 V1.TransferInstruction, HasFromInterface t2 V1.TransferInstruction)
-  => TestEnv
-  -> ContractId t1
-  -> Party
-  -> Metadata
-  -> Script (Either SubmitError (Optional (ContractId t2)))
-withdrawTransferInstructionV1 env cid actor meta = do
-  result <- WalletClientV2.tryWithdrawTransferInstructionV1 env.registries actor (toInterfaceContractId cid) meta
-  pure $ fmap fromInterfaceContractId <$> result
 
 withdrawAllocationV2
   :  forall t1 t2. (HasToInterface t1 V2.Allocation, HasFromInterface t2 V2.Allocation)
