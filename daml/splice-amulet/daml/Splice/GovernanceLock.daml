@@ -232,7 +232,7 @@ template GovernanceLock
             requestedAt
             executeBefore = maxBound
             inputHoldingCids = []
-            meta = reasonToMeta (encodeGovernanceLockCompatMemo this) $ encodeGovernanceLockMetadata this
+            meta = reasonToMeta (encodeGovernanceLockCompatMemo this) (encodeGovernanceLockMetadata this)
           status = V1.TransferPendingInternalWorkflow with
             pendingActions = Map.fromList
               [ (p, "withdraw transfer instruction to approve unlock")
@@ -259,7 +259,7 @@ template GovernanceLock
             settlementDeadline = Some maxComparableTime
             nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName amount
             committed = False
-            meta = reasonToMeta (encodeGovernanceLockCompatMemo this) $ encodeGovernanceLockMetadata this
+            meta = reasonToMeta (encodeGovernanceLockCompatMemo this) (encodeGovernanceLockMetadata this)
           holdingCids = [toInterfaceContractId lockedAmulet]
           createdAt = requestedAt
           numIterations = 0
@@ -531,7 +531,7 @@ template VestingLock
             requestedAt = endTime `addRelTime` (- vestingPeriod)
             executeBefore = endTime
             inputHoldingCids = []
-            meta = reasonToMeta (encodeVestingLockCompatMemo this) meta
+            meta = reasonToMeta (encodeVestingLockCompatMemo this) (encodeVestingLockMetadata this)
           status = V1.TransferPendingInternalWorkflow with
             pendingActions = Map.fromList $
               [ (p, "withdraw vested amounts")
@@ -576,7 +576,7 @@ template VestingLock
             settlementDeadline = Some maxComparableTime
             nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName vestingAmount
             committed = False
-            meta = reasonToMeta (encodeVestingLockCompatMemo this) meta
+            meta = reasonToMeta (encodeVestingLockCompatMemo this) (encodeVestingLockMetadata this)
           holdingCids = [toInterfaceContractId lockedAmulet]
           createdAt = endTime `addRelTime` (- vestingPeriod)
           numIterations = 0
@@ -1226,7 +1226,7 @@ substitution_allocationView admin kind state proposer amount newLockMeta request
       settlementDeadline = Some maxComparableTime
       nextIterationFunding = Some $ TextMap.singleton amuletInstrumentIdName amount
       committed = False
-      meta = reasonToMeta (encodeLockCompatMemo kind state mempty) $ Metadata $ TextMap.union newLockMeta.values targetMeta.values
+      meta = reasonToMeta (encodeLockCompatMemo $ encodeCommonLockMetadata kind state mempty) $ unionMetadata newLockMeta targetMeta
     requestedAt
     inputHoldingCids = [toInterfaceContractId lockedAmulet]
     expiresAt = Some maxBound
@@ -1539,6 +1539,9 @@ getRequiredMetadata' parse key meta = case getOptionalMetadata key meta of
 getRequiredMetadata : CanAssert m => Text -> Metadata -> m Text
 getRequiredMetadata = getRequiredMetadata' pure
 
+unionMetadata : Metadata -> Metadata -> Metadata
+unionMetadata x y = Metadata $ TextMap.union x.values y.values
+
 removeGovernanceMetadataKeys : Metadata -> Metadata
 removeGovernanceMetadataKeys meta =
   Metadata $ TextMap.filterWithKey (\k _ -> not (cipMetaPrefix `Text.isPrefixOf` k)) meta.values
@@ -1547,45 +1550,28 @@ encodeControllerSpecification : ControllerSpecification -> Text
 encodeControllerSpecification ControllerSpecification{controllers} =
   Text.intercalate ";" $ fmap (Text.intercalate "," . fmap partyToText) controllers
 
+encodeCommonLockMetadata : GovernanceLockKind -> LockState -> Metadata -> Metadata
+encodeCommonLockMetadata kind state meta =
+  let (tag, subject) = governanceLockKindToTagAndSubject kind
+  in unionMetadata meta $ Metadata $ TextMap.fromList
+    [ (lockKindMetaKey, governanceLockTagToText tag)
+    , (lockSubjectMetaKey, subject)
+    , (lockStatusMetaKey, lockStateToText state)
+    ]
+
 encodeGovernanceLockSpecMetadata : GovernanceLockSpecification -> Metadata -> Metadata
 encodeGovernanceLockSpecMetadata (GovernanceLockSpecification kind unlockControllers substitutionControllers vestingControllers) meta =
-    Metadata $ TextMap.union meta.values $ TextMap.fromList $
-      (lockSubjectMetaKey, snd (governanceLockKindToTagAndSubject kind)) ::
-        fmap (\(k, cs) -> (k, encodeControllerSpecification cs))
-          [ (unlockControllersMetaKey, unlockControllers)
-          , (substitutionControllersMetaKey, substitutionControllers)
-          , (vestingControllersMetaKey, vestingControllers) ]
+  encodeCommonLockMetadata kind LS_Locked $ unionMetadata meta $ Metadata $ TextMap.fromList $
+    fmap (\(k, cs) -> (k, encodeControllerSpecification cs))
+      [ (unlockControllersMetaKey, unlockControllers)
+      , (substitutionControllersMetaKey, substitutionControllers)
+      , (vestingControllersMetaKey, vestingControllers) ]
 
 encodeGovernanceLockMetadata : GovernanceLock -> Metadata
 encodeGovernanceLockMetadata GovernanceLock{specification, meta} = encodeGovernanceLockSpecMetadata specification meta
 
-encodeLockCompatMemo : GovernanceLockKind -> LockState -> Metadata -> Text
-encodeLockCompatMemo kind state meta =
-  let (tag, subject) = governanceLockKindToTagAndSubject kind
-      encodeKeyValue (k, v) = unprefixMetaKey k <> "=" <> v
-      keyValues = fmap encodeKeyValue $ TextMap.toList $ TextMap.union meta.values $ TextMap.fromList
-        [ (lockKindMetaKey, governanceLockTagToText tag)
-        , (lockSubjectMetaKey, subject)
-        , (lockStatusMetaKey, lockStateToText state)
-        ]
-  in cipMemoPrefix <> Text.intercalate "&" keyValues
-
-encodeGovernanceLockCompatMemo : GovernanceLock -> Text
-encodeGovernanceLockCompatMemo (GovernanceLock
-  _dso
-  _owner
-  _amount
-  _lockedAmulet
-  (GovernanceLockSpecification kind _unlockControllers _substitutionControllers _vestingControllers)
-  _originalLockCid
-  _requestedAt
-  _meta
-  _pendingUnlockApprovals) =
-    -- TODO: make custom controllers optional and encode them here when Some so this works for TSv2 too
-    encodeLockCompatMemo kind LS_Locked mempty
-
-encodeVestingLockCompatMemo : VestingLock -> Text
-encodeVestingLockCompatMemo (VestingLock
+encodeVestingLockCompatMetadata : VestingLock -> Metadata
+encodeVestingLockCompatMetadata (VestingLock
   _dso
   _owner
   _lockedAmulet
@@ -1596,12 +1582,31 @@ encodeVestingLockCompatMemo (VestingLock
   _originalLockCid
   _meta
   _pendingWithdrawApprovals) =
-    encodeLockCompatMemo kind LS_Vesting $ Metadata $ TextMap.fromList
+    encodeCommonLockMetadata kind LS_Vesting $ Metadata $ TextMap.fromList
       [ (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
       , (lockVestingEndTimeMetaKey, encodeTime endTime)
       , (lockVestingInfoMetaKey, "vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime)
       -- TODO: make custom controllers optional and encode them here when Some so this works for TSv2 too
       ]
+
+encodeVestingLockMetadata : VestingLock -> Metadata
+encodeVestingLockMetadata lock@VestingLock{specification, meta} =
+  unionMetadata meta $ unionMetadata (encodeVestingLockCompatMetadata lock) $
+    Metadata $ TextMap.singleton vestingControllersMetaKey (encodeControllerSpecification specification.vestingControllers)
+
+encodeLockCompatMemo : Metadata -> Text
+encodeLockCompatMemo meta =
+  let encodeKeyValue (k, v) = unprefixMetaKey k <> "=" <> v
+      keyValues = fmap encodeKeyValue $ TextMap.toList $ meta.values
+  in cipMemoPrefix <> Text.intercalate "&" keyValues
+
+encodeGovernanceLockCompatMemo : GovernanceLock -> Text
+encodeGovernanceLockCompatMemo GovernanceLock{specification} =
+  encodeLockCompatMemo $ encodeCommonLockMetadata specification.kind LS_Locked mempty
+
+encodeVestingLockCompatMemo : VestingLock -> Text
+encodeVestingLockCompatMemo lock =
+  encodeLockCompatMemo $ encodeVestingLockCompatMetadata lock
 
 -- TSv1 support
 -- ============
@@ -1740,7 +1745,7 @@ governanceLock_allocationFactoryV2_lockImpl dso owner settlement allocation requ
     dso amount inputs specification extraArgs owner requestedAt (removeGovernanceMetadataKeys meta)
 
   let lockAlloc = view $ toInterface @V2.Allocation lock
-      expectedMeta = reasonToMeta (encodeGovernanceLockCompatMemo lock) $ encodeGovernanceLockMetadata lock
+      expectedMeta = reasonToMeta (encodeGovernanceLockCompatMemo lock) (encodeGovernanceLockMetadata lock)
   requireMatchExpected ("lock settlement", lockAlloc.settlement) settlement
   requireMatchExpected ("lock allocation", lockAlloc.allocation) allocation with meta = expectedMeta
 
