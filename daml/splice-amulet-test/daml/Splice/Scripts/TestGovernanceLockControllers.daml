@@ -13,7 +13,7 @@ import DA.Optional (isNone, isSome)
 import DA.Time
 
 import Daml.Script
-import Splice.Amulet (Amulet, LockedAmulet)
+import Splice.Amulet (Amulet)
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1 (Metadata(..), emptyMetadata)
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
@@ -81,18 +81,6 @@ testVestingControllersAreCopiedToVestingLock = do
   Some vestingLock <- queryContractId charlie vestingCid
   vestingLock.specification.vestingControllers === ControllerSpecification [[charlie]]
   vestingLock.pendingWithdrawApprovals === Map.empty
-
-submitLockChoice
-  :  (Template t, HasEnsure t, HasField "lockedAmulet" t (ContractId LockedAmulet))
-  => Party
-  -> ContractId t
-  -> (SubmitOptions -> Script (Either SubmitError a))
-  -> Script (Either SubmitError a)
-submitLockChoice owner cid run = do
-  Some lock <- queryContractId owner cid
-  lockDisclosure <- queryDisclosure' owner cid
-  amuletDisclosure <- queryDisclosure' owner lock.lockedAmulet
-  run (discloseMany' lockDisclosure <> discloseMany' amuletDisclosure)
 
 unlockAs
   :  AmuletRegistryV2.AmuletRegistry

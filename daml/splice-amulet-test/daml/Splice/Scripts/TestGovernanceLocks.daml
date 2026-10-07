@@ -58,10 +58,11 @@ testGovernanceLockHappyPathScenario ops = do
   actionMustFail (expectMessageContains "Ledger time is at or past deadline 'unlockAt' at") $
     ops.governanceUnlock registry aliceLock (Some 80000.0) (now `addRelTime` days (-60)) [alice]
 
-  -- Check that bob can't unlock for alice - TODO(canton-network/splice-sv-fa-locking#39): disclose to bob with explicit disclosure for this.
-  -- actionMustFail (expectMessageContains "noodle") $ governanceUnlockRawChoice' registry aliceLock (Some 80000.0) now [bob]
-
   let unlockTime = now `addRelTime` days 1
+
+  -- Check that bob can't unlock for alice, even with the lock disclosed to bob
+  actionMustFail (expectMessageContains "must be a controller") $
+    submitLockChoice alice aliceLock $ governanceUnlockRawChoiceResult registry aliceLock (Some 80000.0) unlockTime [bob]
 
   -- Unlock 80k Amulet such that 1/8th should result in 10k Amulet withdrawable after 1/8th year.
   (Some aliceVesting, Some aliceLock, None) <- expectSuccess $ ops.governanceUnlock registry aliceLock (Some 80000.0) (unlockTime) [alice]
@@ -658,6 +659,18 @@ submitWithTransferContext registry options commands = do
   context <- AmuletRegistryV2.getExternalPartyConfigStateContext registry
   trySubmit (options <> discloseMany' context.disclosures) $ commands context.choiceContext
 
+submitLockChoice
+  :  (Template t, HasEnsure t, HasField "lockedAmulet" t (ContractId LockedAmulet))
+  => Party
+  -> ContractId t
+  -> (SubmitOptions -> Script (Either SubmitError a))
+  -> Script (Either SubmitError a)
+submitLockChoice owner cid run = do
+  Some lock <- queryContractId owner cid
+  lockDisclosure <- queryDisclosure' owner cid
+  amuletDisclosure <- queryDisclosure' owner lock.lockedAmulet
+  run (discloseMany' lockDisclosure <> discloseMany' amuletDisclosure)
+
 expectSuccess : (CanAssert m, Show err) => m (Either err a) -> m a
 expectSuccess a = a >>= errorIfLeft
 
@@ -704,10 +717,8 @@ governanceLockWithSpecRawChoice registry owner amount specification = errorIfLef
 
 governanceLockWithSpecRawChoice' : AmuletRegistryV2.AmuletRegistry -> Party -> Decimal -> GovernanceLockSpecification -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockWithSpecRawChoice' registry owner amount specification = do
-  let dso = registry.instrumentId.admin
   now <- getTime
-  [(eparCid, _)] <- query @ExternalPartyAmuletRules dso -- TODO(canton-network/splice-sv-fa-locking#39): low priority: determine if there's already a way to call choices on this in the test env.
-  disc <- queryDisclosure' dso eparCid
+  (eparCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
   inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner registry.instrumentId
   result <- submitWithTransferContext registry (actAs [owner] <> discloseMany' disc) $
     \context -> exerciseCmd eparCid ExternalPartyAmuletRules_LockForGovernance with
@@ -942,8 +953,7 @@ governanceUnlockV1 env lockCid actor meta = do
   Some lock <- queryContractId actor lockCid
   let registry = env.registriesEnv.amuletV2
       targetMeta = Metadata $ TM.fromList [(targetLockMetaMetaKeyPrefix <> k, v) | (k, v) <- TM.toList lock.meta.values]
-  [(rulesCid, _)] <- query @ExternalPartyAmuletRules registry.dso
-  rulesDisclosure <- queryDisclosure' registry.dso rulesCid
+  (rulesCid, rulesDisclosure) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
   result <- submitWithTransferContext registry (actAs actor <> discloseMany' rulesDisclosure) \context ->
     exerciseCmd (toInterfaceContractId @V1.TransferFactory rulesCid) V1.TransferFactory_Transfer with
       expectedAdmin = env.instrId.admin

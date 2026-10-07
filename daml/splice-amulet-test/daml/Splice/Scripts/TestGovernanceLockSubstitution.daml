@@ -47,15 +47,13 @@ createSubstitutionRaw
   :  TestEnv -> Party -> AnySubstitution -> Decimal -> Metadata
   -> Script (Either SubmitError ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult)
 createSubstitutionRaw env proposer substitution amount newLockMeta = do
-  let admin = env.instrId.admin
   now <- getTime
-  [(rulesCid, _)] <- query @ExternalPartyAmuletRules admin
-  disc <- queryDisclosure' admin rulesCid
+  (rulesCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures env.registriesEnv.amuletV2
   inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount proposer) proposer env.instrId
   submitWithTransferContext env.registriesEnv.amuletV2 (actAs [proposer] <> discloseMany' disc) \context ->
     exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
       args = CreateSubstitutionArgs with
-        dso = admin
+        dso = env.instrId.admin
         substitution
         newLockMeta
         owner = proposer
@@ -305,8 +303,7 @@ testSubstitution_governanceLock = do
   let testSubstAmount = 50000.0
 
   -- FIXME: share that submission code with the other instances
-  [(rulesCid, _)] <- query @ExternalPartyAmuletRules dso
-  disc <- queryDisclosure' dso rulesCid
+  (rulesCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
   now <- getTime
   let createSubstitution amount = do
         inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
@@ -354,8 +351,7 @@ testSubstitution_governanceLock = do
   checkBalances (testSubstAmount, testLockAmount - testSubstAmount) (testLockAmount - testSubstAmount, testSubstAmount)
 
   -- propose full subst
-  [(rulesCid, _)] <- query @ExternalPartyAmuletRules dso
-  disc <- queryDisclosure' dso rulesCid
+  (rulesCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
   inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
   result <- submitWithTransferContext registry (actAs [bob] <> discloseMany' disc) $ \context ->
     exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with

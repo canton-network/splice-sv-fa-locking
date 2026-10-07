@@ -292,8 +292,6 @@ template GovernanceLock
       allocation_cancelExtraObservers _ = observer this
       allocation_withdrawExtraObservers _ = observer this
 
-  -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
-
 governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Optional Decimal -> Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_UnlockResult
 governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount unlockAt actors context state
     = do
@@ -602,8 +600,6 @@ template VestingLock
       allocation_settleExtraObservers _ = observer this
       allocation_cancelExtraObservers _ = observer this
       allocation_withdrawExtraObservers _ = observer this
-
-  -- TODO(canton-network/splice-sv-fa-locking#39): substitution, probably with a loose function for implementation sharing.
 
 vestingLock_tokenStandard_withdrawImpl : ContractId VestingLock -> VestingLock -> [Party] -> ExtraArgs -> Update VestingLock_WithdrawResult
 vestingLock_tokenStandard_withdrawImpl self this actors extraArgs = do
