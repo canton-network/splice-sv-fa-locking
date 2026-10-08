@@ -366,12 +366,14 @@ test_governanceLockRequestTSv1Parser = do
   expectRequest
     (run lockManagerParty $
       request "transfer-lock"
-        :: (receiverMetaKey, "alice")
+        :: (newLockOwnerMetaKey, "alice")
+        :: (transferAmountMetaKey, "1.0")
         :: faLock)
     \case
-      GLR_TransferGovernanceLock{governanceSpecification, receiver} -> do
+      GLR_TransferGovernanceLock{governanceSpecification, newOwner, transferAmount} -> do
         governanceSpecification === faSpecification
-        receiver === alice
+        newOwner === alice
+        transferAmount === 1.0
       _ -> fail "Expected GLR_TransferGovernanceLock"
 
   -- Withdraw vested funds: the vesting lock key and the vested-until time are read from the metadata
@@ -426,7 +428,7 @@ test_governanceLockRequestTSv1Parser = do
   expectRequestErrors [invalidReceiverError alice] $ run alice (request "create-lock" :: faLock)
   expectRequestErrors [invalidReceiverError alice, missingMetadataMessage unlockAmountMetaKey, missingMetadataMessage vestingStartTimeMetaKey] $
     run alice (request "unlock-and-start-vesting" :: faLock)
-  expectRequestErrors [invalidReceiverError alice, missingMetadataMessage receiverMetaKey] $
+  expectRequestErrors [invalidReceiverError alice, missingMetadataMessage newLockOwnerMetaKey, missingMetadataMessage transferAmountMetaKey] $
     run alice (request "transfer-lock" :: faLock)
   expectRequestErrors
     [ invalidReceiverError alice
@@ -437,7 +439,7 @@ test_governanceLockRequestTSv1Parser = do
     $ run alice (request "withdraw-vested-funds" :: faLock)
   -- Substituting a lock also needs the lock manager as the receiver; all errors are reported
   expectRequestErrors [invalidReceiverError alice, missingMetadataMessage targetLockOwnerMetaKey] $
-    run alice (request "substitute-receiver-lock-on-accept" :: faLock)
+    run alice (request "substitute-lock" :: faLock)
 
   -- All invalid fields are reported
   expectRequestErrors
@@ -493,7 +495,7 @@ test_substitutionTSv2Parser_examples = do
         specification = ownerControlledSpecification alice (GLK_SuperValidatorRightsOwner "someSv")
       governanceSpecification = ownerControlledSpecification bob (GLK_SuperValidatorRightsOwner "someSv"))
     $ run "sv-lock"
-        [ ("cip-127/request", "substitute-receiver-lock-on-accept")
+        [ ("cip-127/request", "substitute-lock")
         , ("cip-127/lock-subject", "someSv")
         , ("cip-127/target-lock-owner", "alice")
         ]
@@ -517,7 +519,7 @@ test_substitutionTSv2Parser_examples = do
         substitutionControllers = ControllerSpecification [[charlie, bob], [charlie, testProvider]]
         vestingControllers = ControllerSpecification [[charlie], [bob]])
     $ run "fa-lock"
-        [ ("cip-127/request", "substitute-receiver-lock-on-accept")
+        [ ("cip-127/request", "substitute-lock")
         -- the new lock
         , ("cip-127/lock-subject", "provider")
         , ("cip-127/unlock-controllers", "charlie,bob;charlie,provider")
@@ -547,7 +549,7 @@ test_substitutionTSv2Parser_examples = do
         kind = GLK_SuperValidatorRightsOwner "someSv"
         vestingControllers = ControllerSpecification [[charlie, bob]])
     $ run "sv-lock"
-        [ ("cip-127/request", "substitute-receiver-lock-on-accept")
+        [ ("cip-127/request", "substitute-lock")
         -- the new lock
         , ("cip-127/lock-subject", "someSv")
         , ("cip-127/vesting-controllers", "charlie,bob")

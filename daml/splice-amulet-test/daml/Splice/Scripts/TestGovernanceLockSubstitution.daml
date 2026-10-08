@@ -112,10 +112,14 @@ expectTargetInAllocationMeta targetMeta allocation =
 
 -- | Checks that the `allocation` of a substitution proposal view equals the `allocation` of the lock
 -- that the accepted proposal created, plus the substitution request and the encoded target in `allocation.meta`.
+-- and the accept request in the memo.
 expectSubstitutionAllocation : Metadata -> V2.AllocationSpecification -> V2.AllocationSpecification -> Script ()
-expectSubstitutionAllocation targetMeta allocation newLockAllocation =
-  allocation === newLockAllocation with
-    meta = unionMetadata newLockAllocation.meta $ unionMetadata substitutionRequestMetadata targetMeta
+expectSubstitutionAllocation targetMeta allocation newLockAllocation = do
+  let withoutMemo meta = Metadata $ TextMap.delete reasonMetaKey meta.values
+      memoFields meta = parseGovernanceLockMetadata @(Either Text) $ Metadata $ TextMap.singleton reasonMetaKey (reasonFromMeta meta)
+  (allocation with meta = withoutMemo allocation.meta) === newLockAllocation with
+    meta = withoutMemo $ unionMetadata newLockAllocation.meta $ unionMetadata substitutionRequestMetadata targetMeta
+  memoFields allocation.meta === (unionMetadata substitutionAcceptRequestMetadata <$> memoFields newLockAllocation.meta)
 
 expectInstructionPending : V2.AllocationInstructionResult -> Script (ContractId V2.AllocationInstruction)
 expectInstructionPending result = case result.output of
