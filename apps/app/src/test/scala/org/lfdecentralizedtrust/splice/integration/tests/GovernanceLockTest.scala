@@ -24,11 +24,11 @@ trait GovernanceLockTest extends TokenStandardTest {
   )
   case object CreateLock extends LockRequest[Unit]("create-lock", _ => Nil)
   case object UnlockAndStartVesting
-      extends LockRequest[(Option[BigDecimal], Option[CantonTimestamp])](
+      extends LockRequest[(BigDecimal, Option[CantonTimestamp])](
         "unlock-and-start-vesting",
         { case (unlockAmount, unlockAt) =>
-          unlockAmount.map(d => ("unlock-amount", d.toString)).toList ++
-            unlockAt.map(t => ("unlock-at", t.toMicros.toString))
+          ("unlock-amount", unlockAmount.toString) ::
+            unlockAt.map(t => ("unlock-at", t.toMicros.toString)).toList
         },
       )
 
@@ -126,7 +126,7 @@ trait GovernanceLockTest extends TokenStandardTest {
       lockKind: LockKind,
       lockSubject: String,
       governanceLockCid: transferinstructionv1.TransferInstruction.ContractId,
-      unlockAmount: Option[BigDecimal] = None,
+      unlockAmount: BigDecimal,
       unlockAt: Option[CantonTimestamp] = None,
   )(implicit env: SpliceTestConsoleEnvironment): Option[
     (

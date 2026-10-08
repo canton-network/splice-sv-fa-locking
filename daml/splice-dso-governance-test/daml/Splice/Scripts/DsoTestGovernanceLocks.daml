@@ -75,8 +75,8 @@ setupVestingLock = do
   -- `ExternalPartyAmuletRules_LockForGovernance` -> `GovernanceLock_Unlock`
   unlockAt <- (`addRelTime` hours 1) <$> getTime
 
-  -- `unlockAmount = None` unlocks the full amount, so no `GovernanceLock` remains.
-  (Some vestingLockCid, None, None) <- governanceUnlockRawChoice registry governanceLockCid None unlockAt [alice.primaryParty]
+  -- `unlockAmount = testVestingAmount` unlocks the full amount, so no `GovernanceLock` remains.
+  (Some vestingLockCid, None, None) <- governanceUnlockRawChoice registry governanceLockCid testVestingAmount unlockAt [alice.primaryParty]
 
   [(lockedAmuletCid, lockedAmulet)] <- query @LockedAmulet alice.primaryParty
 

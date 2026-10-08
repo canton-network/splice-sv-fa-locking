@@ -131,6 +131,7 @@ class ExpireVestingLockTimeBasedIntegrationTest
             lockKind,
             sv1Name,
             governanceLock,
+            unlockAmount = lockAmount,
             unlockAt = Some(unlockAt),
           )
         }

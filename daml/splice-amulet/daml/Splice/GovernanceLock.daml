@@ -79,7 +79,7 @@ data VestingLockSpecification
 
 -- | An unlock approval recorded by one unlock controller.
 data UnlockApproval = UnlockApproval with
-    unlockAmount : Optional Decimal  -- ^ Amount to unlock. None means the full amount.
+    unlockAmount : Decimal  -- ^ Amount to unlock.
     unlockAt : Time  -- ^ Time at which the controller wants vesting to start.
   deriving (Eq, Show, Serializable)
 
@@ -116,7 +116,7 @@ template GovernanceLock
 
     choice GovernanceLock_Unlock : GovernanceLock_UnlockResult
       with
-        unlockAmount : Optional Decimal -- ^ Amount to unlock. Defaults to the full amount if not set.
+        unlockAmount : Decimal -- ^ Amount to unlock.
         unlockAt : Time  -- ^ Time as of which the unlock is to be registered and vesting starts. Must be in the future.
         extraArgs : ExtraArgs
         actors : [Party]
@@ -289,7 +289,7 @@ template GovernanceLock
       allocation_cancelExtraObservers _ = observer this
       allocation_withdrawExtraObservers _ = observer this
 
-governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Optional Decimal -> Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_UnlockResult
+governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_UnlockResult
 governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount unlockAt actors context state
     = do
         assertWithinDeadline "unlockAt" unlockAt
@@ -302,11 +302,11 @@ governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount unlockAt 
             pure GovernanceLock_UnlockResult_Pending with pendingLock
           Right approvedUnlockAt -> governanceLock_executeUnlock self this unlockAmount approvedUnlockAt context state
 
-governanceLock_executeUnlock : ContractId GovernanceLock -> GovernanceLock -> Optional Decimal -> Time -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_UnlockResult
+governanceLock_executeUnlock : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_UnlockResult
 governanceLock_executeUnlock self this@(GovernanceLock {..}) unlockAmount unlockAt context state
     = do
         -- Cap the approved amount at the locked amount, as approvals are kept when the lock shrinks, e.g. with a partial substitution
-        let actualUnlockAmount = min amount (fromOptional amount unlockAmount)
+        let actualUnlockAmount = min amount unlockAmount
         let isFullUnlock = actualUnlockAmount == amount
         require' ("unlockAmount", actualUnlockAmount) isGreaterR ("zero", 0.0)
         unless isFullUnlock $ do
@@ -423,7 +423,7 @@ getUnlockAtTime : Time -> Metadata -> ExternalPartyConfigState -> Update Time
 getUnlockAtTime requestedAt meta state =
   getUnlockAtTime' requestedAt (timeFromMeta unlockAtMetaKey meta) state
 
-getUnlockAmount : CanAssert m => Metadata -> m (Optional Decimal)
+getUnlockAmount : CanAssert m => Metadata -> m Decimal
 getUnlockAmount = assertParsed unlockAmountParser
 
 getWithdrawRequestedAtTime : Time -> RelTime -> Metadata -> ExternalPartyConfigState -> Update Time
@@ -737,7 +737,7 @@ vestingLockRemainingWithdrawControllers VestingLock{specification, pendingWithdr
   remainingControllers (const True) pendingWithdrawApprovals specification.vestingControllers
 
 -- | Updates approvals for a GovernanceLock unlock
-governanceLock_updateUnlockApprovals : GovernanceLock -> Optional Decimal -> Time -> [Party] -> Update (Either (Map.Map Party UnlockApproval) Time)
+governanceLock_updateUnlockApprovals : GovernanceLock -> Decimal -> Time -> [Party] -> Update (Either (Map.Map Party UnlockApproval) Time)
 governanceLock_updateUnlockApprovals GovernanceLock{..} unlockAmount unlockAt actors = do
   result <- updateApprovals
     specification.unlockControllers
@@ -1794,7 +1794,7 @@ governanceLock_transferFactoryV1_unlockImpl
   :  Party
   -> V1.TransferFactory_Transfer
   -> GovernanceLockSpecification
-  -> Optional Decimal
+  -> Decimal
   -> Optional Time
   -> Update V1.TransferInstructionResult
 governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{transfer, extraArgs} specification unlockAmount optUnlockAt = do
@@ -1961,7 +1961,7 @@ data GovernanceLockRequest
       specification : GovernanceLockSpecification
   | GLR_UnlockGovernanceLock with
       specification : GovernanceLockSpecification
-      unlockAmount : Optional Decimal
+      unlockAmount : Decimal
       unlockAt : Optional Time
   | GLR_TransferGovernanceLock with
       specification : GovernanceLockSpecification
@@ -2266,10 +2266,9 @@ fundingAmountParser = Parser \m ->
     Some v@(_ :: _) -> invalid $ "Expected exactly one " <> amuletInstrumentIdName <> " value, got: " <> show v
     _ -> invalid $ "Expected exactly one " <> amuletInstrumentIdName <> " value, got none"
 
-unlockAmountParser : Parser Metadata (Optional Decimal)
-unlockAmountParser = optionalMetadataParser unlockAmountMetaKey >>= \optAmount ->
-  forA optAmount \t ->
-    validationParser $ (Text.parseDecimal t) <?> ("Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: '" <> t <> "'")
+unlockAmountParser : Parser Metadata Decimal
+unlockAmountParser = requiredMetadataParser unlockAmountMetaKey >>= \t ->
+  validationParser $ (Text.parseDecimal t) <?> ("Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: '" <> t <> "'")
 
 unlockAtTimeParser : Parser Metadata (Optional Time)
 unlockAtTimeParser = timeFromMeta unlockAtMetaKey <$> inputParser

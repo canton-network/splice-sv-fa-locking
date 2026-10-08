@@ -111,6 +111,7 @@ class GovernanceLockTimeBasedIntegrationTest
         lockKind,
         lockSubject,
         governanceLockCid,
+        unlockAmount = lockAmount,
         unlockAt = Some(unlockAt),
       ).value
       val vestingLock =

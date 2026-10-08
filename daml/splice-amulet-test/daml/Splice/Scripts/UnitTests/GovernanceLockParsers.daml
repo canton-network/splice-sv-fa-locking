@@ -354,15 +354,15 @@ test_governanceLockRequestTSv1Parser = do
     \case
       GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt} -> do
         specification === faSpecification
-        unlockAmount === Some 10000.0
+        unlockAmount === 10000.0
         unlockAt === Some (time (date 2026 Jan 1) 0 0 0)
       _ -> fail "Expected GLR_UnlockGovernanceLock"
 
   -- Unlock without the optional fields
-  expectRequest (run lockManagerParty $ request "unlock-and-start-vesting" :: faLock) \case
+  expectRequest (run lockManagerParty $ request "unlock-and-start-vesting" :: (unlockAmountMetaKey, "10000.0") :: faLock) \case
     GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt} -> do
       specification === faSpecification
-      unlockAmount === None
+      unlockAmount === 10000.0
       unlockAt === None
     _ -> fail "Expected GLR_UnlockGovernanceLock"
 
@@ -386,7 +386,7 @@ test_governanceLockRequestTSv1Parser = do
 
   -- Creating, unlocking and transferring a lock needs the lock manager as the receiver
   expectRequestErrors [invalidReceiverError alice] $ run alice (request "create-lock" :: faLock)
-  expectRequestErrors [invalidReceiverError alice] $ run alice (request "unlock-and-start-vesting" :: faLock)
+  expectRequestErrors [invalidReceiverError alice, missingMetadataMessage unlockAmountMetaKey] $ run alice (request "unlock-and-start-vesting" :: faLock)
   expectRequestErrors [invalidReceiverError alice, missingMetadataMessage receiverMetaKey] $
     run alice (request "transfer-lock" :: faLock)
   -- Substituting a lock also needs the lock manager as the receiver; all errors are reported

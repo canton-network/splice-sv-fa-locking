@@ -478,7 +478,7 @@ testSubstitutionRaw_vestingWithoutOwner = do
         vestingControllers = ControllerSpecification [[charlie]]
   lockCid <- governanceLockWithSpecRawChoice registry alice 50000.0 lockSpec
   unlockAt <- (`addRelTime` hours 1) <$> getTime
-  (Some vestingCid, None, None) <- governanceUnlockRawChoice registry lockCid None unlockAt [alice]
+  (Some vestingCid, None, None) <- governanceUnlockRawChoice registry lockCid 50000.0 unlockAt [alice]
   Some vestingLock <- queryContractId alice vestingCid
 
   expectSuccess $ createSubstitutionRaw env bob
@@ -670,7 +670,7 @@ testSubstitutionV2_vestingTarget = do
   AmuletRegistryV2.tapFaucet registry bob 20000.0
   lockCid <- governanceLockRawChoice registry alice 50000.0 kind
   unlockAt <- (`addRelTime` hours 1) <$> getTime
-  (Some vestingCid, None, None) <- governanceUnlockRawChoice registry lockCid None unlockAt [alice]
+  (Some vestingCid, None, None) <- governanceUnlockRawChoice registry lockCid 50000.0 unlockAt [alice]
   Some vestingLock <- queryContractId alice vestingCid
   let targetKey = VestingLockKey with
         dso = instrId.admin
@@ -910,7 +910,7 @@ testSubstitutionV1_vestingTarget = do
   AmuletRegistryV2.tapFaucet registry bob 20000.0
   lockCid <- governanceLockRawChoice registry alice 50000.0 kind
   unlockAt <- (`addRelTime` hours 1) <$> getTime
-  (Some vestingCid, None, None) <- governanceUnlockRawChoice registry lockCid None unlockAt [alice]
+  (Some vestingCid, None, None) <- governanceUnlockRawChoice registry lockCid 50000.0 unlockAt [alice]
   Some vestingLock <- queryContractId alice vestingCid
   let newSpec = VestingLockSpecification with kind; vestingControllers = ControllerSpecification [[bob]]
 
