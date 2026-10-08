@@ -1306,6 +1306,7 @@ data CreateSubstitutionArgs = CreateSubstitutionArgs with
 
 createSubstitution : CreateSubstitutionArgs -> Update (ContractId V2.AllocationInstruction, V2.AllocationInstruction, Optional (ContractId Amulet))
 createSubstitution CreateSubstitutionArgs {..} = do
+  assertDeadlineExceeded "requestedAt" requestedAt
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
   requireMinimumLock state amount
   let lockProperties = LockProperties with
