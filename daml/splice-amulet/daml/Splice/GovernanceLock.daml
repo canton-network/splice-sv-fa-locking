@@ -1,6 +1,8 @@
 -- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+{-# LANGUAGE ApplicativeDo #-}
+
 module Splice.GovernanceLock where
 
 import Prelude hiding (forA)
@@ -1830,6 +1832,21 @@ lockStateFromText = dataFromText lockStateToText [LS_Locked, LS_Vesting]
 -- Parsers form a monad ("action" in Daml parlance). Combining them with `<*>`
 -- reports the errors of all of them, as for `Validation`, while `>>=` stops at
 -- the first error, as the second parser depends on the output of the first one.
+--
+-- `do` blocks of parsers need the `ApplicativeDo` extension to report all
+-- errors. Without it, a `do` block desugars into `>>=` and `>>`, and the
+-- Daml-LF conversion replaces `x >> y` with `x >>= \_ -> y`, so even
+-- independent statements stop at the first error. With `ApplicativeDo`,
+-- statements that do not depend on each other are combined with `<*>` instead.
+--
+-- For all statements to be combined with `<*>` including the last one, the
+-- `do`-block must end with literally `pure x` or `pure $ x`: GHC recognises the
+-- final return only by its shape, and any other final statement is joined with
+-- a bind:
+--
+-- We want compiler to produce `(\a b c -> E) <$> pa <*> pb <*> pc` where `E`
+-- comes from `pure E`. We want to avoid
+-- `join ((\a b c -> pure . f $ E) <$> pa <*> pb <*> pc)`.
 data Parser i o = Parser (i -> Validation Text o)
 type ControllerSpecificationParser = Party -> Parser Metadata ControllerSpecification
 
@@ -1960,7 +1977,7 @@ governanceLockMetadataParser = do
       -- metadata that is already set via their "memo" tag.
       -- Delete the parsed reason as it will be repopulated when
       -- encoding the governance lock via the token standard interface.
-      pure . Metadata $ TextMap.union (TextMap.delete reasonMetaKey meta.values) parsedReasonMeta
+      pure $ Metadata $ TextMap.union (TextMap.delete reasonMetaKey meta.values) parsedReasonMeta
 
     None -> pure meta
 
@@ -2022,40 +2039,42 @@ glr_substituteLock_parser tag admin proposer = do
   meta <- inputParser
   (targetState, targetOwner) <- (,) <$> targetLockStateParser <*> targetLockOwnerParser
   GLR_SubstituteLock <$> case targetState of
-    LS_Locked ->
-      (\kind newUnlock newSubstitution newVesting targetUnlock targetSubstitution targetVesting -> AS_Governance with
+    LS_Locked -> do
+      kind <- governanceLockKindParser' tag
+      newUnlock <- unlockControllersParser proposer
+      newSubstitution <- substitutionControllersParser proposer
+      newVesting <- vestingControllersParser proposer
+      targetUnlock <- controllersParser targetLockUnlockControllersMetaKey targetOwner
+      targetSubstitution <- controllersParser targetLockSubstitutionControllersMetaKey targetOwner
+      targetVesting <- controllersParser targetLockVestingControllersMetaKey targetOwner
+      pure
+        $ AS_Governance with
           governanceLockKey = GovernanceLockKey with
             dso = admin
             owner = targetOwner
             specification = GovernanceLockSpecification kind targetUnlock targetSubstitution targetVesting (targetLockMetadata meta)
-          governanceSpecification = GovernanceLockSpecification kind newUnlock newSubstitution newVesting (removeGovernanceMetadataKeys meta))
-      <$> governanceLockKindParser' tag
-      <*> unlockControllersParser proposer
-      <*> substitutionControllersParser proposer
-      <*> vestingControllersParser proposer
-      <*> controllersParser targetLockUnlockControllersMetaKey targetOwner
-      <*> controllersParser targetLockSubstitutionControllersMetaKey targetOwner
-      <*> controllersParser targetLockVestingControllersMetaKey targetOwner
-    LS_Vesting ->
-      (\() kind newVesting targetVesting vestingPeriod endTime -> AS_Vesting with
+          governanceSpecification = GovernanceLockSpecification kind newUnlock newSubstitution newVesting (removeGovernanceMetadataKeys meta)
+    LS_Vesting -> do
+      rejectMetadataKeysParser "for a vesting substitution target"
+            [ unlockControllersMetaKey
+            , substitutionControllersMetaKey
+            , targetLockUnlockControllersMetaKey
+            , targetLockSubstitutionControllersMetaKey
+            ]
+      kind <- governanceLockKindParser' tag
+      newVesting <- vestingControllersParser proposer
+      targetVesting <- controllersParser targetLockVestingControllersMetaKey targetOwner
+      vestingPeriod <- relTimeMetadataParser targetLockVestingDurationMetaKey
+      endTime <- timeMetadataParser targetLockVestingEndTimeMetaKey
+      pure
+        $ AS_Vesting with
           vestingLockKey = VestingLockKey with
             dso = admin
             owner = targetOwner
             specification = VestingLockSpecification kind targetVesting (targetLockMetadata meta)
             vestingPeriod
             endTime
-          vestingSpecification = VestingLockSpecification kind newVesting (removeGovernanceMetadataKeys meta))
-      <$> rejectMetadataKeysParser "for a vesting substitution target"
-            [ unlockControllersMetaKey
-            , substitutionControllersMetaKey
-            , targetLockUnlockControllersMetaKey
-            , targetLockSubstitutionControllersMetaKey
-            ]
-      <*> governanceLockKindParser' tag
-      <*> vestingControllersParser proposer
-      <*> controllersParser targetLockVestingControllersMetaKey targetOwner
-      <*> relTimeMetadataParser targetLockVestingDurationMetaKey
-      <*> timeMetadataParser targetLockVestingEndTimeMetaKey
+          vestingSpecification = VestingLockSpecification kind newVesting (removeGovernanceMetadataKeys meta)
 
 governanceLockRequestTSv1Parser : Party -> Party -> Parser Metadata GovernanceLockRequest
 governanceLockRequestTSv1Parser sender receiver = requiredMetadataParser requestMetaKey >>= \case
