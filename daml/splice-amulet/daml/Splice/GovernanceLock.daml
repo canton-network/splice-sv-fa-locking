@@ -1,12 +1,13 @@
 -- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+{-# LANGUAGE ApplicativeDo #-}
+
 module Splice.GovernanceLock where
 
 import Prelude hiding (forA)
 import DA.Action (filterA, unless)
 import DA.Assert
-import DA.Either (optionalToEither)
 import DA.Foldable (forA_, mapA_, maximum, toList)
 import DA.Functor (($>))
 import DA.List.Total (head, minimumOn)
@@ -1826,15 +1827,57 @@ lockStateFromText = dataFromText lockStateToText [LS_Locked, LS_Vesting]
 -- Parsers
 ----------
 
+-- | A parser of an input `i` into an output `o`.
+--
+-- Parsers form a monad ("action" in Daml parlance). Combining them with `<*>`
+-- reports the errors of all of them, as for `Validation`, while `>>=` stops at
+-- the first error, as the second parser depends on the output of the first one.
+--
+-- `do` blocks of parsers need the `ApplicativeDo` extension to report all
+-- errors. Without it, a `do` block desugars into `>>=` and `>>`, and the
+-- Daml-LF conversion replaces `x >> y` with `x >>= \_ -> y`, so even
+-- `do { p1; p2; p2}` with independent `p*` stop at the first error. With
+-- `ApplicativeDo`, statements that do not depend on each other are combined
+-- with `<*>` instead even if it is an `a <- pa` statement.
+--
+-- For all independent statements to be combined with `<*>` including the last
+-- one, the `do`-block must end with literally `pure x` or `pure $ x`:
+-- GHC recognises the final return only by its shape, and any other final
+-- statement is joined with a bind:
+--
+-- For example, we want compiler to produce
+-- `(\a b c -> E) <$> pa <*> pb <*> pc` from `do { pa; pb; pc; pure E}`.
+-- We want to avoid
+-- `join ((\a b c -> pure . f $ E) <$> pa <*> pb <*> pc)` coming from
+-- `do { pa; pb; pc; pure . f $ E}` where `f` is itself pure.
 data Parser i o = Parser (i -> Validation Text o)
-type ControllerSpecificationParser = Parser (Metadata, Party) ControllerSpecification
+type ControllerSpecificationParser = Party -> Parser Metadata ControllerSpecification
 
 runParser : Parser i o -> i -> Validation Text o
 runParser (Parser f) input = f input
 
-bindValidation : (Validation e a) -> (a -> Validation e b) -> Validation e b
-bindValidation (Errors es) _ = Errors es
-bindValidation (Success a) f = f a
+instance Functor (Parser i) where
+  fmap f parser = Parser \input -> f <$> runParser parser input
+
+instance Applicative (Parser i) where
+  pure output = Parser \_ -> ok output
+  parserF <*> parserX = Parser \input -> runParser parserF input <*> runParser parserX input
+
+instance Action (Parser i) where
+  parser >>= f = Parser \input -> case runParser parser input of
+    Errors es -> Errors es
+    Success output -> runParser (f output) input
+
+instance CanAssert (Parser i) where
+  assertFail message = Parser \_ -> invalid message
+
+-- | Returns the input of the parser.
+inputParser : Parser i i
+inputParser = Parser ok
+
+-- | A parser that ignores its input and returns the given result.
+validationParser : Validation Text o -> Parser i o
+validationParser result = Parser \_ -> result
 
 assertParsed : CanAssert m => Parser i o -> i -> m o
 assertParsed parser input =
@@ -1847,6 +1890,12 @@ assertParsed parser input =
       assertFail $ "Found " <> show numErrors <> " parsing error" <> (if numErrors == 1 then "" else "s") <>
         (if length errorsList > 5 then ". First five errors" else  "") <> ":\n\n" <>
         Text.intercalate "\n" (take 5 errorsList)
+
+requiredMetadataParser : Text -> Parser Metadata Text
+requiredMetadataParser key = inputParser >>= getRequiredMetadata key
+
+optionalMetadataParser : Text -> Parser Metadata (Optional Text)
+optionalMetadataParser key = getOptionalMetadata key <$> inputParser
 
 timeMetadataParser : Text -> Parser Metadata Time
 timeMetadataParser key = Parser \meta -> (timeFromMeta key meta) <?> (missingMetadataMessage key)
@@ -1862,36 +1911,35 @@ rejectMetadataKeysParser reason keys = Parser \meta ->
     present -> invalid $ "Metadata fields not allowed " <> reason <> ": " <> Text.intercalate ", " present
 
 rejectTargetLockMetadataKeysParser : Text -> Parser Metadata ()
-rejectTargetLockMetadataKeysParser reason = Parser \meta ->
+rejectTargetLockMetadataKeysParser reason = do
+  meta <- inputParser
   let isTargetLockKey k = targetLockMetaPrefix `Text.isPrefixOf` k
       targetLockKeys = mapOptional (\(k, _) -> const k <$> guard (isTargetLockKey k)) $ TextMap.toList meta.values
-  in runParser (rejectMetadataKeysParser reason targetLockKeys) meta
+  rejectMetadataKeysParser reason targetLockKeys
 
 -- | Parse a URL-style key value string 'key1=value1&...&key2=value2' into a key-value map.
-keyValueParser : Parser Text (TextMap.TextMap Text)
-keyValueParser = Parser \keyValues ->
+keyValueParser : Text -> Parser i (TextMap.TextMap Text)
+keyValueParser keyValues =
   TextMap.fromList <$> forA (Text.splitOn "&" keyValues) \keyValue ->
     case Text.splitOn "=" keyValue of
-      [k, v] -> ok (k, v)
-      l -> invalid $ "Unable to map a key value pair, from list: " <> show l
+      [k, v] -> pure (k, v)
+      l -> assertFail $ "Unable to map a key value pair, from list: " <> show l
 
 invalidPartyMessage : Text -> Text -> Text
 invalidPartyMessage key party = "Invalid party in metadata field '" <> key <> "': " <> party
 
-partyFromTextParser : Text -> Parser Text Party
-partyFromTextParser key = Parser \party -> (partyFromText party) <?> (invalidPartyMessage key party)
+partyFromTextParser : Text -> Text -> Parser i Party
+partyFromTextParser key party = validationParser $ (partyFromText party) <?> (invalidPartyMessage key party)
 
 partyFromMetadataParser : Text -> Parser Metadata Party
-partyFromMetadataParser key = Parser \meta ->
-  (validate $ getRequiredMetadata key meta) `bindValidation` (runParser (partyFromTextParser key))
+partyFromMetadataParser key = requiredMetadataParser key >>= partyFromTextParser key
 
 controllersParser : Text -> ControllerSpecificationParser
-controllersParser key =
-    Parser \(meta, owner) ->
-      ControllerSpecification <$> optional (pure [[owner]]) (runParser partiesParser) (TextMap.lookup key meta.values)
+controllersParser key owner =
+    ControllerSpecification <$> (optionalMetadataParser key >>= optional (pure [[owner]]) partiesParser)
   where
-    partiesParser : Parser Text [[Party]]
-    partiesParser = Parser \t -> forA (Text.splitOn ";" t) \ps -> forA (Text.splitOn "," ps) (runParser (partyFromTextParser key))
+    partiesParser : Text -> Parser Metadata [[Party]]
+    partiesParser t = forA (Text.splitOn ";" t) \ps -> forA (Text.splitOn "," ps) (partyFromTextParser key)
 
 unlockControllersParser : ControllerSpecificationParser
 unlockControllersParser = controllersParser unlockControllersMetaKey
@@ -1902,61 +1950,56 @@ substitutionControllersParser = controllersParser substitutionControllersMetaKey
 vestingControllersParser : ControllerSpecificationParser
 vestingControllersParser = controllersParser vestingControllersMetaKey
 
-governanceLockTagParser' : Parser Text GovernanceLockTag
-governanceLockTagParser' = Parser \t -> (governanceLockTagFromText t) <?> ("Invalid lock kind: '" <> t <> "'")
+governanceLockTagParser' : Text -> Parser i GovernanceLockTag
+governanceLockTagParser' t = validationParser $ (governanceLockTagFromText t) <?> ("Invalid lock kind: '" <> t <> "'")
 
 governanceLockTagParser : Parser Metadata GovernanceLockTag
-governanceLockTagParser = Parser \meta ->
-  (validate $ getRequiredMetadata lockKindMetaKey meta) `bindValidation` (runParser governanceLockTagParser')
+governanceLockTagParser = requiredMetadataParser lockKindMetaKey >>= governanceLockTagParser'
 
 governanceLockSubjectParser : Parser Metadata Text
-governanceLockSubjectParser = Parser \meta ->
-  validate $ getRequiredMetadata lockSubjectMetaKey meta
+governanceLockSubjectParser = requiredMetadataParser lockSubjectMetaKey
 
 governanceLockKindParser' : GovernanceLockTag -> Parser Metadata GovernanceLockKind
-governanceLockKindParser' tag = Parser \meta -> validate do
-  subject <- assertParsed governanceLockSubjectParser meta
-  governanceLockKindFromTagAndSubject tag subject
+governanceLockKindParser' tag = governanceLockSubjectParser >>= governanceLockKindFromTagAndSubject tag
 
 governanceLockKindParser : Parser Metadata GovernanceLockKind
-governanceLockKindParser = Parser \meta ->
-  (runParser governanceLockTagParser meta) `bindValidation` (\tag -> runParser (governanceLockKindParser' tag) meta)
+governanceLockKindParser = governanceLockTagParser >>= governanceLockKindParser'
 
 governanceLockMetadataParser : Parser Metadata Metadata
-governanceLockMetadataParser = Parser \meta ->
+governanceLockMetadataParser = do
+  meta <- inputParser
   case Text.stripPrefix cipMemoPrefix $ reasonFromMeta meta of
-    Some reason ->
+    Some reason -> do
       let
         -- Prefix all parsed keys with the CIP prefix to avoid clashes
         -- with metadata keys from other namespaces.
         adjustPrefix k = cipMetaPrefix <> k
         textMapMapKeys f = TextMap.fromList . fmap (\(k, v) -> (f k, v)) . TextMap.toList
-        parsedReasonMeta = textMapMapKeys adjustPrefix <$> runParser keyValueParser reason
-      in
-        -- Prefer the original metadata keys to avoid users overwriting
-        -- metadata that is already set via their "memo" tag.
-        -- Delete the parsed reason as it will be repopulated when
-        -- encoding the governance lock via the token standard interface.
-        Metadata . TextMap.union (TextMap.delete reasonMetaKey meta.values) <$> parsedReasonMeta
+      parsedReasonMeta <- textMapMapKeys adjustPrefix <$> keyValueParser reason
+      -- Prefer the original metadata keys to avoid users overwriting
+      -- metadata that is already set via their "memo" tag.
+      -- Delete the parsed reason as it will be repopulated when
+      -- encoding the governance lock via the token standard interface.
+      pure $ Metadata $ TextMap.union (TextMap.delete reasonMetaKey meta.values) parsedReasonMeta
 
-    None -> ok meta
+    None -> pure meta
 
 parseGovernanceLockMetadata : CanAssert m => Metadata -> m Metadata
 parseGovernanceLockMetadata = assertParsed governanceLockMetadataParser
 
-governanceLockSpecificationParser' : (Metadata -> Metadata) -> Parser Metadata GovernanceLockKind -> Parser (Party, Metadata) GovernanceLockSpecification
-governanceLockSpecificationParser' mapMeta kindParser = Parser \(owner, meta) ->
+governanceLockSpecificationParser' : (Metadata -> Metadata) -> Parser Metadata GovernanceLockKind -> Party -> Parser Metadata GovernanceLockSpecification
+governanceLockSpecificationParser' mapMeta kindParser owner =
   GovernanceLockSpecification <$>
-    runParser kindParser meta <*>
-    runParser unlockControllersParser (meta, owner) <*>
-    runParser substitutionControllersParser (meta, owner) <*>
-    runParser vestingControllersParser (meta, owner) <*>
-    ok (mapMeta meta)
+    kindParser <*>
+    unlockControllersParser owner <*>
+    substitutionControllersParser owner <*>
+    vestingControllersParser owner <*>
+    (mapMeta <$> inputParser)
 
-governanceLockSpecificationParser : Parser Metadata GovernanceLockKind -> Parser (Party, Metadata) GovernanceLockSpecification
+governanceLockSpecificationParser : Parser Metadata GovernanceLockKind -> Party -> Parser Metadata GovernanceLockSpecification
 governanceLockSpecificationParser = governanceLockSpecificationParser' removeGovernanceMetadataKeys
 
-targetGovernanceLockSpecificationParser : Parser Metadata GovernanceLockKind -> Parser (Party, Metadata) GovernanceLockSpecification
+targetGovernanceLockSpecificationParser : Parser Metadata GovernanceLockKind -> Party -> Parser Metadata GovernanceLockSpecification
 targetGovernanceLockSpecificationParser = governanceLockSpecificationParser' targetLockMetadata
 
 governanceLockRequestCreateLock = "create-lock"
@@ -1964,133 +2007,122 @@ governanceLockRequestUnlockAndStartVesting = "unlock-and-start-vesting"
 governanceLockRequestTransferLock = "transfer-lock"
 governanceLockRequestSubstituteLock = "substitute-receiver-lock-on-accept"
 
-glr_createGovernanceLock_parser : Parser Metadata GovernanceLockKind -> Parser (Party, Metadata) GovernanceLockRequest
-glr_createGovernanceLock_parser kindParser = Parser \(owner, meta) ->
-  GLR_CreateGovernanceLock <$> runParser (governanceLockSpecificationParser kindParser) (owner, meta)
+glr_createGovernanceLock_parser : Parser Metadata GovernanceLockKind -> Party -> Parser Metadata GovernanceLockRequest
+glr_createGovernanceLock_parser kindParser owner =
+  GLR_CreateGovernanceLock <$> governanceLockSpecificationParser kindParser owner
 
 tsv2UnlockRequestUnsupported = "Governance lock unlocks via the TSv2 interface must be performed through the Allocation_Withdraw choice"
 
-glr_unlockGovernanceLock_parser : Parser Metadata GovernanceLockKind -> Parser (Party, Metadata) GovernanceLockRequest
-glr_unlockGovernanceLock_parser kindParser = Parser \(owner, meta) ->
+glr_unlockGovernanceLock_parser : Parser Metadata GovernanceLockKind -> Party -> Parser Metadata GovernanceLockRequest
+glr_unlockGovernanceLock_parser kindParser owner =
   GLR_UnlockGovernanceLock <$>
-    runParser (targetGovernanceLockSpecificationParser kindParser) (owner, meta) <*>
-    runParser unlockAmountParser meta <*>
-    runParser unlockAtTimeParser meta
+    targetGovernanceLockSpecificationParser kindParser owner <*>
+    unlockAmountParser <*>
+    unlockAtTimeParser
 
-glr_transferGovernanceLock_parser : Parser Metadata GovernanceLockKind -> Parser (Party, Metadata) GovernanceLockRequest
-glr_transferGovernanceLock_parser kindParser = Parser \(owner, meta) ->
+glr_transferGovernanceLock_parser : Parser Metadata GovernanceLockKind -> Party -> Parser Metadata GovernanceLockRequest
+glr_transferGovernanceLock_parser kindParser owner =
   GLR_TransferGovernanceLock <$>
-    runParser (targetGovernanceLockSpecificationParser kindParser) (owner, meta) <*>
-    runParser (partyFromMetadataParser receiverMetaKey) meta
+    targetGovernanceLockSpecificationParser kindParser owner <*>
+    partyFromMetadataParser receiverMetaKey
 
 targetLockStateParser : Parser Metadata LockState
-targetLockStateParser = Parser \meta ->
-  case getOptionalMetadata targetLockStateMetaKey meta of
-    None -> ok LS_Locked
-    Some t | Some state <- lockStateFromText t -> ok state
-    Some t -> invalid $ "Invalid value in " <> targetLockStateMetaKey <> " metadata field: '" <> t <> "'"
+targetLockStateParser = optionalMetadataParser targetLockStateMetaKey >>= \case
+  None -> pure LS_Locked
+  Some t | Some state <- lockStateFromText t -> pure state
+  Some t -> assertFail $ "Invalid value in " <> targetLockStateMetaKey <> " metadata field: '" <> t <> "'"
 
 targetLockOwnerParser : Parser Metadata Party
-targetLockOwnerParser = Parser \meta ->
-  validate $ getRequiredMetadata'
-    (\t -> optionalToEither (invalidPartyMessage targetLockOwnerMetaKey t) (partyFromText t))
-    targetLockOwnerMetaKey
-    meta
+targetLockOwnerParser = partyFromMetadataParser targetLockOwnerMetaKey
 
 tsv1SubstitutionRequestUnsupported = "Governance lock substitutions are not supported via the TSv1 interface"
 
-glr_substituteLock_parser : Parser (GovernanceLockTag, Party, Party, Metadata) GovernanceLockRequest
-glr_substituteLock_parser = Parser \(tag, admin, proposer, meta) ->
-  let parseTargetStateAndOwner = (,) <$>
-        runParser targetLockStateParser meta <*>
-        runParser targetLockOwnerParser meta
-
-  in GLR_SubstituteLock <$> parseTargetStateAndOwner `bindValidation` \case
-    (LS_Locked, targetOwner) ->
-      (\kind newUnlock newSubstitution newVesting targetUnlock targetSubstitution targetVesting -> AS_Governance with
+glr_substituteLock_parser : GovernanceLockTag -> Party -> Party -> Parser Metadata GovernanceLockRequest
+glr_substituteLock_parser tag admin proposer = do
+  meta <- inputParser
+  targetState <- targetLockStateParser
+  targetOwner <- targetLockOwnerParser
+  GLR_SubstituteLock <$> case targetState of
+    LS_Locked -> do
+      kind <- governanceLockKindParser' tag
+      newUnlock <- unlockControllersParser proposer
+      newSubstitution <- substitutionControllersParser proposer
+      newVesting <- vestingControllersParser proposer
+      targetUnlock <- controllersParser targetLockUnlockControllersMetaKey targetOwner
+      targetSubstitution <- controllersParser targetLockSubstitutionControllersMetaKey targetOwner
+      targetVesting <- controllersParser targetLockVestingControllersMetaKey targetOwner
+      pure
+        $ AS_Governance with
           governanceLockKey = GovernanceLockKey with
             dso = admin
             owner = targetOwner
             specification = GovernanceLockSpecification kind targetUnlock targetSubstitution targetVesting (targetLockMetadata meta)
-          governanceSpecification = GovernanceLockSpecification kind newUnlock newSubstitution newVesting (removeGovernanceMetadataKeys meta))
-      <$> runParser (governanceLockKindParser' tag) meta
-      <*> runParser unlockControllersParser (meta, proposer)
-      <*> runParser substitutionControllersParser (meta, proposer)
-      <*> runParser vestingControllersParser (meta, proposer)
-      <*> runParser (controllersParser targetLockUnlockControllersMetaKey) (meta, targetOwner)
-      <*> runParser (controllersParser targetLockSubstitutionControllersMetaKey) (meta, targetOwner)
-      <*> runParser (controllersParser targetLockVestingControllersMetaKey) (meta, targetOwner)
-    (LS_Vesting, targetOwner) ->
-      (\() kind newVesting targetVesting vestingPeriod endTime -> AS_Vesting with
+          governanceSpecification = GovernanceLockSpecification kind newUnlock newSubstitution newVesting (removeGovernanceMetadataKeys meta)
+    LS_Vesting -> do
+      rejectMetadataKeysParser "for a vesting substitution target"
+            [ unlockControllersMetaKey
+            , substitutionControllersMetaKey
+            , targetLockUnlockControllersMetaKey
+            , targetLockSubstitutionControllersMetaKey
+            ]
+      kind <- governanceLockKindParser' tag
+      newVesting <- vestingControllersParser proposer
+      targetVesting <- controllersParser targetLockVestingControllersMetaKey targetOwner
+      vestingPeriod <- relTimeMetadataParser targetLockVestingDurationMetaKey
+      endTime <- timeMetadataParser targetLockVestingEndTimeMetaKey
+      pure
+        $ AS_Vesting with
           vestingLockKey = VestingLockKey with
             dso = admin
             owner = targetOwner
             specification = VestingLockSpecification kind targetVesting (targetLockMetadata meta)
             vestingPeriod
             endTime
-          vestingSpecification = VestingLockSpecification kind newVesting (removeGovernanceMetadataKeys meta))
-      <$> runParser
-            (rejectMetadataKeysParser "for a vesting substitution target"
-              [ unlockControllersMetaKey
-              , substitutionControllersMetaKey
-              , targetLockUnlockControllersMetaKey
-              , targetLockSubstitutionControllersMetaKey
-              ])
-            meta
-      <*> runParser (governanceLockKindParser' tag) meta
-      <*> runParser vestingControllersParser (meta, proposer)
-      <*> runParser (controllersParser targetLockVestingControllersMetaKey) (meta, targetOwner)
-      <*> runParser (relTimeMetadataParser targetLockVestingDurationMetaKey) meta
-      <*> runParser (timeMetadataParser targetLockVestingEndTimeMetaKey) meta
+          vestingSpecification = VestingLockSpecification kind newVesting (removeGovernanceMetadataKeys meta)
 
-governanceLockRequestTSv1Parser : Parser (Party, Party, Metadata) GovernanceLockRequest
-governanceLockRequestTSv1Parser = Parser \(sender, receiver, meta) ->
-  let
-    runWithKindParser : (Parser Metadata GovernanceLockKind -> Parser (Party, Metadata) GovernanceLockRequest) -> Validation Text GovernanceLockRequest
-    runWithKindParser parser = runParser (parser governanceLockKindParser) (sender, meta)
-
-    checkReceiverIsLockManager : Validation Text ()
-    checkReceiverIsLockManager = (guard $ receiver == lockManagerParty) <?> ("Invalid receiver: '" <> show receiver <> "'")
-  in case validate (getRequiredMetadata requestMetaKey meta) of
-    Errors es -> Errors es
-    Success r | r == governanceLockRequestCreateLock ->
-      checkReceiverIsLockManager *>
-        runParser (rejectTargetLockMetadataKeysParser "for a lock creation") meta *>
-        runWithKindParser glr_createGovernanceLock_parser
-    Success r | r == governanceLockRequestUnlockAndStartVesting ->
-      checkReceiverIsLockManager *> runWithKindParser glr_unlockGovernanceLock_parser
-    Success r | r == governanceLockRequestTransferLock ->
-      checkReceiverIsLockManager *> runWithKindParser glr_transferGovernanceLock_parser
-    Success r | r == governanceLockRequestSubstituteLock -> invalid tsv1SubstitutionRequestUnsupported
-    Success r -> invalid $ "Invalid request: '" <> r <> "'"
+governanceLockRequestTSv1Parser : Party -> Party -> Parser Metadata GovernanceLockRequest
+governanceLockRequestTSv1Parser sender receiver = requiredMetadataParser requestMetaKey >>= \case
+    r | r == governanceLockRequestCreateLock -> do
+          checkReceiverIsLockManager
+          rejectTargetLockMetadataKeysParser "for a lock creation"
+          glr_createGovernanceLock_parser governanceLockKindParser sender
+    r | r == governanceLockRequestUnlockAndStartVesting -> do
+          checkReceiverIsLockManager
+          glr_unlockGovernanceLock_parser governanceLockKindParser sender
+    r | r == governanceLockRequestTransferLock -> do
+          checkReceiverIsLockManager
+          glr_transferGovernanceLock_parser governanceLockKindParser sender
+    r | r == governanceLockRequestSubstituteLock -> assertFail tsv1SubstitutionRequestUnsupported
+    r -> assertFail $ "Invalid request: '" <> r <> "'"
+  where
+    checkReceiverIsLockManager : Parser Metadata ()
+    checkReceiverIsLockManager =
+      unless (receiver == lockManagerParty) $ assertFail ("Invalid receiver: '" <> show receiver <> "'")
 
 parseGovernanceLockRequestTSv1 : CanAssert m => Party -> Party -> Metadata -> m GovernanceLockRequest
 parseGovernanceLockRequestTSv1 sender receiver rawMeta = do
   meta <- parseGovernanceLockMetadata rawMeta
-  assertParsed governanceLockRequestTSv1Parser (sender, receiver, meta)
+  assertParsed (governanceLockRequestTSv1Parser sender receiver) meta
 
-governanceLockRequestTSv2Parser : Parser (Party, Text, Party, Metadata) GovernanceLockRequest
-governanceLockRequestTSv2Parser = Parser \(admin, id, owner, meta) ->
-  let
-    runWithKindParser : GovernanceLockTag -> (Parser Metadata GovernanceLockKind -> Parser (Party, Metadata) GovernanceLockRequest) -> Validation Text GovernanceLockRequest
-    runWithKindParser tag parser = runParser (parser $ governanceLockKindParser' tag) (owner, meta)
-
-    parseCreateLock : GovernanceLockTag -> Validation Text GovernanceLockRequest
-    parseCreateLock tag =
-      runParser (rejectTargetLockMetadataKeysParser "for a lock creation") meta *>
-        runWithKindParser tag glr_createGovernanceLock_parser
-  in (runParser governanceLockTagParser' id) `bindValidation` \tag -> case getOptionalMetadata requestMetaKey meta of
-    None -> parseCreateLock tag
-    Some r | r == governanceLockRequestCreateLock -> parseCreateLock tag
-    Some r | r == governanceLockRequestUnlockAndStartVesting -> invalid tsv2UnlockRequestUnsupported
-    Some r | r == governanceLockRequestTransferLock -> runWithKindParser tag glr_transferGovernanceLock_parser
-    Some r | r == governanceLockRequestSubstituteLock -> runParser glr_substituteLock_parser (tag, admin, owner, meta)
-    Some r -> invalid $ "Invalid request: '" <> r <> "'"
+governanceLockRequestTSv2Parser : Party -> Text -> Party -> Parser Metadata GovernanceLockRequest
+governanceLockRequestTSv2Parser admin id owner = do
+  tag <- governanceLockTagParser' id
+  let kindParser = governanceLockKindParser' tag
+      createLock = do
+        rejectTargetLockMetadataKeysParser "for a lock creation"
+        glr_createGovernanceLock_parser kindParser owner
+  optionalMetadataParser requestMetaKey >>= \case
+    None -> createLock
+    Some r | r == governanceLockRequestCreateLock -> createLock
+    Some r | r == governanceLockRequestUnlockAndStartVesting -> assertFail tsv2UnlockRequestUnsupported
+    Some r | r == governanceLockRequestTransferLock -> glr_transferGovernanceLock_parser kindParser owner
+    Some r | r == governanceLockRequestSubstituteLock -> glr_substituteLock_parser tag admin owner
+    Some r -> assertFail $ "Invalid request: '" <> r <> "'"
 
 parseGovernanceLockRequestTSv2 : CanAssert m => Party -> Text -> Party -> Metadata -> m GovernanceLockRequest
 parseGovernanceLockRequestTSv2 admin id owner rawMeta = do
   meta <- parseGovernanceLockMetadata rawMeta
-  assertParsed governanceLockRequestTSv2Parser (admin, id, owner, meta)
+  assertParsed (governanceLockRequestTSv2Parser admin id owner) meta
 
 fundingAmountParser : Parser (Optional (TextMap.TextMap Decimal)) Decimal
 fundingAmountParser = Parser \m ->
@@ -2100,12 +2132,12 @@ fundingAmountParser = Parser \m ->
     _ -> invalid $ "Expected exactly one " <> amuletInstrumentIdName <> " value, got none"
 
 unlockAmountParser : Parser Metadata (Optional Decimal)
-unlockAmountParser = Parser \meta ->
-  forA (getOptionalMetadata unlockAmountMetaKey meta) \t ->
-    (Text.parseDecimal t) <?> ("Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: '" <> t <> "'")
+unlockAmountParser = optionalMetadataParser unlockAmountMetaKey >>= \optAmount ->
+  forA optAmount \t ->
+    validationParser $ (Text.parseDecimal t) <?> ("Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: '" <> t <> "'")
 
 unlockAtTimeParser : Parser Metadata (Optional Time)
-unlockAtTimeParser = Parser \meta -> ok $ timeFromMeta unlockAtMetaKey meta
+unlockAtTimeParser = timeFromMeta unlockAtMetaKey <$> inputParser
 
 -- SV Reward Coupon Helpers
 ---------------------------

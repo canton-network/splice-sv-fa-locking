@@ -93,7 +93,7 @@ test_assertParsed = do
 -- | Shared cases for the parsers of the unlock, substitution and vesting controllers.
 testControllersParser : Text -> ControllerSpecificationParser -> Script ()
 testControllersParser key parser = do
-  let run entries = runParser parser (mkMeta entries, testOwner)
+  let run entries = runParser (parser testOwner) (mkMeta entries)
       otherKey = if key == unlockControllersMetaKey then vestingControllersMetaKey else unlockControllersMetaKey
 
   -- A missing field defaults to the owner as the only controller
@@ -135,7 +135,7 @@ test_vestingControllersParser = testControllersParser vestingControllersMetaKey 
 test_governanceLockTagParser : Script ()
 test_governanceLockTagParser = do
   -- `GovernanceLockTag` has no `Show` instance, so compare the tags by their text
-  let run = runParser governanceLockTagParser'
+  let run t = runParser (governanceLockTagParser' t) ()
       expectTag tag = expectSuccess (governanceLockTagToText tag) . fmap governanceLockTagToText
 
   expectTag GLT_FeaturedApp $ run "fa-lock"
@@ -300,15 +300,17 @@ test_governanceLockSpecificationParser' run = do
 test_governanceLockSpecificationParser : Script ()
 test_governanceLockSpecificationParser =
   test_governanceLockSpecificationParser' \kind entries ->
-    runParser (governanceLockSpecificationParser governanceLockKindParser)
-      (testOwner, mkMeta $ (lockKindMetaKey, kind) :: entries)
+    runParser (governanceLockSpecificationParser governanceLockKindParser testOwner)
+      (mkMeta $ (lockKindMetaKey, kind) :: entries)
 
 -- | The lock kind is given separately, as by the `settlement.id` in TSv2.
 test_governanceLockSpecificationParserWithTag : Script ()
 test_governanceLockSpecificationParserWithTag =
   test_governanceLockSpecificationParser' \kind entries ->
-    runParser governanceLockTagParser' kind `bindValidation` \tag ->
-      runParser (governanceLockSpecificationParser $ governanceLockKindParser' tag) (testOwner, mkMeta entries)
+    runParser
+      (governanceLockTagParser' kind >>= \tag ->
+        governanceLockSpecificationParser (governanceLockKindParser' tag) testOwner)
+      (mkMeta entries)
 
 -- TSv1 request parser
 ----------------------
@@ -326,7 +328,7 @@ expectRequestErrors expected result = case result of
 
 test_governanceLockRequestTSv1Parser : Script ()
 test_governanceLockRequestTSv1Parser = do
-  let run receiver entries = runParser governanceLockRequestTSv1Parser (testOwner, receiver, mkMeta entries)
+  let run receiver entries = runParser (governanceLockRequestTSv1Parser testOwner receiver) (mkMeta entries)
       request r = (requestMetaKey, r)
       faLock = [(lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp), (lockSubjectMetaKey, "provider")]
       faSpecification = ownerControlledSpecification testOwner (GLK_FeaturedApp testProvider) emptyMetadata
@@ -416,12 +418,11 @@ testAdmin : Party
 testAdmin = testParty "registry-admin"
 
 -- | Parses a TSv2 request and returns its substitution.
--- Input: registry admin, `settlement.id`, `allocation.meta`, and the proposer.
-substitutionTSv2Parser : Parser (Party, Text, Metadata, Party) AnySubstitution
-substitutionTSv2Parser = Parser \(admin, id, meta, proposer) ->
-  runParser governanceLockRequestTSv2Parser (admin, id, proposer, meta) `bindValidation` \case
-    GLR_SubstituteLock{substitution} -> ok substitution
-    result -> invalid $ "Expected GLR_SubstituteLock but got: " <> show result
+-- Arguments: registry admin, `settlement.id`, and the proposer. Input: `allocation.meta`.
+substitutionTSv2Parser : Party -> Text -> Party -> Parser Metadata AnySubstitution
+substitutionTSv2Parser admin id proposer = governanceLockRequestTSv2Parser admin id proposer >>= \case
+  GLR_SubstituteLock{substitution} -> pure substitution
+  result -> assertFail $ "Expected GLR_SubstituteLock but got: " <> show result
 
 -- | The metadata entry that requests a substitution.
 substitutionRequest : (Text, Text)
@@ -438,7 +439,7 @@ substitutionRequest = (requestMetaKey, governanceLockRequestSubstituteLock)
 -- e.g., `app/id`, as the metadata of the new lock.
 test_substitutionTSv2Parser_examples : Script ()
 test_substitutionTSv2Parser_examples = do
-  let run lockType entries = runParser substitutionTSv2Parser (testAdmin, lockType, mkMeta entries, bob)
+  let run lockType entries = runParser (substitutionTSv2Parser testAdmin lockType bob) (mkMeta entries)
 
   -- Minimal example: bob substitutes funds of the SV lock of alice for "someSv", for example a lock that alice
   -- created in compatibility mode. All controllers default to the owner of their lock.
@@ -525,7 +526,9 @@ test_substitutionTSv2Parser_examples = do
 
 test_substitutionTSv2Parser_errors : Script ()
 test_substitutionTSv2Parser_errors = do
-  let run entries = runParser substitutionTSv2Parser (testAdmin, governanceLockTagToText GLT_SuperValidator, mkMeta $ substitutionRequest :: entries, bob)
+  let run entries =
+        runParser (substitutionTSv2Parser testAdmin (governanceLockTagToText GLT_SuperValidator) bob)
+          (mkMeta $ substitutionRequest :: entries)
       subject = (lockSubjectMetaKey, "someSv")
       targetOwner = (targetLockOwnerMetaKey, "alice")
       vestingTarget =
@@ -541,7 +544,7 @@ test_substitutionTSv2Parser_errors = do
 
   -- The `settlement.id` must name a lock kind; the TSv1 receiver party format is not accepted
   expectErrors ["Invalid lock kind: 'cip-127_sv-lock'"] $
-    runParser substitutionTSv2Parser (testAdmin, "cip-127_sv-lock", mkMeta [substitutionRequest, subject, targetOwner], bob)
+    runParser (substitutionTSv2Parser testAdmin "cip-127_sv-lock" bob) (mkMeta [substitutionRequest, subject, targetOwner])
 
   -- The target state must be `locked` or `vesting`; an invalid state and an invalid owner are both reported
   expectErrors
@@ -593,10 +596,10 @@ test_createLock_rejectsTargetLockMetadata = do
         ]
       createRequest = (requestMetaKey, governanceLockRequestCreateLock)
       subject = (lockSubjectMetaKey, "provider")
-      runTSv1 entries = runParser governanceLockRequestTSv1Parser
-        (testOwner, lockManagerParty, mkMeta $ (lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp) :: entries)
-      runTSv2 entries = runParser governanceLockRequestTSv2Parser
-        (testAdmin, governanceLockTagToText GLT_FeaturedApp, testOwner, mkMeta entries)
+      runTSv1 entries = runParser (governanceLockRequestTSv1Parser testOwner lockManagerParty)
+        (mkMeta $ (lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp) :: entries)
+      runTSv2 entries = runParser (governanceLockRequestTSv2Parser testAdmin (governanceLockTagToText GLT_FeaturedApp) testOwner)
+        (mkMeta entries)
 
   expectRequestErrors expectedErrors $ runTSv1 $ createRequest :: subject :: targetEntries
   expectRequestErrors expectedErrors $ runTSv2 $ createRequest :: subject :: targetEntries
