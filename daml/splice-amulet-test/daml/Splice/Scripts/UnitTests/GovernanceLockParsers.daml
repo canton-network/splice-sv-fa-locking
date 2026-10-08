@@ -263,7 +263,6 @@ test_governanceLockSpecificationParser' run = do
         unlockControllers = ControllerSpecification [[alice, bob]]
         substitutionControllers = ControllerSpecification [[bob]]
         vestingControllers = ControllerSpecification [[alice], [charlie]]
-        meta = emptyMetadata
   expectSuccess fullSpecification $
     run (governanceLockTagToText GLT_FeaturedApp)
       [ (lockSubjectMetaKey, "provider")
@@ -273,7 +272,7 @@ test_governanceLockSpecificationParser' run = do
       ]
 
   -- Only the subject set, so all controllers default to the owner
-  expectSuccess (ownerControlledSpecification testOwner (GLK_SuperValidatorRightsOwner "someSv") emptyMetadata) $
+  expectSuccess (ownerControlledSpecification testOwner (GLK_SuperValidatorRightsOwner "someSv")) $
     run (governanceLockTagToText GLT_SuperValidator) [(lockSubjectMetaKey, "someSv")]
 
   -- One invalid field
@@ -331,13 +330,12 @@ test_governanceLockRequestTSv1Parser = do
   let run receiver entries = runParser (governanceLockRequestTSv1Parser testAdmin testOwner receiver) (mkMeta entries)
       request r = (requestMetaKey, r)
       faLock = [(lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp), (lockSubjectMetaKey, "provider")]
-      faSpecification = ownerControlledSpecification testOwner (GLK_FeaturedApp testProvider) emptyMetadata
+      faSpecification = ownerControlledSpecification testOwner (GLK_FeaturedApp testProvider)
       invalidReceiverError p = "Invalid receiver: '" <> show p <> "'"
 
-  -- Create a lock: the specification is parsed, and the other governance fields are removed from the lock metadata
-  expectRequest (run lockManagerParty $ request "create-lock" :: ("app/id", "A-1") :: (unlockAmountMetaKey, "1.0") :: faLock) \case
-    GLR_CreateGovernanceLock{specification} ->
-      specification === (faSpecification with meta = mkMeta [("app/id", "A-1")])
+  -- Create a lock: the specification is parsed
+  expectRequest (run lockManagerParty $ request "create-lock" :: (unlockAmountMetaKey, "1.0") :: faLock) \case
+    GLR_CreateGovernanceLock{specification} -> specification === faSpecification
     _ -> fail "Expected GLR_CreateGovernanceLock"
 
   -- Create a lock with custom controllers
@@ -352,12 +350,10 @@ test_governanceLockRequestTSv1Parser = do
       request "unlock-and-start-vesting"
         :: (unlockAmountMetaKey, "10000.0")
         :: (unlockAtMetaKey, "1767225600000000")
-        :: (targetLockMetaMetaKeyPrefix <> "app/id", "A-1")
-        :: ("app/id", "B-7")
         :: faLock)
     \case
       GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt} -> do
-        specification === (faSpecification with meta = mkMeta [("app/id", "A-1")])
+        specification === faSpecification
         unlockAmount === Some 10000.0
         unlockAt === Some (time (date 2026 Jan 1) 0 0 0)
       _ -> fail "Expected GLR_UnlockGovernanceLock"
@@ -375,11 +371,10 @@ test_governanceLockRequestTSv1Parser = do
     (run lockManagerParty $
       request "transfer-lock"
         :: (receiverMetaKey, "alice")
-        :: (targetLockMetaMetaKeyPrefix <> "app/id", "A-1")
         :: faLock)
     \case
       GLR_TransferGovernanceLock{specification, receiver} -> do
-        specification === (faSpecification with meta = mkMeta [("app/id", "A-1")])
+        specification === faSpecification
         receiver === alice
       _ -> fail "Expected GLR_TransferGovernanceLock"
 
@@ -437,8 +432,6 @@ substitutionRequest = (requestMetaKey, governanceLockRequestSubstituteLock)
 -- The `cip-127/request` key selects the substitution.
 -- `cip-127/lock-owner` and `cip-127/lock-status` specify the owner and the state of the target lock.
 -- Other keys without a `target-` prefix specify the new lock; keys with that prefix specify the target lock.
--- The `AllocationFactory_Allocate` implementation stores the keys without a `cip-127/` prefix,
--- e.g., `app/id`, as the metadata of the new lock.
 test_substitutionTSv2Parser_examples : Script ()
 test_substitutionTSv2Parser_examples = do
   let run lockType entries = runParser (substitutionTSv2Parser testAdmin lockType bob) (mkMeta entries)
@@ -450,8 +443,8 @@ test_substitutionTSv2Parser_examples = do
       governanceLockKey = GovernanceLockKey with
         dso = testAdmin
         owner = alice
-        specification = ownerControlledSpecification alice (GLK_SuperValidatorRightsOwner "someSv") emptyMetadata
-      governanceSpecification = ownerControlledSpecification bob (GLK_SuperValidatorRightsOwner "someSv") emptyMetadata)
+        specification = ownerControlledSpecification alice (GLK_SuperValidatorRightsOwner "someSv")
+      governanceSpecification = ownerControlledSpecification bob (GLK_SuperValidatorRightsOwner "someSv"))
     $ run "sv-lock"
         [ ("cip-127/request", "substitute-receiver-lock-on-accept")
         , ("cip-127/lock-subject", "someSv")
@@ -461,7 +454,6 @@ test_substitutionTSv2Parser_examples = do
   -- Staking app example: alice locks funds for the featured app "provider", and a staking app (charlie) can
   -- approve substitutions together with the provider. Bob substitutes funds of that lock with a lock whose
   -- substitutions charlie can approve together with either bob or the provider.
-  -- The target lock has the metadata `app/id = A-1`; the new lock gets the metadata `app/id = B-7`.
   expectSuccess
     (AS_Governance with
       governanceLockKey = GovernanceLockKey with
@@ -472,13 +464,11 @@ test_substitutionTSv2Parser_examples = do
           unlockControllers = ControllerSpecification [[charlie, testProvider]]
           substitutionControllers = ControllerSpecification [[charlie, testProvider]]
           vestingControllers = ControllerSpecification [[charlie], [alice]]
-          meta = mkMeta [("app/id", "A-1")]
       governanceSpecification = GovernanceLockSpecification with
         kind = GLK_FeaturedApp testProvider
         unlockControllers = ControllerSpecification [[charlie, bob], [charlie, testProvider]]
         substitutionControllers = ControllerSpecification [[charlie, bob], [charlie, testProvider]]
-        vestingControllers = ControllerSpecification [[charlie], [bob]]
-        meta = mkMeta [("app/id", "B-7")])
+        vestingControllers = ControllerSpecification [[charlie], [bob]])
     $ run "fa-lock"
         [ ("cip-127/request", "substitute-receiver-lock-on-accept")
         -- the new lock
@@ -486,13 +476,11 @@ test_substitutionTSv2Parser_examples = do
         , ("cip-127/unlock-controllers", "charlie,bob;charlie,provider")
         , ("cip-127/substitution-controllers", "charlie,bob;charlie,provider")
         , ("cip-127/vesting-controllers", "charlie;bob")
-        , ("app/id", "B-7")
         -- the target lock
         , ("cip-127/lock-owner", "alice")
         , ("cip-127/target-unlock-controllers", "charlie,provider")
         , ("cip-127/target-substitution-controllers", "charlie,provider")
         , ("cip-127/target-vesting-controllers", "charlie;alice")
-        , ("cip-127/target-lock-meta/app/id", "A-1")
         ]
 
   -- Vesting lock example: bob substitutes funds of a vesting lock of alice. A vesting target is selected with
@@ -506,13 +494,11 @@ test_substitutionTSv2Parser_examples = do
         specification = VestingLockSpecification with
           kind = GLK_SuperValidatorRightsOwner "someSv"
           vestingControllers = ControllerSpecification [[charlie], [alice]]
-          meta = emptyMetadata
         vestingPeriod = days 60
         endTime = time (date 2026 Jan 1) 0 0 0
       vestingSpecification = VestingLockSpecification with
         kind = GLK_SuperValidatorRightsOwner "someSv"
-        vestingControllers = ControllerSpecification [[charlie, bob]]
-        meta = emptyMetadata)
+        vestingControllers = ControllerSpecification [[charlie, bob]])
     $ run "sv-lock"
         [ ("cip-127/request", "substitute-receiver-lock-on-accept")
         -- the new lock
@@ -583,30 +569,6 @@ test_substitutionTSv2Parser_errors = do
     , "Missing metadata field '" <> targetLockVestingEndTimeMetaKey <> "'"
     ]
     $ run [subject, targetOwner, (lockStatusMetaKey, lockStateToText LS_Vesting)]
-
--- | Target lock metadata is rejected when creating a lock, so a substitution request without
--- the correct request key fails instead of creating a new lock.
-test_createLock_rejectsTargetLockMetadata : Script ()
-test_createLock_rejectsTargetLockMetadata = do
-  let targetEntries =
-        [ (lockOwnerMetaKey, "alice")
-        , (targetLockMetaMetaKeyPrefix <> "app/id", "A-1")
-        ]
-      expectedErrors =
-        [ "Metadata fields not allowed for a lock creation: "
-            <> targetLockMetaMetaKeyPrefix <> "app/id"
-        ]
-      createRequest = (requestMetaKey, governanceLockRequestCreateLock)
-      subject = (lockSubjectMetaKey, "provider")
-      runTSv1 entries = runParser (governanceLockRequestTSv1Parser testAdmin testOwner lockManagerParty)
-        (mkMeta $ (lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp) :: entries)
-      runTSv2 entries = runParser (governanceLockRequestTSv2Parser testAdmin (governanceLockTagToText GLT_FeaturedApp) testOwner)
-        (mkMeta entries)
-
-  expectRequestErrors expectedErrors $ runTSv1 $ createRequest :: subject :: targetEntries
-  expectRequestErrors expectedErrors $ runTSv2 $ createRequest :: subject :: targetEntries
-  -- TSv2 creates a lock when the request is omitted
-  expectRequestErrors expectedErrors $ runTSv2 $ subject :: targetEntries
 
 -- Funding amount parser
 ------------------------

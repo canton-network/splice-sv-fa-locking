@@ -710,7 +710,7 @@ governanceLockRawChoice registry owner amount kind = errorIfLeft =<< governanceL
 
 governanceLockRawChoice' : AmuletRegistryV2.AmuletRegistry -> Party -> Decimal -> GovernanceLockKind -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockRawChoice' registry owner amount kind =
-  governanceLockWithSpecRawChoice' registry owner amount (ownerControlledSpecification owner kind emptyMetadata)
+  governanceLockWithSpecRawChoice' registry owner amount (ownerControlledSpecification owner kind)
 
 governanceLockWithSpecRawChoice : AmuletRegistryV2.AmuletRegistry -> Party -> Decimal -> GovernanceLockSpecification -> Script (ContractId GovernanceLock)
 governanceLockWithSpecRawChoice registry owner amount specification = errorIfLeft =<< governanceLockWithSpecRawChoice' registry owner amount specification
@@ -951,7 +951,6 @@ governanceUnlockV1 env lockCid actor meta = do
   now <- getTime
   Some lock <- queryContractId actor lockCid
   let registry = env.registriesEnv.amuletV2
-      targetMeta = Metadata $ TM.fromList [(targetLockMetaMetaKeyPrefix <> k, v) | (k, v) <- TM.toList lock.specification.meta.values]
   (rulesCid, rulesDisclosure) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
   result <- submitWithTransferContext registry (actAs actor <> discloseMany' rulesDisclosure) \context ->
     exerciseCmd (toInterfaceContractId @V1.TransferFactory rulesCid) V1.TransferFactory_Transfer with
@@ -965,8 +964,7 @@ governanceUnlockV1 env lockCid actor meta = do
         requestedAt = now
         executeBefore = now `addRelTime` hours 1
         inputHoldingCids = []
-        meta = reasonToMeta (tsv1RequestMemo governanceLockRequestUnlockAndStartVesting lock.specification.kind) $
-          unionMetadata meta targetMeta
+        meta = reasonToMeta (tsv1RequestMemo governanceLockRequestUnlockAndStartVesting lock.specification.kind) meta
       extraArgs = ExtraArgs with context; meta = emptyMetadata
   pure $ flip fmap result \r -> case r.output of
     V1.TransferInstructionResult_Pending cid -> Some $ fromInterfaceContractId @t cid

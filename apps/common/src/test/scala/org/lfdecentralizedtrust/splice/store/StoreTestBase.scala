@@ -569,7 +569,6 @@ abstract class StoreTestBase
           controllers,
           controllers,
           controllers,
-          new Metadata(util.Collections.emptyMap()),
         ),
         Optional.empty(),
         Instant.now().truncatedTo(ChronoUnit.MICROS),
@@ -599,7 +598,6 @@ abstract class StoreTestBase
         new governancelockCodegen.VestingLockSpecification(
           new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner(svName),
           lockControllers(owner),
-          new Metadata(util.Collections.emptyMap()),
         ),
         Optional.empty(),
         util.Map.of[String, Instant](),
