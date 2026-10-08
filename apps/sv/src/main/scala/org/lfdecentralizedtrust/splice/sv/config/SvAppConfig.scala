@@ -300,7 +300,6 @@ final case class InitialGovernanceLockConfig(
     minimumLockAmount: Option[NonNegativeNumeric[BigDecimal]] = None,
     superValidatorLockVestingDuration: Option[NonNegativeFiniteDuration] = None,
     featuredAppLockVestingDuration: Option[NonNegativeFiniteDuration] = None,
-    searchTimeGranularity: Option[NonNegativeFiniteDuration] = None,
     featuredAppLockThreshold: Option[NonNegativeNumeric[BigDecimal]] = None,
     featuredAppUnderlockGracePeriod: Option[NonNegativeFiniteDuration] = None,
 ) {
@@ -318,7 +317,6 @@ final case class InitialGovernanceLockConfig(
       minimumLockAmount.map(_.value.bigDecimal).toJava,
       toRelTime(superValidatorLockVestingDuration),
       toRelTime(featuredAppLockVestingDuration),
-      toRelTime(searchTimeGranularity),
       featuredAppLockThreshold.map(_.value.bigDecimal).toJava,
       toRelTime(featuredAppUnderlockGracePeriod),
     )

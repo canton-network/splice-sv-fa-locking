@@ -24,11 +24,13 @@ trait GovernanceLockTest extends TokenStandardTest {
   )
   case object CreateLock extends LockRequest[Unit]("create-lock", _ => Nil)
   case object UnlockAndStartVesting
-      extends LockRequest[(BigDecimal, Option[CantonTimestamp])](
+      extends LockRequest[(BigDecimal, CantonTimestamp)](
         "unlock-and-start-vesting",
-        { case (unlockAmount, unlockAt) =>
-          ("unlock-amount", unlockAmount.toString) ::
-            unlockAt.map(t => ("unlock-at", t.toMicros.toString)).toList
+        { case (unlockAmount, vestingStartTime) =>
+          List(
+            "unlock-amount" -> unlockAmount.toString,
+            "vesting-start-time" -> vestingStartTime.toInstant.toString,
+          )
         },
       )
 
@@ -87,8 +89,7 @@ trait GovernanceLockTest extends TokenStandardTest {
     actualEntries shouldBe expectedEntries withClue s"actual: $actual, expected: $expected"
   }
 
-  val governanceLockUnlockAtMetaKey = s"$lockCipPrefix/unlock-at"
-  val vestingLockWithdrawAtMetaKey = s"$lockCipPrefix/withdraw-at"
+  val vestedUntilTimeMetaKey = s"$lockCipPrefix/vested-until-time"
 
   def createGovernanceLockViaTokenStandard(
       participant: ParticipantClientReference,
@@ -127,7 +128,7 @@ trait GovernanceLockTest extends TokenStandardTest {
       lockSubject: String,
       governanceLockCid: transferinstructionv1.TransferInstruction.ContractId,
       unlockAmount: BigDecimal,
-      unlockAt: Option[CantonTimestamp] = None,
+      vestingStartTime: CantonTimestamp,
   )(implicit env: SpliceTestConsoleEnvironment): Option[
     (
         transferinstructionv1.TransferInstruction.ContractId,
@@ -143,7 +144,9 @@ trait GovernanceLockTest extends TokenStandardTest {
         0,
         transferinstruction.v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer,
         description = Some(
-          makeInputLockMemo(UnlockAndStartVesting, lockKind, lockSubject)((unlockAmount, unlockAt))
+          makeInputLockMemo(UnlockAndStartVesting, lockKind, lockSubject)(
+            (unlockAmount, vestingStartTime)
+          )
         ),
         wait = false,
       ),

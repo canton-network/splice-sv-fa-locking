@@ -344,27 +344,23 @@ test_governanceLockRequestTSv1Parser = do
       specification === (faSpecification with unlockControllers = ControllerSpecification [[alice, bob]])
     _ -> fail "Expected GLR_CreateGovernanceLock"
 
-  -- Unlock with all optional fields set
+  -- Unlock with all fields set
   expectRequest
     (run lockManagerParty $
       request "unlock-and-start-vesting"
         :: (unlockAmountMetaKey, "10000.0")
-        :: (unlockAtMetaKey, "1767225600000000")
+        :: (vestingStartTimeMetaKey, "2026-01-01T00:00:00Z")
         :: faLock)
     \case
-      GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt} -> do
+      GLR_UnlockGovernanceLock{specification, unlockAmount, vestingStartTime} -> do
         specification === faSpecification
         unlockAmount === 10000.0
-        unlockAt === Some (time (date 2026 Jan 1) 0 0 0)
+        vestingStartTime === time (date 2026 Jan 1) 0 0 0
       _ -> fail "Expected GLR_UnlockGovernanceLock"
 
-  -- Unlock without the optional fields
-  expectRequest (run lockManagerParty $ request "unlock-and-start-vesting" :: (unlockAmountMetaKey, "10000.0") :: faLock) \case
-    GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt} -> do
-      specification === faSpecification
-      unlockAmount === 10000.0
-      unlockAt === None
-    _ -> fail "Expected GLR_UnlockGovernanceLock"
+  -- Unlock without the vesting start time
+  expectRequestErrors [missingMetadataMessage vestingStartTimeMetaKey] $
+    run lockManagerParty (request "unlock-and-start-vesting" :: (unlockAmountMetaKey, "10000.0") :: faLock)
 
   -- Transfer a lock: the new owner is read from the metadata
   expectRequest
@@ -386,7 +382,8 @@ test_governanceLockRequestTSv1Parser = do
 
   -- Creating, unlocking and transferring a lock needs the lock manager as the receiver
   expectRequestErrors [invalidReceiverError alice] $ run alice (request "create-lock" :: faLock)
-  expectRequestErrors [invalidReceiverError alice, missingMetadataMessage unlockAmountMetaKey] $ run alice (request "unlock-and-start-vesting" :: faLock)
+  expectRequestErrors [invalidReceiverError alice, missingMetadataMessage unlockAmountMetaKey, missingMetadataMessage vestingStartTimeMetaKey] $
+    run alice (request "unlock-and-start-vesting" :: faLock)
   expectRequestErrors [invalidReceiverError alice, missingMetadataMessage receiverMetaKey] $
     run alice (request "transfer-lock" :: faLock)
   -- Substituting a lock also needs the lock manager as the receiver; all errors are reported
@@ -398,6 +395,7 @@ test_governanceLockRequestTSv1Parser = do
     [ invalidReceiverError alice
     , "Invalid provider for fa-lock: " <> invalidParty
     , "Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: 'not-a-decimal'"
+    , missingMetadataMessage vestingStartTimeMetaKey
     ]
     $ run alice
         [ request "unlock-and-start-vesting"

@@ -25,7 +25,7 @@ import DA.Validation
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
-import Splice.AmuletConfig (governanceLockFeaturedAppLockVestingDuration, governanceLockMinimumLockAmount, governanceLockSearchTimeGranularity, governanceLockSuperValidatorLockVestingDuration)
+import Splice.AmuletConfig (governanceLockFeaturedAppLockVestingDuration, governanceLockMinimumLockAmount, governanceLockSuperValidatorLockVestingDuration)
 import Splice.AmuletRules
 import Splice.Api.Token.AllocationV2 qualified as V2
 import Splice.Api.Token.AllocationInstructionV2 qualified as V2
@@ -36,6 +36,7 @@ import Splice.Api.Token.TransferEventsV2 as TransferEventsV2
 import Splice.Expiry hiding (maxTime)
 import Splice.Fees (relTimeToDays, relTimeToSeconds)
 import Splice.ExternalPartyConfigState
+import Splice.Iso8601 (parseIso8601UtcTime)
 import Splice.Round
 import Splice.TokenStandard.Utils hiding (require, receiverMetaKey, reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime, relTimeFromMeta, timeFromMeta)
@@ -80,7 +81,7 @@ data VestingLockSpecification
 -- | An unlock approval recorded by one unlock controller.
 data UnlockApproval = UnlockApproval with
     unlockAmount : Decimal  -- ^ Amount to unlock.
-    unlockAt : Time  -- ^ Time at which the controller wants vesting to start.
+    vestingStartTime : Time  -- ^ Time at which the controller wants vesting to start.
   deriving (Eq, Show, Serializable)
 
 -- | Specification where the lock owner alone controls all lock actions.
@@ -266,9 +267,9 @@ template GovernanceLock
         -- `governanceLock_unlockImpl` creates a new `GovernanceLock` or `VestingLock` when necessary
         potentiallyUnsafeArchive self
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-        unlockAt <- getUnlockAtTime requestedAt extraArgs.meta state
-        unlockAmount <- getUnlockAmount extraArgs.meta
-        unlockResult <- governanceLock_unlockImpl (coerceContractId self) this unlockAmount unlockAt actors context state
+        vestingStartTime <- assertParsed vestingStartTimeParser extraArgs.meta
+        unlockAmount <- assertParsed unlockAmountParser extraArgs.meta
+        unlockResult <- governanceLock_unlockImpl (coerceContractId self) this unlockAmount vestingStartTime actors context state
         let resultMeta = simpleHoldingTxMeta TxKind_Unlock (Some "unlock governance lock") None
         pure $ case unlockResult of
           GovernanceLock_UnlockResult_Pending pendingLock -> V2.AllocationResult with
@@ -290,10 +291,10 @@ template GovernanceLock
       allocation_withdrawExtraObservers _ = observer this
 
 governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_UnlockResult
-governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount unlockAt actors context state
+governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount vestingStartTime actors context state
     = do
-        assertWithinDeadline "unlockAt" unlockAt
-        recorded <- governanceLock_updateUnlockApprovals this unlockAmount unlockAt actors
+        assertWithinDeadline "vestingStartTime" vestingStartTime
+        recorded <- governanceLock_updateUnlockApprovals this unlockAmount vestingStartTime actors
         case recorded of
           Left stillPending -> do
             pendingLock <- create this with
@@ -303,7 +304,7 @@ governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount unlockAt 
           Right approvedUnlockAt -> governanceLock_executeUnlock self this unlockAmount approvedUnlockAt context state
 
 governanceLock_executeUnlock : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_UnlockResult
-governanceLock_executeUnlock self this@(GovernanceLock {..}) unlockAmount unlockAt context state
+governanceLock_executeUnlock self this@(GovernanceLock {..}) unlockAmount vestingStartTime context state
     = do
         -- Cap the approved amount at the locked amount, as approvals are kept when the lock shrinks, e.g. with a partial substitution
         let actualUnlockAmount = min amount unlockAmount
@@ -314,7 +315,7 @@ governanceLock_executeUnlock self this@(GovernanceLock {..}) unlockAmount unlock
           requireMinimumLock state (amount - actualUnlockAmount)
 
         let vestingPeriod = vestingDurationFor specification.kind state
-        let endTime = unlockAt `addRelTime` vestingPeriod
+        let endTime = vestingStartTime `addRelTime` vestingPeriod
         let specification = governanceToVestingSpecification this.specification
         let forOwner = ForOwner with dso; owner
         let vestingLockProperties = LockProperties with
@@ -350,87 +351,6 @@ governanceLock_executeUnlock self this@(GovernanceLock {..}) unlockAmount unlock
           vestingLock
           governanceLock
           unlockedAmulet
-
-
-loopUntilRightA : Action m => (a -> m (Either a r)) -> a -> m r
-loopUntilRightA f a = do
-  res <- f a
-  case res of
-    Left a' -> loopUntilRightA f a'
-    Right r -> pure r
-
-
--- | Takes a reference time, that must be at or before the current ledger time,
--- and returns a pair where the first is before the current time and the second is
--- after.
-searchCurrentTimeBounds : Time -> ExternalPartyConfigState -> Update (Time, Time)
-searchCurrentTimeBounds basis state =
-  searchCurrentTimeBounds_impl isLedgerTimeGE assertDeadlineExceeded assertWithinDeadline basis $
-    governanceLockSearchTimeGranularity state.governanceLockConfig
-
--- | Implementation for searchCurrentTimeBounds, taking explicit functions to
--- allow running outside of Update.
-searchCurrentTimeBounds_impl
- : forall m. Action m
-  => (Time -> m Bool)
-  -> (Text -> Time -> m ())
-  -> (Text -> Time -> m ())
-  -> Time
-  -> RelTime
-  -> m (Time, Time)
-searchCurrentTimeBounds_impl isTimeGE assertDeadlineExceeded' assertWithinDeadline' basis granularity = do
-    afterBasis <- isTimeGE basis
-    let seekF = if afterBasis then seekForward else seekBackward
-    bounds@(ubBefore, lbAfter) <- loopUntilRightA binarySearch =<< loopUntilRightA seekF (1, basis)
-    assertDeadlineExceeded' "ubBefore" ubBefore
-    assertDeadlineExceeded' "lbAfter - 1 day" (lbAfter `addRelTime` negate (days 1))
-    assertWithinDeadline' "lbAfter" lbAfter
-    assertWithinDeadline' "ubBefore + 1 day" (ubBefore `addRelTime` days 1)
-    pure bounds
-  where
-    binarySearch : (Int, Time) -> m (Either (Int, Time) (Time, Time))
-    binarySearch (-1, basis) = do
-      pure $ Right (basis, basis `addRelTime` granularity)
-    binarySearch (seek, basis) = do
-      let nextBasis = basis `addRelTime` seekToGranularity seek
-      gt <- isTimeGE nextBasis
-      pure $ if gt
-         then Left (seek - 1, nextBasis)
-         else Left (seek - 1, basis)
-    seekForward : (Int, Time) -> m (Either (Int, Time) (Int, Time))
-    seekForward (seek, basis) = do
-      let nextBasis = basis `addRelTime` seekToGranularity seek
-      gt <- isTimeGE nextBasis
-      pure $ if gt
-         then Left (seek + 1, nextBasis)
-         else Right (seek - 1, basis)
-    seekBackward : (Int, Time) -> m (Either (Int, Time) (Int, Time))
-    seekBackward (seek, basis) = do
-      let nextBasis = basis `addRelTime` (- seekToGranularity seek)
-      gt <- isTimeGE nextBasis
-      pure $ if gt
-         then Right (seek - 1, nextBasis)
-         else Left (seek + 1, nextBasis)
-    seekToGranularity seek = convertMicrosecondsToRelTime $ 2 ^ seek * convertRelTimeToMicroseconds granularity
-
-getUnlockAtTime' : Time -> Optional Time -> ExternalPartyConfigState -> Update Time
-getUnlockAtTime' requestedAt optUnlockAt state =
-  case optUnlockAt of
-    Some unlockAt -> pure unlockAt
-    None -> snd <$> searchCurrentTimeBounds requestedAt state
-
-getUnlockAtTime : Time -> Metadata -> ExternalPartyConfigState -> Update Time
-getUnlockAtTime requestedAt meta state =
-  getUnlockAtTime' requestedAt (timeFromMeta unlockAtMetaKey meta) state
-
-getUnlockAmount : CanAssert m => Metadata -> m Decimal
-getUnlockAmount = assertParsed unlockAmountParser
-
-getWithdrawRequestedAtTime : Time -> RelTime -> Metadata -> ExternalPartyConfigState -> Update Time
-getWithdrawRequestedAtTime endTime vestingPeriod meta state =
-  case timeFromMeta withdrawAtMetaKey meta of
-    Some withdrawAt -> pure withdrawAt
-    None -> fst <$> searchCurrentTimeBounds (endTime `addRelTime` (- vestingPeriod)) state
 
 data GovernanceLock_UnlockResult
   = GovernanceLock_UnlockResult_Pending with
@@ -595,8 +515,8 @@ template VestingLock
 
 vestingLock_tokenStandard_withdrawImpl : ContractId VestingLock -> VestingLock -> [Party] -> ExtraArgs -> Update VestingLock_WithdrawResult
 vestingLock_tokenStandard_withdrawImpl self this actors extraArgs = do
-  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext this.dso extraArgs.context
-  requestedAt <- getWithdrawRequestedAtTime this.endTime this.vestingPeriod extraArgs.meta state
+  (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext this.dso extraArgs.context
+  requestedAt <- assertParsed vestedUntilTimeParser extraArgs.meta
   vestingLock_withdrawImpl self this requestedAt actors context
 
 vestingLock_withdrawImpl : ContractId VestingLock -> VestingLock -> Time -> [Party] -> ExternalPartyTransferContext -> Update VestingLock_WithdrawResult
@@ -738,14 +658,14 @@ vestingLockRemainingWithdrawControllers VestingLock{specification, pendingWithdr
 
 -- | Updates approvals for a GovernanceLock unlock
 governanceLock_updateUnlockApprovals : GovernanceLock -> Decimal -> Time -> [Party] -> Update (Either (Map.Map Party UnlockApproval) Time)
-governanceLock_updateUnlockApprovals GovernanceLock{..} unlockAmount unlockAt actors = do
+governanceLock_updateUnlockApprovals GovernanceLock{..} unlockAmount vestingStartTime actors = do
   result <- updateApprovals
     specification.unlockControllers
     actors
-    (UnlockApproval with unlockAmount; unlockAt)
+    (UnlockApproval with unlockAmount; vestingStartTime)
     pendingUnlockApprovals
     (\approval -> approval.unlockAmount == unlockAmount)
-  forA result (effectiveUnlockAt . fmap ((.unlockAt) . snd))
+  forA result (effectiveVestingStartTime . fmap ((.vestingStartTime) . snd))
 
 -- | Updates approvals for a VestingLock withdraw
 vestingLock_updateWithdrawApprovals : VestingLock -> Time -> [Party] -> Update (Either (Map.Map Party Time) Time)
@@ -794,13 +714,13 @@ updateApprovals ControllerSpecification{controllers} actors approval approvals a
 
 -- | The earliest of the approved unlock times that is still in the future.
 -- It must be no more than 24h ahead, to avoid a far-future vesting start.
-effectiveUnlockAt : [Time] -> Update Time
-effectiveUnlockAt times = do
+effectiveVestingStartTime : [Time] -> Update Time
+effectiveVestingStartTime times = do
   futureTimes <- filterA isLedgerTimeLT times
   case minimumOn identity futureTimes of
     None -> assertFail "None of the approved unlock times is in the future"
     Some earliest -> do
-      assertDeadlineExceeded "unlockAt - 1 day" (earliest `addRelTime` days (-1))
+      assertDeadlineExceeded "vestingStartTime - 1 day" (earliest `addRelTime` days (-1))
       pure earliest
 
 governanceToVestingSpecification : GovernanceLockSpecification -> VestingLockSpecification
@@ -1549,10 +1469,6 @@ requestMetaKey = cipMetaPrefix <> "request"
 -- | Metadata key that specifies the receiver of a lock transfer.
 receiverMetaKey = cipMetaPrefix <> "receiver"
 
--- | Metadata key of a `GovernanceLock` unlock that sets the time at which vesting starts.
--- Encoded as microseconds since the epoch.
-unlockAtMetaKey = cipMetaPrefix <> "unlock-at"
-
 -- | Metadata key of a `GovernanceLock` unlock that specifies how much to unlock.
 unlockAmountMetaKey = cipMetaPrefix <> "unlock-amount"
 
@@ -1571,6 +1487,12 @@ lockSubjectMetaKey = cipMetaPrefix <> "lock-subject"
 
 -- | Metadata key that specifies the status of a lock.
 lockStatusMetaKey = cipMetaPrefix <> "lock-status"
+
+-- | Metadata key that specifies the time at which vesting should start.
+vestingStartTimeMetaKey = cipMetaPrefix <> "vesting-start-time"
+
+-- | Metadata key that specifies the time as of which vested funds should be computed and withdrawn.
+vestedUntilTimeMetaKey = cipMetaPrefix <> "vested-until-time"
 
 -- | Metadata key that specifies the duration of a `VestingLock`.
 lockVestingDurationMetaKey = cipMetaPrefix <> "lock-vesting-duration-micros"
@@ -1762,8 +1684,8 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
   case request of
     GLR_CreateGovernanceLock{specification} ->
       governanceLock_transferFactoryV1_lockImpl dso arg specification
-    GLR_UnlockGovernanceLock{specification, unlockAmount, unlockAt} ->
-      governanceLock_transferFactoryV1_unlockImpl dso arg specification unlockAmount unlockAt
+    GLR_UnlockGovernanceLock{specification, unlockAmount, vestingStartTime} ->
+      governanceLock_transferFactoryV1_unlockImpl dso arg specification unlockAmount vestingStartTime
     GLR_TransferGovernanceLock{specification, receiver} ->
       governanceLock_transferFactoryV1_transferLockImpl dso arg specification receiver
     GLR_SubstituteLock{substitution} ->
@@ -1795,17 +1717,16 @@ governanceLock_transferFactoryV1_unlockImpl
   -> V1.TransferFactory_Transfer
   -> GovernanceLockSpecification
   -> Decimal
-  -> Optional Time
+  -> Time
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{transfer, extraArgs} specification unlockAmount optUnlockAt = do
+governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{transfer, extraArgs} specification unlockAmount vestingStartTime = do
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  unlockAt <- getUnlockAtTime' transfer.requestedAt optUnlockAt state
   (lockCid, lock) <- fetchByKey @GovernanceLock $ GovernanceLockKey with
     dso
     owner = transfer.sender
     specification
   potentiallyUnsafeArchive lockCid
-  result <- governanceLock_unlockImpl lockCid lock unlockAmount unlockAt [transfer.sender] context state
+  result <- governanceLock_unlockImpl lockCid lock unlockAmount vestingStartTime [transfer.sender] context state
   pure $ case result of
     GovernanceLock_UnlockResult_Pending pendingLock -> V1.TransferInstructionResult with
       output = V1.TransferInstructionResult_Pending with
@@ -1962,7 +1883,7 @@ data GovernanceLockRequest
   | GLR_UnlockGovernanceLock with
       specification : GovernanceLockSpecification
       unlockAmount : Decimal
-      unlockAt : Optional Time
+      vestingStartTime : Time
   | GLR_TransferGovernanceLock with
       specification : GovernanceLockSpecification
       receiver : Party
@@ -2055,6 +1976,14 @@ optionalMetadataParser key = getOptionalMetadata key <$> inputParser
 
 timeMetadataParser : Text -> Parser Metadata Time
 timeMetadataParser key = Parser \meta -> (timeFromMeta key meta) <?> (missingMetadataMessage key)
+
+iso8601TimeFromTextParser : Text -> Text -> Parser i Time
+iso8601TimeFromTextParser key input = validationParser $ validate $ case parseIso8601UtcTime input of
+  Left e -> Left $ "Error in metadata field '" <> key <> "': " <> e
+  Right t -> Right t
+
+iso8601TimeMetadataParser : Text -> Parser Metadata Time
+iso8601TimeMetadataParser key = requiredMetadataParser key >>= iso8601TimeFromTextParser key
 
 relTimeMetadataParser : Text -> Parser Metadata RelTime
 relTimeMetadataParser key = Parser \meta -> (relTimeFromMeta key meta) <?> (missingMetadataMessage key)
@@ -2160,7 +2089,7 @@ glr_unlockGovernanceLock_parser kindParser owner =
   GLR_UnlockGovernanceLock <$>
     governanceLockSpecificationParser kindParser owner <*>
     unlockAmountParser <*>
-    unlockAtTimeParser
+    vestingStartTimeParser
 
 glr_transferGovernanceLock_parser : Parser Metadata GovernanceLockKind -> Party -> Parser Metadata GovernanceLockRequest
 glr_transferGovernanceLock_parser kindParser owner =
@@ -2270,8 +2199,11 @@ unlockAmountParser : Parser Metadata Decimal
 unlockAmountParser = requiredMetadataParser unlockAmountMetaKey >>= \t ->
   validationParser $ (Text.parseDecimal t) <?> ("Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: '" <> t <> "'")
 
-unlockAtTimeParser : Parser Metadata (Optional Time)
-unlockAtTimeParser = timeFromMeta unlockAtMetaKey <$> inputParser
+vestingStartTimeParser : Parser Metadata Time
+vestingStartTimeParser = iso8601TimeMetadataParser vestingStartTimeMetaKey
+
+vestedUntilTimeParser : Parser Metadata Time
+vestedUntilTimeParser = iso8601TimeMetadataParser vestedUntilTimeMetaKey
 
 -- SV Reward Coupon Helpers
 ---------------------------

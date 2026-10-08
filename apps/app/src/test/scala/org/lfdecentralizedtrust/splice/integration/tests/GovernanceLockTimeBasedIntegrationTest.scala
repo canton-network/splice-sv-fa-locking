@@ -104,7 +104,7 @@ class GovernanceLockTimeBasedIntegrationTest
       advanceTimeAndWaitForRoundOpening
 
       // Withdraw the governance lock; it's relocked as a VestingLock and funds remain locked
-      val unlockAt = getLedgerTime.plusSeconds(1)
+      val vestingStartTime = getLedgerTime.plusSeconds(1)
       val (vestingLockCid, vestingLockView) = unlockGovernanceLockViaTokenStandard(
         aliceValidatorBackend.participantClientWithAdminToken,
         owner,
@@ -112,7 +112,7 @@ class GovernanceLockTimeBasedIntegrationTest
         lockSubject,
         governanceLockCid,
         unlockAmount = lockAmount,
-        unlockAt = Some(unlockAt),
+        vestingStartTime = vestingStartTime,
       ).value
       val vestingLock =
         aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
@@ -128,7 +128,7 @@ class GovernanceLockTimeBasedIntegrationTest
       matchSVKind(vestingLock.specification.kind)
       vestingLock.endTime
         .minus(vestingLock.vestingPeriod.microseconds, ChronoUnit.MICROS) shouldBe
-        unlockAt.toInstant
+        vestingStartTime.toInstant
 
       clue("Scan serves a withdraw choice context for the VestingLock") {
         sv1ScanBackend
@@ -150,7 +150,7 @@ class GovernanceLockTimeBasedIntegrationTest
           aliceValidatorBackend.participantClientWithAdminToken,
           owner,
           vestingLockCid,
-          meta = Map(vestingLockWithdrawAtMetaKey -> unlockAt.plusSeconds(30).toMicros.toString),
+          meta = Map(vestedUntilTimeMetaKey -> vestingStartTime.plusSeconds(30).toInstant.toString),
         ),
       )(
         "a new VestingLock remains with half of the total vesting amount",
@@ -190,7 +190,7 @@ class GovernanceLockTimeBasedIntegrationTest
           aliceValidatorBackend.participantClientWithAdminToken,
           owner,
           remainingVestingLockCid,
-          meta = Map(vestingLockWithdrawAtMetaKey -> unlockAt.plusSeconds(120).toMicros.toString),
+          meta = Map(vestedUntilTimeMetaKey -> vestingStartTime.plusSeconds(120).toInstant.toString),
         ),
       )(
         "the VestingLock is archived and no pending TransferInstruction remains",

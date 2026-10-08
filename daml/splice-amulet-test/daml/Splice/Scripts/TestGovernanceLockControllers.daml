@@ -23,7 +23,7 @@ import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
-import Splice.TokenStandard.Utils.Internal.Conversions (timeToMeta, toAnyContractId)
+import Splice.TokenStandard.Utils.Internal.Conversions (toAnyContractId)
 
 -- | Controllers from the CIP example: owner A, featured app X, staking app S.
 -- Any two of the three can unlock or substitute; S or A alone can withdraw vested funds.
@@ -182,7 +182,7 @@ testCustomControllersUnlockTimeCap = do
   pending <- expectPendingUnlock =<< expectSuccess
     (unlockAs registry alice lockCid 50000.0 (now `addRelTime` days 2) [charlie])
   -- The earliest future time is 2 days ahead, so triggers failure
-  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'unlockAt - 1 day'") $
+  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'vestingStartTime - 1 day'") $
     unlockAs registry alice pending 50000.0 (now `addRelTime` days 3) [alice]
 
 testCustomControllersUnlockTimeOverAllSatisfiedSets : Script ()
@@ -328,7 +328,7 @@ testCustomControllersCompatPendingTSv2 = do
 
   -- bob approves the unlock first, so the unlock is pending
   unlockAt <- (`addRelTime` hours 1) <$> getTime
-  let unlockAtMeta = timeToMeta unlockAtMetaKey unlockAt (Metadata $ TextMap.fromList [(unlockAmountMetaKey, "20000.0")])
+  let unlockAtMeta = iso8601TimeToMeta vestingStartTimeMetaKey unlockAt (Metadata $ TextMap.fromList [(unlockAmountMetaKey, "20000.0")])
   Some pendingLockCid <- expectSuccess $ ops.pendingGovernanceUnlock env lockCid bob unlockAtMeta
 
   None <- queryContractId alice lockCid
@@ -345,7 +345,7 @@ testCustomControllersCompatPendingTSv2 = do
   -- bob approves the vesting withdraw first, so the withdraw is pending
   passTime (days 16)
   -- 1/4th of the 60 day vesting period
-  let withdrawAtMeta = timeToMeta withdrawAtMetaKey (unlockAt `addRelTime` days 15) emptyMetadata
+  let withdrawAtMeta = iso8601TimeToMeta vestedUntilTimeMetaKey (unlockAt `addRelTime` days 15) emptyMetadata
   Some pendingVestingCid <- expectSuccess $ ops.vestingWithdraw env vestingCid bob withdrawAtMeta
 
   None <- queryContractId alice vestingCid

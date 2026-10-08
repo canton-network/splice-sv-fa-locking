@@ -28,7 +28,6 @@ import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 import Splice.TokenStandard.Utils
-import Splice.TokenStandard.Utils.Internal.Conversions (timeToMeta)
 import Splice.Types (Round(..))
 
 testGovernanceLockHappyPathRawChoices : Script ()
@@ -55,7 +54,7 @@ testGovernanceLockHappyPathScenario ops = do
     ops.governanceLock registry bob (-10000.0) someSvKind
 
   -- Check that we can't unlock with a time in the past
-  actionMustFail (expectMessageContains "Ledger time is at or past deadline 'unlockAt' at") $
+  actionMustFail (expectMessageContains "Ledger time is at or past deadline 'vestingStartTime' at") $
     ops.governanceUnlock registry aliceLock 80000.0 (now `addRelTime` days (-60)) [alice]
 
   let unlockTime = now `addRelTime` days 1
@@ -139,8 +138,11 @@ testGovernanceLockCompatHappyPathScenario ops = do
 
   aliceLock <- expectSuccess $ ops.governanceLock env alice 80000.0 someFaKind emptyMetadata
 
+  vestingStartTime <- (`addRelTime` hours 1) <$> getTime
+
   -- Unlock 80k Amulet such that 1/8th should result in 10k Amulet withdrawable after 1/8th year.
-  aliceVesting <- expectSuccess $ ops.governanceUnlock env aliceLock alice (Metadata $ TM.fromList [(unlockAmountMetaKey, "80000.0")])
+  aliceVesting <- expectSuccess $ ops.governanceUnlock env aliceLock alice
+    (iso8601TimeToMeta vestingStartTimeMetaKey vestingStartTime $ Metadata $ TM.fromList [(unlockAmountMetaKey, "80000.0")])
 
   -- Chosen to make the vesting period to exactly 1/4th of the specified 60 day vesting period.
   -- 1/8th and 80k are reliably exactly representible in fixed-point binary
@@ -150,7 +152,7 @@ testGovernanceLockCompatHappyPathScenario ops = do
   passTime (days 16)
 
   newVestingLock <- fromSomeNote "Expected a continuing vested lock, but received None" <$>
-    (expectSuccess $ ops.vestingWithdraw env aliceVesting alice emptyMetadata)
+    (expectSuccess $ ops.vestingWithdraw env aliceVesting alice (iso8601TimeToMeta vestedUntilTimeMetaKey (vestingStartTime `addRelTime` days 15) emptyMetadata))
 
   -- Check that we did indeed unlock 10k amulet as expected - 1/8th of the total vesting amount of 80k.
   WalletClientV2.checkHoldingWithAmountExists alice registry.instrumentId 20000.0
@@ -159,8 +161,9 @@ testGovernanceLockCompatHappyPathScenario ops = do
   checkLockedHolding alice newVestingLock 60000.0
 
   passTime (days 60)
+  now <- getTime
 
-  rv <- expectSuccess $ ops.vestingWithdraw env newVestingLock alice emptyMetadata
+  rv <- expectSuccess $ ops.vestingWithdraw env newVestingLock alice (iso8601TimeToMeta vestedUntilTimeMetaKey now emptyMetadata)
   require "Expected no remaining vesting lock, received one" $ isNone rv
 
   -- Check that we withdrew all and exactly the 70k _remaining_ after the above withdrawal.
@@ -186,18 +189,18 @@ testGovernanceLockCompatTimesFromMetaScenario ops = do
   now <- getTime
 
   -- The unlock time must be in the future, but no more than 1 day ahead
-  actionMustFail (expectMessageContains "Ledger time is at or past deadline 'unlockAt' at") $
-    ops.governanceUnlock env aliceLock alice (timeToMeta unlockAtMetaKey now unlockAmountMeta)
-  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'unlockAt - 1 day' at") $
-    ops.governanceUnlock env aliceLock alice (timeToMeta unlockAtMetaKey (now `addRelTime` (days 1 + seconds 1)) unlockAmountMeta)
-  actionMustFail (expectMessageContains "Cannot parse time") $
-    ops.governanceUnlock env aliceLock alice (Metadata $ TM.fromList [(unlockAmountMetaKey, "80000.0"), (unlockAtMetaKey, "not-a-time")])
+  actionMustFail (expectMessageContains "Ledger time is at or past deadline 'vestingStartTime' at") $
+    ops.governanceUnlock env aliceLock alice (iso8601TimeToMeta vestingStartTimeMetaKey now unlockAmountMeta)
+  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'vestingStartTime - 1 day' at") $
+    ops.governanceUnlock env aliceLock alice (iso8601TimeToMeta vestingStartTimeMetaKey (now `addRelTime` (days 1 + seconds 1)) unlockAmountMeta)
+  actionMustFail (expectMessageContains $ "Error in metadata field '" <> vestingStartTimeMetaKey <> "': Invalid character at index 0: 'n'") $
+    ops.governanceUnlock env aliceLock alice (Metadata $ TM.fromList [(unlockAmountMetaKey, "80000.0"), (vestingStartTimeMetaKey, "not-a-time")])
 
-  -- Unlock with an explicit unlock time, which becomes the start of vesting
-  let unlockAt = now `addRelTime` hours 1
-  aliceVesting <- expectSuccess $ ops.governanceUnlock env aliceLock alice (timeToMeta unlockAtMetaKey unlockAt unlockAmountMeta)
+  -- Unlock with an explicit vesting start time
+  let vestingStartTime = now `addRelTime` hours 1
+  aliceVesting <- expectSuccess $ ops.governanceUnlock env aliceLock alice (iso8601TimeToMeta vestingStartTimeMetaKey vestingStartTime unlockAmountMeta)
   Some vestingLock <- queryContractId alice aliceVesting
-  vestingLock.endTime `addRelTime` negate vestingLock.vestingPeriod === unlockAt
+  vestingLock.endTime `addRelTime` negate vestingLock.vestingPeriod === vestingStartTime
   vestingLock.vestingPeriod === days 60
 
   passTime (days 16)
@@ -205,12 +208,12 @@ testGovernanceLockCompatTimesFromMetaScenario ops = do
 
   -- The withdraw time must be in the past
   actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'requestedAt' at") $
-    ops.vestingWithdraw env aliceVesting alice (timeToMeta withdrawAtMetaKey (now `addRelTime` seconds 1) emptyMetadata)
-  actionMustFail (expectMessageContains "Cannot parse time") $
-    ops.vestingWithdraw env aliceVesting alice (Metadata $ TM.fromList [(withdrawAtMetaKey, "not-a-time")])
+    ops.vestingWithdraw env aliceVesting alice (iso8601TimeToMeta vestedUntilTimeMetaKey (now `addRelTime` seconds 1) emptyMetadata)
+  actionMustFail (expectMessageContains $ "Error in metadata field '" <> vestedUntilTimeMetaKey <> "': Invalid character at index 0: 'n'") $
+    ops.vestingWithdraw env aliceVesting alice (Metadata $ TM.fromList [(vestedUntilTimeMetaKey, "not-a-time")])
 
   -- Withdraw with an explicit withdraw time after 1/4th of the 60 day vesting period
-  Some newVestingLock <- expectSuccess $ ops.vestingWithdraw env aliceVesting alice (timeToMeta withdrawAtMetaKey (unlockAt `addRelTime` days 15) emptyMetadata)
+  Some newVestingLock <- expectSuccess $ ops.vestingWithdraw env aliceVesting alice (iso8601TimeToMeta vestedUntilTimeMetaKey (vestingStartTime `addRelTime` days 15) emptyMetadata)
 
   -- 1/4th of the 80k is withdrawn and 3/4th remain vesting
   WalletClientV2.checkHoldingWithAmountExists alice registry.instrumentId 20000.0
@@ -227,11 +230,13 @@ testGovernanceLockCompatPartialUnlockFromMetaScenario ops = do
   env@TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
       someFaKind = GLK_FeaturedApp bob
-      unlockAmountMeta amount = Metadata $ TM.fromList [(unlockAmountMetaKey, amount)]
 
   AmuletRegistryV2.tapFaucet registry alice 30000.0
 
   aliceLock <- expectSuccess $ ops.governanceLock env alice 30000.0 someFaKind emptyMetadata
+
+  vestingStartTime <- (`addRelTime` hours 1) <$> getTime
+  let unlockAmountMeta amount = iso8601TimeToMeta vestingStartTimeMetaKey vestingStartTime $ Metadata $ TM.fromList [(unlockAmountMetaKey, amount)]
 
   -- The unlock amount must be a valid decimal
   actionMustFail (expectMessageContains $ "Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: 'not-a-decimal'") $
@@ -272,9 +277,11 @@ testGovernanceLockCompatUnlockAmountCappedScenario ops = do
 
   aliceLock <- expectSuccess $ ops.governanceLock env alice 30000.0 someFaKind emptyMetadata
 
+  vestingStartTime <- (`addRelTime` hours 1) <$> getTime
+
   -- Request to unlock 40k of the 30k, which starts vesting all 30k
   aliceVesting <- expectSuccess $ ops.governanceUnlock env aliceLock alice $
-    Metadata $ TM.fromList [(unlockAmountMetaKey, "40000.0")]
+    iso8601TimeToMeta vestingStartTimeMetaKey vestingStartTime $ Metadata $ TM.fromList [(unlockAmountMetaKey, "40000.0")]
 
   Some vestingLock <- queryContractId alice aliceVesting
   vestingLock.vestingAmount === 30000.0
@@ -573,8 +580,11 @@ testGovernanceLockCompatProvisionalFullWithdrawScenario ops = do
 
   aliceLock <- expectSuccess $ ops.governanceLock env alice 20000.0 provisionalSpec emptyMetadata
 
+  vestingStartTime <- (`addRelTime` hours 1) <$> getTime
+
   -- Full withdraw: no vesting lock
-  None <- expectSuccess $ ops.optGovernanceUnlock env aliceLock alice (Metadata $ TM.fromList [(unlockAmountMetaKey, "20000.0")])
+  None <- expectSuccess $ ops.optGovernanceUnlock env aliceLock alice
+    (iso8601TimeToMeta vestingStartTimeMetaKey vestingStartTime $ Metadata $ TM.fromList [(unlockAmountMetaKey, "20000.0")])
 
   -- The full 20k is liquid immediately
   WalletClientV2.checkHoldingWithAmountExists alice env.instrId 20000.0
@@ -910,6 +920,9 @@ tsv2Operations = CompatGovernanceLockOperations with
     governanceUnlock env cid actor meta = ((<$>) fromSome) <$> optGovernanceUnlock env cid actor meta
     pendingGovernanceUnlock = withdrawAllocationV2
     vestingWithdraw = withdrawAllocationV2
+
+iso8601TimeToMeta : Text -> Time -> Metadata -> Metadata
+iso8601TimeToMeta key t meta = Metadata $ TM.insert key (show t) meta.values
 
 -- | The TSv1 memo of a lock request. A wallet sets it as the transfer reason.
 tsv1RequestMemo : Text -> GovernanceLockKind -> Text

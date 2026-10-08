@@ -50,10 +50,8 @@ class ExpireVestingLockTimeBasedIntegrationTest
   // Sim-time budget, all of it inside one 10-minute round tick
   // (`SpliceUtil.defaultInitialTickDuration`):
   //   t0            fixture built
-  //   t0 + 1 min    unlockAt (`TransferInstruction_Withdraw` picks the first
-  //                 `requestedAt + n * granularity` point strictly after the
-  //                 ledger time; granularity = unlockDelay, see the config below)
-  //   t0 + 6 min    endTime  (= unlockAt + vestingDuration, taken from the config below)
+  //   t0 + 1 min    vestingStartTime
+  //   t0 + 6 min    endTime  (= vestingStartTime + vestingDuration, taken from the config below)
   //   t0 + 7 min    after advanceTime (strictly past endTime)
   // Advances spanning many round ticks make the round automation work through a backlog that
   // everything afterwards then races; see canton-network/splice#7223.
@@ -101,8 +99,8 @@ class ExpireVestingLockTimeBasedIntegrationTest
     val owner = RichPartyId.local(sv1Party)
     val participant = sv1Backend.participantClientWithAdminToken
 
-    val unlockAt = getLedgerTime.plus(unlockDelay)
-    val endTime = unlockAt.toInstant.plus(vestingDuration)
+    val vestingStartTime = getLedgerTime.plus(unlockDelay)
+    val endTime = vestingStartTime.toInstant.plus(vestingDuration)
 
     // `createGovernanceLockViaTokenStandard` feeds all of the owner's unlocked
     // holdings into the `TransferFactory_Transfer` choice. Thus, the tap has to
@@ -132,7 +130,7 @@ class ExpireVestingLockTimeBasedIntegrationTest
             sv1Name,
             governanceLock,
             unlockAmount = lockAmount,
-            unlockAt = Some(unlockAt),
+            vestingStartTime = vestingStartTime,
           )
         }
       },
