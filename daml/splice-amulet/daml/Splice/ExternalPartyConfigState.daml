@@ -31,6 +31,7 @@ template ExternalPartyConfigState
     rewardCalculationVersion : Optional RewardVersion -- ^ The reward calculation version to use for transactions relying on this config state.
     amuletSwitchOverTimes : Optional (TextMap Time) -- ^ Timepoints for synchronized switch-overs of amulet functionality both on and off-ledger.
     governanceLockConfig : Optional GovernanceLockConfig -- ^ Governance lock configuration.
+    svLockingDeactivatesAt : Optional Time -- ^ Time at which the SV Lock-Up Requirement becomes deactivated.
   where
     signatory dso
 
