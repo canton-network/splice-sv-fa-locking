@@ -42,7 +42,7 @@ class ExpireVestingLockTimeBasedIntegrationTest
     with WalletTestUtil
     with TimeTestUtil
     with TriggerTestUtil
-    with TokenStandardTest {
+    with GovernanceLockTest {
 
   private val batchSize = 2
   private val numLocks = 3
@@ -64,6 +64,7 @@ class ExpireVestingLockTimeBasedIntegrationTest
   // Same as `defaultGovernanceLockMinimumLockAmount` in Daml.
   private val governanceLockMinimumLockAmount = BigDecimal(10000.0)
 
+  private val lockKind = SuperValidatorLock
   private val lockAmount = governanceLockMinimumLockAmount
   private val tapAmount = numLocks * lockAmount
 
@@ -120,15 +121,17 @@ class ExpireVestingLockTimeBasedIntegrationTest
           val governanceLock = createGovernanceLockViaTokenStandard(
             participant,
             owner,
-            superValidatorLockMagicParty,
+            lockKind,
             lockSubject = sv1Name,
             amount = lockAmount,
           )
           unlockGovernanceLockViaTokenStandard(
             participant,
             owner,
+            lockKind,
+            sv1Name,
             governanceLock,
-            meta = Map(governanceLockUnlockAtMetaKey -> unlockAt.toMicros.toString),
+            unlockAt = Some(unlockAt),
           )
         }
       },

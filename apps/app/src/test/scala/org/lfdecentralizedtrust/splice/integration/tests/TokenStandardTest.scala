@@ -56,6 +56,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       expectedTimeBounds: Option[(CantonTimestamp, CantonTimestamp)] = None,
       advanceTimeBeforeExecute: Option[Duration] = None,
       description: Option[String] = None,
+      wait: Boolean = true,
   )(implicit
       env: SpliceTestConsoleEnvironment
   ) = {
@@ -89,9 +90,10 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       // We thus wait here, as otherwise multiple transfer commands will use the same input holdings.
       "Wait until we see at least one of the input holdings being consumed",
       trackingHoldingCid => {
-        participant.ledger_api.event_query
-          .by_contract_id(trackingHoldingCid.contractId, requestingParties = Seq(sender.partyId))
-          .archived should not be empty withClue "archived holding"
+        if (wait)
+          participant.ledger_api.event_query
+            .by_contract_id(trackingHoldingCid.contractId, requestingParties = Seq(sender.partyId))
+            .archived should not be empty withClue "archived holding"
       },
     )
   }
@@ -212,84 +214,6 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       (new TransferInstruction.ContractId(instr.contractId), instrView)
     })
   }
-
-  private val governanceLockCipPrefix = "cip-127"
-
-  private def makeLockMagicParty(kind: String): PartyId =
-    PartyId.tryFromProtoPrimitive(
-      s"${governanceLockCipPrefix}_$kind::1220000000000000000000000000000000000000000000000000000000000000abcd"
-    )
-
-  val superValidatorLockMagicParty = makeLockMagicParty("sv-lock")
-  val featuredAppLockMagicParty = makeLockMagicParty("fa-lock")
-  val provisionalFeaturedAppLockMagicParty = makeLockMagicParty("provisional-fa-lock")
-
-  def makeGovernanceLockMemo(lockSubject: String): String =
-    s"$governanceLockCipPrefix/memo:lock-subject=$lockSubject"
-
-  val governanceLockUnlockAtMetaKey = s"$governanceLockCipPrefix/unlock-at"
-  val vestingLockWithdrawAtMetaKey = s"$governanceLockCipPrefix/withdraw-at"
-
-  def createGovernanceLockViaTokenStandard(
-      participant: ParticipantClientReference,
-      owner: RichPartyId,
-      lockParty: PartyId,
-      lockSubject: String,
-      amount: BigDecimal,
-  )(implicit
-      env: SpliceTestConsoleEnvironment
-  ): transferinstructionv1.TransferInstruction.ContractId = {
-    // `owner` may already have pending instructions to `lockParty` (earlier
-    // `GovernanceLock`s or `VestingLock`s), so only look at the new one.
-    val existingInstructionCids =
-      listTransferInstructions(participant, owner.partyId).map(_._1).toSet
-    executeTransferViaTokenStandard(
-      participant,
-      owner,
-      lockParty,
-      amount,
-      transferinstruction.v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer,
-      description = Some(makeGovernanceLockMemo(lockSubject)),
-    )
-    listTransferInstructions(participant, owner.partyId).collect {
-      case (cid, view)
-          if view.transfer.receiver == lockParty.toProtoPrimitive &&
-            !existingInstructionCids.contains(cid) =>
-        cid
-    }.loneElement
-  }
-
-  /** Fully unlocks a governance lock by withdrawing its transfer instruction.
-    */
-  def unlockGovernanceLockViaTokenStandard(
-      participant: ParticipantClientReference,
-      owner: RichPartyId,
-      governanceLockCid: transferinstructionv1.TransferInstruction.ContractId,
-      meta: Map[String, String] = Map.empty,
-  )(implicit env: SpliceTestConsoleEnvironment): Option[
-    (
-        transferinstructionv1.TransferInstruction.ContractId,
-        transferinstructionv1.TransferInstructionView,
-    )
-  ] =
-    actAndCheck(
-      "the owner unlocks the GovernanceLock",
-      withdrawTransferInstruction(participant, owner, governanceLockCid, meta = meta),
-    )(
-      "a VestingLock is not the pending TransferInstruction",
-      _ =>
-        listTransferInstructions(participant, owner.partyId).collect {
-          case t @ (_, view)
-              if view.originalInstructionCid.toScala.exists(
-                _.contractId == governanceLockCid.contractId
-              ) =>
-            t
-        } match {
-          case Seq() => None
-          case Seq(vestingLockCid) => Some(vestingLockCid)
-          case many => fail(s"Expected at most one VestingLock for $governanceLockCid, got $many")
-        },
-    )._2
 
   def acceptTransferInstruction(
       participant: ParticipantClientReference,
