@@ -171,7 +171,7 @@ testSubstitutionMeta_lockedTargetDefaults = do
   let kind = GLK_SuperValidatorRightsOwner "TestSV"
       meta = Metadata $ TextMap.fromList
         [ (lockSubjectMetaKey, "TestSV")
-        , (lockOwnerMetaKey, partyToText alice)
+        , (targetLockOwnerMetaKey, partyToText alice)
         ]
   parsed <- expectParsed $ parseSubstitutionTSv2 (admin, governanceLockTagToText GLT_SuperValidator, meta, bob)
   parsed === AS_Governance with
@@ -244,14 +244,14 @@ testSubstitutionMeta_errors = do
   bob <- allocateParty "bob"
   let base = TextMap.fromList
         [ (lockSubjectMetaKey, "TestSV")
-        , (lockOwnerMetaKey, partyToText alice)
+        , (targetLockOwnerMetaKey, partyToText alice)
         ]
       parse values = parseSubstitutionTSv2 (admin, governanceLockTagToText GLT_SuperValidator, Metadata values, bob)
 
   expectParseError lockStatusMetaKey $
     parse $ TextMap.insert lockStatusMetaKey "unlocking" base
-  expectParseError lockOwnerMetaKey $
-    parse $ TextMap.insert lockOwnerMetaKey "bad$party" base
+  expectParseError targetLockOwnerMetaKey $
+    parse $ TextMap.insert targetLockOwnerMetaKey "bad$party" base
   expectParseError lockSubjectMetaKey $
     parse $ TextMap.delete lockSubjectMetaKey base
   expectParseError unlockControllersMetaKey $
@@ -260,9 +260,9 @@ testSubstitutionMeta_errors = do
   expectParseError targetLockSubstitutionControllersMetaKey $
     parse $ TextMap.insert targetLockSubstitutionControllersMetaKey (partyToText alice) $
       TextMap.insert lockStatusMetaKey (lockStateToText LS_Vesting) base
-  expectParseError targetLockVestingDurationMetaKey $
+  expectParseError lockVestingDurationMetaKey $
     parse $ TextMap.insert lockStatusMetaKey (lockStateToText LS_Vesting) base
-  expectParseError targetLockVestingEndTimeMetaKey $
+  expectParseError lockVestingEndTimeMetaKey $
     parse $ TextMap.insert lockStatusMetaKey (lockStateToText LS_Vesting) base
 
 -- FIXME: test proposal withdrawal
@@ -578,7 +578,7 @@ testSubstitutionV2_partialCompatTarget = do
   errorIfLeft =<< governanceLockV1 env alice 50000.0 kind emptyMetadata
 
   result <- expectSuccess $ createSubstitutionV2 env bob 20000.0 kind $
-    Metadata $ TextMap.fromList [(lockOwnerMetaKey, partyToText alice)]
+    Metadata $ TextMap.fromList [(targetLockOwnerMetaKey, partyToText alice)]
   TextMap.lookup instrId.id result.authorizerChangeCids === Some []
   substitutionCid <- expectInstructionPending result
   [(targetCid, _)] <- query @GovernanceLock alice
@@ -602,7 +602,7 @@ testSubstitutionV2_full = do
   targetCid <- governanceLockRawChoice registry alice 50000.0 kind
 
   substitutionCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 50000.0 kind $
-    Metadata $ TextMap.fromList [(lockOwnerMetaKey, partyToText alice)])
+    Metadata $ TextMap.fromList [(targetLockOwnerMetaKey, partyToText alice)])
   options <- targetDisclosures alice targetCid
   expectInstructionCompleted =<< expectSuccess (acceptSubstitutionV2 env options substitutionCid alice)
 
@@ -632,7 +632,7 @@ testSubstitutionV2_customNewLock = do
         vestingControllers = ControllerSpecification [[charlie]]
   substitutionCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 20000.0 kind $
     Metadata $ TextMap.fromList
-      [ (lockOwnerMetaKey, partyToText alice)
+      [ (targetLockOwnerMetaKey, partyToText alice)
       , (unlockControllersMetaKey, encodeControllerSpecification newSpec.unlockControllers)
       , (substitutionControllersMetaKey, encodeControllerSpecification newSpec.substitutionControllers)
       , (vestingControllersMetaKey, encodeControllerSpecification newSpec.vestingControllers)
@@ -656,7 +656,7 @@ testSubstitutionV2_withdraw = do
   governanceLockRawChoice registry alice 50000.0 kind
 
   substitutionCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 20000.0 kind $
-    Metadata $ TextMap.fromList [(lockOwnerMetaKey, partyToText alice)])
+    Metadata $ TextMap.fromList [(targetLockOwnerMetaKey, partyToText alice)])
   WalletClientV2.checkUnlockedBalance bob instrId 0.0
   expectInstructionFailed env =<< expectSuccess (withdrawSubstitutionV2 env substitutionCid bob)
   WalletClientV2.checkUnlockedBalance bob instrId 20000.0
@@ -716,7 +716,7 @@ testSubstitutionV2_twoStepApproval = do
 
   firstCid <- expectInstructionPending =<< expectSuccess (createSubstitutionV2 env bob 20000.0 kind $
     Metadata $ TextMap.fromList
-      [ (lockOwnerMetaKey, partyToText alice)
+      [ (targetLockOwnerMetaKey, partyToText alice)
       , (targetLockSubstitutionControllersMetaKey, encodeControllerSpecification targetSubstitutionControllers)
       ])
   Some firstView <- queryInterfaceContractId charlie firstCid
@@ -737,7 +737,7 @@ testSubstitutionV2_failures = do
   env@TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
       kind = GLK_SuperValidatorRightsOwner "TestSV"
-      targetOwnerMeta = [(lockOwnerMetaKey, partyToText alice)]
+      targetOwnerMeta = [(targetLockOwnerMetaKey, partyToText alice)]
   AmuletRegistryV2.tapFaucet registry alice 19000.0
   AmuletRegistryV2.tapFaucet registry bob 60000.0
   targetCid <- governanceLockRawChoice registry alice 20000.0 kind

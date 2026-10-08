@@ -1457,9 +1457,6 @@ withdrawAtMetaKey = cipMetaPrefix <> "withdraw-at"
 -- | Metadata key of a `GovernanceLock` kind.
 lockKindMetaKey = cipMetaPrefix <> "lock-kind"
 
--- | Metadata key that specifies the owner of a lock.
-lockOwnerMetaKey = cipMetaPrefix <> "lock-owner"
-
 -- | Metadata key of a `GovernanceLock` subject.
 lockSubjectMetaKey = cipMetaPrefix <> "lock-subject"
 
@@ -1493,15 +1490,13 @@ vestingControllersMetaKey = cipMetaPrefix <> "vesting-controllers"
 -- | Prefix of the metadata keys used to specify attributes of a target lock.
 targetLockMetaPrefix = cipMetaPrefix <> "target-"
 
+-- | Metadata key that specifies the owner of a target lock.
+targetLockOwnerMetaKey = targetLockMetaPrefix <> "lock-owner"
+
 -- | Metadata keys that set the controllers of a target lock.
 targetLockUnlockControllersMetaKey = reprefixMetaKey targetLockMetaPrefix unlockControllersMetaKey
 targetLockSubstitutionControllersMetaKey = reprefixMetaKey targetLockMetaPrefix substitutionControllersMetaKey
 targetLockVestingControllersMetaKey = reprefixMetaKey targetLockMetaPrefix vestingControllersMetaKey
-
--- | Metadata keys that specify the vesting period and end time of a vesting target lock.
--- The vesting period is encoded as microseconds; the end time as microseconds since the epoch.
-targetLockVestingDurationMetaKey = reprefixMetaKey targetLockMetaPrefix lockVestingDurationMetaKey
-targetLockVestingEndTimeMetaKey = reprefixMetaKey targetLockMetaPrefix lockVestingEndTimeMetaKey
 
 getOptionalMetadata : Text -> Metadata -> Optional Text
 getOptionalMetadata key meta = TextMap.lookup key meta.values
@@ -1598,7 +1593,7 @@ encodeVestingLockCompatMemo lock =
 
 encodeGovernanceLockTargetMetadata : GovernanceLockKey -> Metadata
 encodeGovernanceLockTargetMetadata (GovernanceLockKey _dso owner specification) = Metadata $ TextMap.fromList $
-  [ (lockOwnerMetaKey, partyToText owner)
+  [ (targetLockOwnerMetaKey, partyToText owner)
   , (lockStatusMetaKey, lockStateToText LS_Locked)
   , (targetLockUnlockControllersMetaKey, encodeControllerSpecification specification.unlockControllers)
   , (targetLockSubstitutionControllersMetaKey, encodeControllerSpecification specification.substitutionControllers)
@@ -1607,11 +1602,11 @@ encodeGovernanceLockTargetMetadata (GovernanceLockKey _dso owner specification) 
 
 encodeVestingLockTargetMetadata : VestingLockKey -> Metadata
 encodeVestingLockTargetMetadata (VestingLockKey _dso owner specification vestingPeriod endTime) = Metadata $ TextMap.fromList $
-  [ (lockOwnerMetaKey, partyToText owner)
+  [ (targetLockOwnerMetaKey, partyToText owner)
   , (lockStatusMetaKey, lockStateToText LS_Vesting)
   , (targetLockVestingControllersMetaKey, encodeControllerSpecification specification.vestingControllers)
-  , (targetLockVestingDurationMetaKey, encodeRelTime vestingPeriod)
-  , (targetLockVestingEndTimeMetaKey, encodeTime endTime)
+  , (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
+  , (lockVestingEndTimeMetaKey, encodeTime endTime)
   ]
 
 -- TSv1 support
@@ -2145,7 +2140,7 @@ lockStateParser = optionalMetadataParser lockStatusMetaKey >>= \case
 glr_substituteLock_parser : GovernanceLockTag -> Party -> Party -> Parser Metadata GovernanceLockRequest
 glr_substituteLock_parser tag admin proposer = do
   targetState <- lockStateParser
-  targetOwner <- partyFromMetadataParser lockOwnerMetaKey
+  targetOwner <- partyFromMetadataParser targetLockOwnerMetaKey
   GLR_SubstituteLock <$> case targetState of
     LS_Locked -> do
       kind <- governanceLockKindParser' tag
@@ -2172,8 +2167,8 @@ glr_substituteLock_parser tag admin proposer = do
       kind <- governanceLockKindParser' tag
       newVesting <- vestingControllersParser proposer
       targetVesting <- controllersParser targetLockVestingControllersMetaKey targetOwner
-      vestingPeriod <- relTimeMetadataParser targetLockVestingDurationMetaKey
-      endTime <- timeMetadataParser targetLockVestingEndTimeMetaKey
+      vestingPeriod <- vestingDurationParser
+      endTime <- vestingEndTimeParser
       pure
         $ AS_Vesting with
           vestingLockKey = VestingLockKey with

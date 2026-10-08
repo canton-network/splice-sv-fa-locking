@@ -436,7 +436,7 @@ test_governanceLockRequestTSv1Parser = do
     ]
     $ run alice (request "withdraw-vested-funds" :: faLock)
   -- Substituting a lock also needs the lock manager as the receiver; all errors are reported
-  expectRequestErrors [invalidReceiverError alice, missingMetadataMessage lockOwnerMetaKey] $
+  expectRequestErrors [invalidReceiverError alice, missingMetadataMessage targetLockOwnerMetaKey] $
     run alice (request "substitute-receiver-lock-on-accept" :: faLock)
 
   -- All invalid fields are reported
@@ -477,7 +477,7 @@ substitutionRequest = (requestMetaKey, governanceLockRequestSubstituteLock)
 -- The second argument of `substitutionTSv2Parser` is the `settlement.id` of the call, which names the lock kind:
 -- `fa-lock`, `provisional-fa-lock` or `sv-lock`.
 -- The `cip-127/request` key selects the substitution.
--- `cip-127/lock-owner` and `cip-127/lock-status` specify the owner and the state of the target lock.
+-- `cip-127/target-lock-owner` and `cip-127/lock-status` specify the owner and the state of the target lock.
 -- Other keys without a `target-` prefix specify the new lock; keys with that prefix specify the target lock.
 test_substitutionTSv2Parser_examples : Script ()
 test_substitutionTSv2Parser_examples = do
@@ -495,7 +495,7 @@ test_substitutionTSv2Parser_examples = do
     $ run "sv-lock"
         [ ("cip-127/request", "substitute-receiver-lock-on-accept")
         , ("cip-127/lock-subject", "someSv")
-        , ("cip-127/lock-owner", "alice")
+        , ("cip-127/target-lock-owner", "alice")
         ]
 
   -- Staking app example: alice locks funds for the featured app "provider", and a staking app (charlie) can
@@ -524,7 +524,7 @@ test_substitutionTSv2Parser_examples = do
         , ("cip-127/substitution-controllers", "charlie,bob;charlie,provider")
         , ("cip-127/vesting-controllers", "charlie;bob")
         -- the target lock
-        , ("cip-127/lock-owner", "alice")
+        , ("cip-127/target-lock-owner", "alice")
         , ("cip-127/target-unlock-controllers", "charlie,provider")
         , ("cip-127/target-substitution-controllers", "charlie,provider")
         , ("cip-127/target-vesting-controllers", "charlie;alice")
@@ -552,11 +552,11 @@ test_substitutionTSv2Parser_examples = do
         , ("cip-127/lock-subject", "someSv")
         , ("cip-127/vesting-controllers", "charlie,bob")
         -- the target lock
-        , ("cip-127/lock-owner", "alice")
+        , ("cip-127/target-lock-owner", "alice")
         , ("cip-127/lock-status", "vesting")
         , ("cip-127/target-vesting-controllers", "charlie;alice")
-        , ("cip-127/target-lock-vesting-duration-micros", "5184000000000")
-        , ("cip-127/target-lock-vesting-end-time-micros", "1767225600000000")
+        , ("cip-127/lock-vesting-duration-micros", "5184000000000")
+        , ("cip-127/lock-vesting-end-time-micros", "1767225600000000")
         ]
 
 test_substitutionTSv2Parser_errors : Script ()
@@ -565,17 +565,17 @@ test_substitutionTSv2Parser_errors = do
         runParser (substitutionTSv2Parser testAdmin (governanceLockTagToText GLT_SuperValidator) bob)
           (mkMeta $ substitutionRequest :: entries)
       subject = (lockSubjectMetaKey, "someSv")
-      targetOwner = (lockOwnerMetaKey, "alice")
+      targetOwner = (targetLockOwnerMetaKey, "alice")
       vestingTarget =
         [ (lockStatusMetaKey, lockStateToText LS_Vesting)
-        , (targetLockVestingDurationMetaKey, "5184000000000")
-        , (targetLockVestingEndTimeMetaKey, "1767225600000000")
+        , (lockVestingDurationMetaKey, "5184000000000")
+        , (lockVestingEndTimeMetaKey, "1767225600000000")
         ]
 
   -- The target owner is required and must be a party
-  expectErrors ["Missing metadata field '" <> lockOwnerMetaKey <> "'"] $ run [subject]
-  expectErrors [invalidPartyError lockOwnerMetaKey invalidParty] $
-    run [subject, (lockOwnerMetaKey, invalidParty)]
+  expectErrors ["Missing metadata field '" <> targetLockOwnerMetaKey <> "'"] $ run [subject]
+  expectErrors [invalidPartyError targetLockOwnerMetaKey invalidParty] $
+    run [subject, (targetLockOwnerMetaKey, invalidParty)]
 
   -- The `settlement.id` must name a lock kind; the TSv1 receiver party format is not accepted
   expectErrors ["Invalid lock kind: 'cip-127_sv-lock'"] $
@@ -584,9 +584,9 @@ test_substitutionTSv2Parser_errors = do
   -- The target state must be `locked` or `vesting`; an invalid state and an invalid owner are both reported
   expectErrors
     [ "Invalid value in " <> lockStatusMetaKey <> " metadata field: 'unlocking'"
-    , invalidPartyError lockOwnerMetaKey invalidParty
+    , invalidPartyError targetLockOwnerMetaKey invalidParty
     ]
-    $ run [subject, (lockStatusMetaKey, "unlocking"), (lockOwnerMetaKey, invalidParty)]
+    $ run [subject, (lockStatusMetaKey, "unlocking"), (targetLockOwnerMetaKey, invalidParty)]
 
   -- The new lock needs a lock subject
   expectErrors ["Missing metadata field '" <> lockSubjectMetaKey <> "'"] $ run [targetOwner]
@@ -612,8 +612,8 @@ test_substitutionTSv2Parser_errors = do
 
   -- A vesting target needs a vesting period and end time
   expectErrors
-    [ "Missing metadata field '" <> targetLockVestingDurationMetaKey <> "'"
-    , "Missing metadata field '" <> targetLockVestingEndTimeMetaKey <> "'"
+    [ "Missing metadata field '" <> lockVestingDurationMetaKey <> "'"
+    , "Missing metadata field '" <> lockVestingEndTimeMetaKey <> "'"
     ]
     $ run [subject, targetOwner, (lockStatusMetaKey, lockStateToText LS_Vesting)]
 
