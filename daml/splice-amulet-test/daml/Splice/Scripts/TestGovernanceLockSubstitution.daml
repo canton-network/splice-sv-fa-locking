@@ -44,21 +44,11 @@ expectParseError needle (Errors es) =
 -- | Proposes a substitution through `ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution`,
 -- funded with all unlocked holdings of the proposer.
 createSubstitutionRaw
-  :  TestEnv -> Party -> AnySubstitution -> Decimal -> Time
+  :  TestEnv -> Party -> AnySubstitution -> Decimal
   -> Script (Either SubmitError ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult)
-createSubstitutionRaw env proposer substitution amount requestedAt = do
-  (rulesCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures env.registriesEnv.amuletV2
-  inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount proposer) proposer env.instrId
-  submitWithTransferContext env.registriesEnv.amuletV2 (actAs [proposer] <> discloseMany' disc) \context ->
-    exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
-      args = CreateSubstitutionArgs with
-        dso = env.instrId.admin
-        substitution
-        owner = proposer
-        amount
-        inputHoldingCids = map downcast inputHoldingCids
-        extraArgs = emptyExtraArgs with context
-        requestedAt
+createSubstitutionRaw env proposer substitution amount = do
+  now <- getTime
+  proposeSubstitutionRawChoice' env.registriesEnv.amuletV2 proposer substitution amount now
 
 -- | Discloses a target lock and its locked amulet, which controllers other than the owner cannot see.
 targetDisclosures
@@ -404,12 +394,11 @@ testSubstitutionRaw_twoStepApprovalWithoutOwner = do
         substitutionControllers = ControllerSpecification [[charlie, dave]]
   targetCid <- governanceLockWithSpecRawChoice registry alice 50000.0 targetSpec
 
-  now <- getTime
   expectSuccess $ createSubstitutionRaw env bob
     (AS_Governance with
       governanceLockKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
       governanceSpecification = ownerControlledSpecification bob kind emptyMetadata)
-    20000.0 now
+    20000.0
   [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob
 
   GovernanceLockSubstitution_AcceptResult_Pending pendingCid <-
@@ -427,7 +416,7 @@ testSubstitutionRaw_twoStepApprovalWithoutOwner = do
 -- the future would let the proposer choose how long the DSO has to wait to withdraw it.
 testSubstitutionRaw_futureRequestedAt : Script ()
 testSubstitutionRaw_futureRequestedAt = do
-  env@TestEnv{..} <- setupTest
+  TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
       kind = GLK_SuperValidatorRightsOwner "TestSV"
   AmuletRegistryV2.tapFaucet registry alice 49000.0
@@ -437,7 +426,7 @@ testSubstitutionRaw_futureRequestedAt = do
   _ <- governanceLockWithSpecRawChoice registry alice 50000.0 targetSpec
 
   requestedAt <- (`addRelTime` days 1) <$> getTime
-  expectFailureContaining "requestedAt" =<< createSubstitutionRaw env bob
+  expectFailureContaining "requestedAt" =<< proposeSubstitutionRawChoice' registry bob
     (AS_Governance with
       governanceLockKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
       governanceSpecification = ownerControlledSpecification bob kind emptyMetadata)
@@ -458,7 +447,6 @@ testSubstitutionRaw_vestingWithoutOwner = do
   (Some vestingCid, None, None) <- governanceUnlockRawChoice registry lockCid None unlockAt [alice]
   Some vestingLock <- queryContractId alice vestingCid
 
-  now <- getTime
   expectSuccess $ createSubstitutionRaw env bob
     (AS_Vesting with
       vestingLockKey = VestingLockKey with
@@ -468,7 +456,7 @@ testSubstitutionRaw_vestingWithoutOwner = do
         vestingPeriod = vestingLock.vestingPeriod
         endTime = vestingLock.endTime
       vestingSpecification = VestingLockSpecification with kind; vestingControllers = ControllerSpecification [[bob]]; meta = emptyMetadata)
-    20000.0 now
+    20000.0
   [(substitutionCid, _)] <- query @VestingLockSubstitution bob
 
   disclosures <- targetDisclosures alice vestingCid
@@ -498,10 +486,9 @@ setupRawSubstitution = do
   targetCid <- governanceLockRawChoice registry alice 50000.0 kind
   let targetKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = ownerControlledSpecification alice kind emptyMetadata
       newSpec = ownerControlledSpecification bob kind appMeta
-  now <- getTime
   result <- expectSuccess $ createSubstitutionRaw env bob
     (AS_Governance with governanceLockKey = targetKey; governanceSpecification = newSpec)
-    20000.0 now
+    20000.0
   pure (env, targetCid, targetKey, newSpec, result.proposal)
 
 appMeta : Metadata

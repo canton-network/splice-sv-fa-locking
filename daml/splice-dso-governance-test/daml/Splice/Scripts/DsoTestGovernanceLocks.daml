@@ -320,6 +320,7 @@ setupGovernanceSubstitution = do
   bob <- setupUser app "bob" app.dso
   _ <- tap app bob testVestingAmount
 
+  now <- getTime
   _ <- proposeSubstitutionRawChoice registry bob.primaryParty
     (AS_Governance with
       governanceLockKey = GovernanceLockKey with
@@ -327,7 +328,7 @@ setupGovernanceSubstitution = do
         owner = alice.primaryParty
         specification = ownerControlledSpecification alice.primaryParty testLockKind emptyMetadata
       governanceSpecification = ownerControlledSpecification bob.primaryParty testLockKind emptyMetadata)
-    testVestingAmount
+    testVestingAmount now
   [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob.primaryParty
   pure (SubstitutionEnv with .., substitutionCid)
 
@@ -342,6 +343,7 @@ setupVestingSubstitution = do
     governanceUnlockRawChoice registry governanceLockCid None unlockAt [alice.primaryParty]
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
 
+  now <- getTime
   _ <- proposeSubstitutionRawChoice registry bob.primaryParty
     (AS_Vesting with
       vestingLockKey = VestingLockKey with
@@ -354,7 +356,7 @@ setupVestingSubstitution = do
         kind = testLockKind
         vestingControllers = ControllerSpecification [[bob.primaryParty]]
         meta = emptyMetadata)
-    testVestingAmount
+    testVestingAmount now
   [(substitutionCid, _)] <- query @VestingLockSubstitution bob.primaryParty
   pure (SubstitutionEnv with .., substitutionCid)
 
