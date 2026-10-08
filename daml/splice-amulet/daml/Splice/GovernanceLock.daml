@@ -446,25 +446,7 @@ template VestingLock
           meta = emptyMetadata
       transferInstruction_acceptImpl _ _ = assertFail "Transfers representing governance locks cannot be accepted"
       transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks cannot be rejected"
-      transferInstruction_withdrawImpl self arg = do
-        let V1.TransferInstruction_Withdraw {..} = arg
-        withdrawResult <- vestingLock_tokenStandard_withdrawImpl (coerceContractId self) this [owner] extraArgs
-        pure $ case withdrawResult of
-          VestingLock_WithdrawResult_Pending pendingLock -> V1.TransferInstructionResult with
-            output = V1.TransferInstructionResult_Pending with
-              transferInstructionCid = toInterfaceContractId pendingLock
-            senderChangeCids = []
-            meta = emptyMetadata
-          VestingLock_WithdrawResult_Completed (Some vestingLock) vested -> V1.TransferInstructionResult with
-            output = V1.TransferInstructionResult_Pending with
-              transferInstructionCid = toInterfaceContractId vestingLock
-            senderChangeCids = [vested]
-            meta = emptyMetadata
-          VestingLock_WithdrawResult_Completed None vested -> V1.TransferInstructionResult with
-            output = V1.TransferInstructionResult_Completed with
-              receiverHoldingCids = []
-            senderChangeCids = [vested]
-            meta = emptyMetadata
+      transferInstruction_withdrawImpl _ _ = assertFail "Transfers representing governance locks cannot be withdrawn"
       transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks cannot be updated"
 
     interface instance V2.Allocation for VestingLock where
@@ -495,7 +477,9 @@ template VestingLock
         -- `Allocation_Withdraw` is nonconsuming so we need to archive here
         -- `vestingLock_withdrawImpl` creates a new `VestingLock` when necessary
         potentiallyUnsafeArchive self
-        withdrawResult <- vestingLock_tokenStandard_withdrawImpl (coerceContractId self) this actors extraArgs
+        (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext this.dso extraArgs.context
+        requestedAt <- assertParsed vestedUntilTimeParser extraArgs.meta
+        withdrawResult <- vestingLock_withdrawImpl (fromInterfaceContractId self) this requestedAt actors context
         let resultMeta = simpleHoldingTxMeta TxKind_Unlock (Some "withdraw vested amount") None
         pure $ case withdrawResult of
           VestingLock_WithdrawResult_Pending pendingLock -> V2.AllocationResult with
@@ -512,12 +496,6 @@ template VestingLock
       allocation_settleExtraObservers _ = observer this
       allocation_cancelExtraObservers _ = observer this
       allocation_withdrawExtraObservers _ = observer this
-
-vestingLock_tokenStandard_withdrawImpl : ContractId VestingLock -> VestingLock -> [Party] -> ExtraArgs -> Update VestingLock_WithdrawResult
-vestingLock_tokenStandard_withdrawImpl self this actors extraArgs = do
-  (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext this.dso extraArgs.context
-  requestedAt <- assertParsed vestedUntilTimeParser extraArgs.meta
-  vestingLock_withdrawImpl self this requestedAt actors context
 
 vestingLock_withdrawImpl : ContractId VestingLock -> VestingLock -> Time -> [Party] -> ExternalPartyTransferContext -> Update VestingLock_WithdrawResult
 vestingLock_withdrawImpl self this@(VestingLock {..}) requestedAt actors context
@@ -1682,12 +1660,14 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
   request <- parseGovernanceLockRequestTSv1 dso transfer.sender transfer.receiver transfer.meta
 
   case request of
-    GLR_CreateGovernanceLock{specification} ->
-      governanceLock_transferFactoryV1_lockImpl dso arg specification
-    GLR_UnlockGovernanceLock{specification, unlockAmount, vestingStartTime} ->
-      governanceLock_transferFactoryV1_unlockImpl dso arg specification unlockAmount vestingStartTime
-    GLR_TransferGovernanceLock{specification, receiver} ->
-      governanceLock_transferFactoryV1_transferLockImpl dso arg specification receiver
+    GLR_CreateGovernanceLock{governanceSpecification} ->
+      governanceLock_transferFactoryV1_lockImpl dso arg governanceSpecification
+    GLR_UnlockGovernanceLock{governanceSpecification, unlockAmount, vestingStartTime} ->
+      governanceLock_transferFactoryV1_unlockImpl dso arg governanceSpecification unlockAmount vestingStartTime
+    GLR_TransferGovernanceLock{governanceSpecification, receiver} ->
+      governanceLock_transferFactoryV1_transferLockImpl dso arg governanceSpecification receiver
+    GLR_WithdrawVestingLock{vestingSpecification, vestedUntilTime, vestingPeriod, vestingEndTime} ->
+      governanceLock_transferFactoryV1_withdrawImpl dso arg vestingSpecification vestedUntilTime vestingPeriod vestingEndTime
     GLR_SubstituteLock{substitution} ->
       governanceLock_transferFactoryV1_substituteImpl dso arg substitution
 
@@ -1751,6 +1731,41 @@ governanceLock_transferFactoryV1_transferLockImpl
 governanceLock_transferFactoryV1_transferLockImpl _dso V1.TransferFactory_Transfer{..} _specification _receiver = do
   error "unimplemented"
 
+governanceLock_transferFactoryV1_withdrawImpl
+  :  Party
+  -> V1.TransferFactory_Transfer
+  -> VestingLockSpecification
+  -> Time
+  -> RelTime
+  -> Time
+  -> Update V1.TransferInstructionResult
+governanceLock_transferFactoryV1_withdrawImpl dso V1.TransferFactory_Transfer{..} specification vestedUntilTime vestingPeriod endTime = do
+  (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+  (lockCid, lock) <- fetchByKey @VestingLock $ VestingLockKey with
+    dso
+    owner = transfer.sender
+    specification
+    vestingPeriod
+    endTime
+  potentiallyUnsafeArchive lockCid
+  result <- vestingLock_withdrawImpl lockCid lock vestedUntilTime [transfer.sender] context
+  pure $ case result of
+    VestingLock_WithdrawResult_Pending pendingLock -> V1.TransferInstructionResult with
+      output = V1.TransferInstructionResult_Pending with
+        transferInstructionCid = toInterfaceContractId pendingLock
+      senderChangeCids = []
+      meta = emptyMetadata
+    VestingLock_WithdrawResult_Completed (Some vestingLock) vested -> V1.TransferInstructionResult with
+      output = V1.TransferInstructionResult_Pending with
+        transferInstructionCid = toInterfaceContractId vestingLock
+      senderChangeCids = [vested]
+      meta = emptyMetadata
+    VestingLock_WithdrawResult_Completed None vested -> V1.TransferInstructionResult with
+      output = V1.TransferInstructionResult_Completed with
+        receiverHoldingCids = []
+      senderChangeCids = [vested]
+      meta = emptyMetadata
+
 governanceLock_transferFactoryV1_substituteImpl
   :  Party
   -> V1.TransferFactory_Transfer
@@ -1790,12 +1805,14 @@ governanceLock_allocationFactoryV2_allocateImpl dso arg@V2.AllocationFactory_All
   request <- parseGovernanceLockRequestTSv2 dso settlement.id owner allocation.meta
 
   case request of
-    GLR_CreateGovernanceLock{specification} ->
-      governanceLock_allocationFactoryV2_lockImpl dso owner arg specification
+    GLR_CreateGovernanceLock{governanceSpecification} ->
+      governanceLock_allocationFactoryV2_lockImpl dso owner arg governanceSpecification
     GLR_UnlockGovernanceLock{} ->
       assertFail tsv2UnlockRequestUnsupported
-    GLR_TransferGovernanceLock{specification, receiver} ->
-      governanceLock_allocationFactoryV2_transferImpl dso owner arg specification receiver
+    GLR_TransferGovernanceLock{governanceSpecification, receiver} ->
+      governanceLock_allocationFactoryV2_transferImpl dso owner arg governanceSpecification receiver
+    GLR_WithdrawVestingLock{} ->
+      assertFail tsv2WithdrawRequestUnsupported
     GLR_SubstituteLock{substitution} ->
       governanceLock_allocationFactoryV2_substituteImpl dso owner arg substitution
 
@@ -1879,14 +1896,19 @@ maxComparableTime = addRelTime maxTime $ microseconds (-1)
 
 data GovernanceLockRequest
   = GLR_CreateGovernanceLock with
-      specification : GovernanceLockSpecification
+      governanceSpecification : GovernanceLockSpecification
   | GLR_UnlockGovernanceLock with
-      specification : GovernanceLockSpecification
+      governanceSpecification : GovernanceLockSpecification
       unlockAmount : Decimal
       vestingStartTime : Time
   | GLR_TransferGovernanceLock with
-      specification : GovernanceLockSpecification
+      governanceSpecification : GovernanceLockSpecification
       receiver : Party
+  | GLR_WithdrawVestingLock with
+      vestingSpecification : VestingLockSpecification
+      vestedUntilTime : Time
+      vestingPeriod : RelTime
+      vestingEndTime : Time
   | GLR_SubstituteLock with
       substitution : AnySubstitution
   deriving (Show)
@@ -2073,16 +2095,25 @@ governanceLockSpecificationParser kindParser owner =
     substitutionControllersParser owner <*>
     vestingControllersParser owner
 
+vestingLockSpecificationParser : Parser Metadata GovernanceLockKind -> Party -> Parser Metadata VestingLockSpecification
+vestingLockSpecificationParser kindParser owner =
+  VestingLockSpecification <$>
+    kindParser <*>
+    vestingControllersParser owner
+
 governanceLockRequestCreateLock = "create-lock"
 governanceLockRequestUnlockAndStartVesting = "unlock-and-start-vesting"
 governanceLockRequestTransferLock = "transfer-lock"
+governanceLockRequestWithdrawVestedFunds = "withdraw-vested-funds"
 governanceLockRequestSubstituteLock = "substitute-receiver-lock-on-accept"
 
 glr_createGovernanceLock_parser : Parser Metadata GovernanceLockKind -> Party -> Parser Metadata GovernanceLockRequest
 glr_createGovernanceLock_parser kindParser owner =
   GLR_CreateGovernanceLock <$> governanceLockSpecificationParser kindParser owner
 
-tsv2UnlockRequestUnsupported = "Governance lock unlocks via the TSv2 interface must be performed through the Allocation_Withdraw choice"
+tsv2Unsupported op = op <> " via the TSv2 interface must be performed through the Allocation_Withdraw choice"
+tsv2UnlockRequestUnsupported = tsv2Unsupported "Governance lock unlocks"
+tsv2WithdrawRequestUnsupported = tsv2Unsupported "Vesting lock withdrawals"
 
 glr_unlockGovernanceLock_parser : Parser Metadata GovernanceLockKind -> Party -> Parser Metadata GovernanceLockRequest
 glr_unlockGovernanceLock_parser kindParser owner =
@@ -2096,6 +2127,14 @@ glr_transferGovernanceLock_parser kindParser owner =
   GLR_TransferGovernanceLock <$>
     governanceLockSpecificationParser kindParser owner <*>
     partyFromMetadataParser receiverMetaKey
+
+glr_withdrawVestingLock_parser : Parser Metadata GovernanceLockKind -> Party -> Parser Metadata GovernanceLockRequest
+glr_withdrawVestingLock_parser kindParser owner =
+  GLR_WithdrawVestingLock <$>
+    vestingLockSpecificationParser kindParser owner <*>
+    vestedUntilTimeParser <*>
+    vestingDurationParser <*>
+    vestingEndTimeParser
 
 lockStateParser : Parser Metadata LockState
 lockStateParser = optionalMetadataParser lockStatusMetaKey >>= \case
@@ -2146,20 +2185,13 @@ glr_substituteLock_parser tag admin proposer = do
           vestingSpecification = VestingLockSpecification kind newVesting
 
 governanceLockRequestTSv1Parser : Party -> Party -> Party -> Parser Metadata GovernanceLockRequest
-governanceLockRequestTSv1Parser admin sender receiver = requiredMetadataParser requestMetaKey >>= \case
-    r | r == governanceLockRequestCreateLock -> do
-        checkReceiverIsLockManager *>
-          glr_createGovernanceLock_parser governanceLockKindParser sender
-    r | r == governanceLockRequestUnlockAndStartVesting ->
-        checkReceiverIsLockManager *>
-          glr_unlockGovernanceLock_parser governanceLockKindParser sender
-    r | r == governanceLockRequestTransferLock ->
-        checkReceiverIsLockManager *>
-          glr_transferGovernanceLock_parser governanceLockKindParser sender
-    r | r == governanceLockRequestSubstituteLock -> do
-        checkReceiverIsLockManager *>
-          (governanceLockTagParser >>= \tag -> glr_substituteLock_parser tag admin sender)
-    r -> assertFail $ "Invalid request: '" <> r <> "'"
+governanceLockRequestTSv1Parser admin sender receiver = requiredMetadataParser requestMetaKey >>= (\tag -> checkReceiverIsLockManager *> case tag of
+    r | r == governanceLockRequestCreateLock -> do glr_createGovernanceLock_parser governanceLockKindParser sender
+    r | r == governanceLockRequestUnlockAndStartVesting -> glr_unlockGovernanceLock_parser governanceLockKindParser sender
+    r | r == governanceLockRequestTransferLock -> glr_transferGovernanceLock_parser governanceLockKindParser sender
+    r | r == governanceLockRequestWithdrawVestedFunds -> glr_withdrawVestingLock_parser governanceLockKindParser sender
+    r | r == governanceLockRequestSubstituteLock -> governanceLockTagParser >>= \tag -> glr_substituteLock_parser tag admin sender
+    r -> assertFail $ "Invalid request: '" <> r <> "'")
   where
     checkReceiverIsLockManager : Parser Metadata ()
     checkReceiverIsLockManager =
@@ -2180,6 +2212,7 @@ governanceLockRequestTSv2Parser admin id owner = do
     Some r | r == governanceLockRequestCreateLock -> createLock
     Some r | r == governanceLockRequestUnlockAndStartVesting -> assertFail tsv2UnlockRequestUnsupported
     Some r | r == governanceLockRequestTransferLock -> glr_transferGovernanceLock_parser kindParser owner
+    Some r | r == governanceLockRequestWithdrawVestedFunds -> assertFail tsv2WithdrawRequestUnsupported
     Some r | r == governanceLockRequestSubstituteLock -> glr_substituteLock_parser tag admin owner
     Some r -> assertFail $ "Invalid request: '" <> r <> "'"
 
@@ -2204,6 +2237,12 @@ vestingStartTimeParser = iso8601TimeMetadataParser vestingStartTimeMetaKey
 
 vestedUntilTimeParser : Parser Metadata Time
 vestedUntilTimeParser = iso8601TimeMetadataParser vestedUntilTimeMetaKey
+
+vestingDurationParser : Parser Metadata RelTime
+vestingDurationParser = relTimeMetadataParser lockVestingDurationMetaKey
+
+vestingEndTimeParser : Parser Metadata Time
+vestingEndTimeParser = timeMetadataParser lockVestingEndTimeMetaKey
 
 -- SV Reward Coupon Helpers
 ---------------------------

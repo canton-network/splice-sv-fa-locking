@@ -3,11 +3,14 @@ package org.lfdecentralizedtrust.splice.integration.tests
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.topology.PartyId
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.transferinstructionv1
+import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.console.ParticipantClientReference
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.SpliceTestConsoleEnvironment
 import org.lfdecentralizedtrust.tokenstandard.transferinstruction
 
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 import scala.jdk.OptionConverters.*
 
 trait GovernanceLockTest extends TokenStandardTest {
@@ -30,6 +33,19 @@ trait GovernanceLockTest extends TokenStandardTest {
           List(
             "unlock-amount" -> unlockAmount.toString,
             "vesting-start-time" -> vestingStartTime.toInstant.toString,
+          )
+        },
+      )
+  case object WithdrawVestedFunds
+      extends LockRequest[(CantonTimestamp, Long, Instant)](
+        "withdraw-vested-funds",
+        { case (vestedUntilTime, vestingPeriodMicros, vestingEndTime) =>
+          List(
+            "vested-until-time" -> vestedUntilTime.toInstant.toString,
+            "lock-vesting-duration-micros" -> vestingPeriodMicros.toString,
+            "lock-vesting-end-time-micros" -> ChronoUnit.MICROS
+              .between(Instant.EPOCH, vestingEndTime)
+              .toString,
           )
         },
       )
@@ -88,8 +104,6 @@ trait GovernanceLockTest extends TokenStandardTest {
 
     actualEntries shouldBe expectedEntries withClue s"actual: $actual, expected: $expected"
   }
-
-  val vestedUntilTimeMetaKey = s"$lockCipPrefix/vested-until-time"
 
   def createGovernanceLockViaTokenStandard(
       participant: ParticipantClientReference,
@@ -151,7 +165,7 @@ trait GovernanceLockTest extends TokenStandardTest {
         wait = false,
       ),
     )(
-      "a VestingLock is not the pending TransferInstruction",
+      "a VestingLock is now the pending TransferInstruction",
       _ =>
         listTransferInstructions(participant, owner.partyId).collect {
           case t @ (_, view)
@@ -165,4 +179,27 @@ trait GovernanceLockTest extends TokenStandardTest {
           case many => fail(s"Expected at most one VestingLock for $governanceLockCid, got $many")
         },
     )._2
+
+  /** Withdraws the vested funds of a vesting lock by submitting a withdraw request */
+  def withdrawVestingLockViaTokenStandard(
+      participant: ParticipantClientReference,
+      owner: RichPartyId,
+      lockKind: LockKind,
+      lockSubject: String,
+      vestingLock: governancelock.VestingLock,
+      vestedUntilTime: CantonTimestamp,
+  )(implicit env: SpliceTestConsoleEnvironment): Unit =
+    executeTransferViaTokenStandard(
+      participant,
+      owner,
+      lockManagerParty,
+      0,
+      transferinstruction.v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer,
+      description = Some(
+        makeInputLockMemo(WithdrawVestedFunds, lockKind, lockSubject)(
+          (vestedUntilTime, vestingLock.vestingPeriod.microseconds, vestingLock.endTime)
+        )
+      ),
+      wait = false,
+    )
 }

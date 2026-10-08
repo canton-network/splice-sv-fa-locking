@@ -335,13 +335,13 @@ test_governanceLockRequestTSv1Parser = do
 
   -- Create a lock: the specification is parsed
   expectRequest (run lockManagerParty $ request "create-lock" :: (unlockAmountMetaKey, "1.0") :: faLock) \case
-    GLR_CreateGovernanceLock{specification} -> specification === faSpecification
+    GLR_CreateGovernanceLock{governanceSpecification} -> governanceSpecification === faSpecification
     _ -> fail "Expected GLR_CreateGovernanceLock"
 
   -- Create a lock with custom controllers
   expectRequest (run lockManagerParty $ request "create-lock" :: (unlockControllersMetaKey, "alice,bob") :: faLock) \case
-    GLR_CreateGovernanceLock{specification} ->
-      specification === (faSpecification with unlockControllers = ControllerSpecification [[alice, bob]])
+    GLR_CreateGovernanceLock{governanceSpecification} ->
+      governanceSpecification === (faSpecification with unlockControllers = ControllerSpecification [[alice, bob]])
     _ -> fail "Expected GLR_CreateGovernanceLock"
 
   -- Unlock with all fields set
@@ -352,8 +352,8 @@ test_governanceLockRequestTSv1Parser = do
         :: (vestingStartTimeMetaKey, "2026-01-01T00:00:00Z")
         :: faLock)
     \case
-      GLR_UnlockGovernanceLock{specification, unlockAmount, vestingStartTime} -> do
-        specification === faSpecification
+      GLR_UnlockGovernanceLock{governanceSpecification, unlockAmount, vestingStartTime} -> do
+        governanceSpecification === faSpecification
         unlockAmount === 10000.0
         vestingStartTime === time (date 2026 Jan 1) 0 0 0
       _ -> fail "Expected GLR_UnlockGovernanceLock"
@@ -369,10 +369,52 @@ test_governanceLockRequestTSv1Parser = do
         :: (receiverMetaKey, "alice")
         :: faLock)
     \case
-      GLR_TransferGovernanceLock{specification, receiver} -> do
-        specification === faSpecification
+      GLR_TransferGovernanceLock{governanceSpecification, receiver} -> do
+        governanceSpecification === faSpecification
         receiver === alice
       _ -> fail "Expected GLR_TransferGovernanceLock"
+
+  -- Withdraw vested funds: the vesting lock key and the vested-until time are read from the metadata
+  expectRequest
+    (run lockManagerParty $
+      request "withdraw-vested-funds"
+        :: (vestedUntilTimeMetaKey, "2025-12-01T00:00:00Z")
+        -- 60 days in microseconds
+        :: (lockVestingDurationMetaKey, "5184000000000")
+        -- 2026-01-01T00:00:00Z in microseconds since the epoch
+        :: (lockVestingEndTimeMetaKey, "1767225600000000")
+        :: faLock)
+    \case
+      GLR_WithdrawVestingLock{vestingSpecification, vestedUntilTime, vestingPeriod, vestingEndTime} -> do
+        vestingSpecification === VestingLockSpecification with
+          kind = GLK_FeaturedApp testProvider
+          vestingControllers = ControllerSpecification [[testOwner]]
+        vestedUntilTime === time (date 2025 Dec 1) 0 0 0
+        vestingPeriod === days 60
+        vestingEndTime === time (date 2026 Jan 1) 0 0 0
+      _ -> fail "Expected GLR_WithdrawVestingLock"
+
+  -- Withdraw with custom vesting controllers
+  expectRequest
+    (run lockManagerParty $
+      request "withdraw-vested-funds"
+        :: (vestingControllersMetaKey, "alice;bob")
+        :: (vestedUntilTimeMetaKey, "2025-12-01T00:00:00Z")
+        :: (lockVestingDurationMetaKey, "5184000000000")
+        :: (lockVestingEndTimeMetaKey, "1767225600000000")
+        :: faLock)
+    \case
+      GLR_WithdrawVestingLock{vestingSpecification} ->
+        vestingSpecification.vestingControllers === ControllerSpecification [[alice], [bob]]
+      _ -> fail "Expected GLR_WithdrawVestingLock"
+
+  -- Withdraw without the vested-until time and the vesting lock key
+  expectRequestErrors
+    [ missingMetadataMessage vestedUntilTimeMetaKey
+    , missingMetadataMessage lockVestingDurationMetaKey
+    , missingMetadataMessage lockVestingEndTimeMetaKey
+    ]
+    $ run lockManagerParty (request "withdraw-vested-funds" :: faLock)
 
   -- The request is required and must be known; the value has no `cipMetaPrefix`
   expectRequestErrors [missingMetadataMessage requestMetaKey] $ run lockManagerParty faLock
@@ -386,6 +428,13 @@ test_governanceLockRequestTSv1Parser = do
     run alice (request "unlock-and-start-vesting" :: faLock)
   expectRequestErrors [invalidReceiverError alice, missingMetadataMessage receiverMetaKey] $
     run alice (request "transfer-lock" :: faLock)
+  expectRequestErrors
+    [ invalidReceiverError alice
+    , missingMetadataMessage vestedUntilTimeMetaKey
+    , missingMetadataMessage lockVestingDurationMetaKey
+    , missingMetadataMessage lockVestingEndTimeMetaKey
+    ]
+    $ run alice (request "withdraw-vested-funds" :: faLock)
   -- Substituting a lock also needs the lock manager as the receiver; all errors are reported
   expectRequestErrors [invalidReceiverError alice, missingMetadataMessage lockOwnerMetaKey] $
     run alice (request "substitute-receiver-lock-on-accept" :: faLock)

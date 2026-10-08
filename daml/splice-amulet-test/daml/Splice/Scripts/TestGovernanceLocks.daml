@@ -28,6 +28,7 @@ import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 import Splice.TokenStandard.Utils
+import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
 import Splice.Types (Round(..))
 
 testGovernanceLockHappyPathRawChoices : Script ()
@@ -904,9 +905,7 @@ tsv1Operations = CompatGovernanceLockOperations with
     optGovernanceUnlock = governanceUnlockV1
     governanceUnlock env cid actor meta = ((<$>) fromSome) <$> optGovernanceUnlock env cid actor meta
     pendingGovernanceUnlock = governanceUnlockV1
-    vestingWithdraw env cid actor meta = do
-      result <- WalletClientV2.tryWithdrawTransferInstructionV1 env.registries actor (toInterfaceContractId cid) meta
-      pure $ fmap fromInterfaceContractId <$> result
+    vestingWithdraw = vestingWithdrawV1
 
 tsv2Operations = CompatGovernanceLockOperations with
     governanceLock
@@ -926,13 +925,17 @@ iso8601TimeToMeta key t meta = Metadata $ TM.insert key (show t) meta.values
 
 -- | The TSv1 memo of a lock request. A wallet sets it as the transfer reason.
 tsv1RequestMemo : Text -> GovernanceLockKind -> Text
-tsv1RequestMemo request kind =
+tsv1RequestMemo request kind = tsv1RequestMemo' request kind []
+
+-- | The TSv1 memo of a lock request, with extra metadata entries.
+tsv1RequestMemo' : Text -> GovernanceLockKind -> [(Text, Text)] -> Text
+tsv1RequestMemo' request kind extraEntries =
   let (tag, subject) = governanceLockKindToTagAndSubject kind
-  in encodeLockCompatMemo $ Metadata $ TM.fromList
+  in encodeLockCompatMemo $ Metadata $ TM.fromList $
        [ (requestMetaKey, request)
        , (lockKindMetaKey, governanceLockTagToText tag)
        , (lockSubjectMetaKey, subject)
-       ]
+       ] <> extraEntries
 
 governanceLockV1 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockV1 env owner amount kind meta = do
@@ -954,14 +957,15 @@ governanceLockV1 env owner amount kind meta = do
   optContractId <- WalletClientV2.transferV1 env.registries owner $ transfer
   pure $ optionalToEither (UnknownError "Unexpected none in lock[") $ fromInterfaceContractId <$> optContractId
 
-governanceUnlockV1
-  :  forall t. HasFromInterface t V1.TransferInstruction
-  => TestEnv
-  -> ContractId GovernanceLock
+subsequentTransferV1
+  :  forall t1 t2. (Template t1, HasEnsure t1, HasField "owner" t1 Party, HasFromInterface t1 V1.TransferInstruction, HasFromInterface t2 V1.TransferInstruction)
+  => (t1 -> Text)
+  -> TestEnv
+  -> ContractId t1
   -> Party
   -> Metadata
-  -> Script (Either SubmitError (Optional (ContractId t)))
-governanceUnlockV1 env lockCid actor meta = do
+  -> Script (Either SubmitError (Optional (ContractId t2)))
+subsequentTransferV1 memo env lockCid actor meta = do
   now <- getTime
   Some lock <- queryContractId actor lockCid
   let registry = env.registriesEnv.amuletV2
@@ -978,11 +982,43 @@ governanceUnlockV1 env lockCid actor meta = do
         requestedAt = now
         executeBefore = now `addRelTime` hours 1
         inputHoldingCids = []
-        meta = reasonToMeta (tsv1RequestMemo governanceLockRequestUnlockAndStartVesting lock.specification.kind) meta
+        meta = reasonToMeta (memo lock) meta
       extraArgs = ExtraArgs with context; meta = emptyMetadata
   pure $ flip fmap result \r -> case r.output of
-    V1.TransferInstructionResult_Pending cid -> Some $ fromInterfaceContractId @t cid
+    V1.TransferInstructionResult_Pending cid -> Some $ fromInterfaceContractId @t2 cid
     _ -> None
+
+governanceUnlockV1
+  :  forall t. HasFromInterface t V1.TransferInstruction
+  => TestEnv
+  -> ContractId GovernanceLock
+  -> Party
+  -> Metadata
+  -> Script (Either SubmitError (Optional (ContractId t)))
+governanceUnlockV1 = subsequentTransferV1 @GovernanceLock @t \lock ->
+  tsv1RequestMemo governanceLockRequestUnlockAndStartVesting lock.specification.kind
+
+transferLockV1
+  :  TestEnv
+  -> ContractId GovernanceLock
+  -> Party
+  -> Metadata
+  -> Script (Either SubmitError (Optional (ContractId GovernanceLock)))
+transferLockV1 = subsequentTransferV1 @GovernanceLock @GovernanceLock \lock ->
+  tsv1RequestMemo governanceLockRequestTransferLock lock.specification.kind
+
+vestingWithdrawV1
+  :  TestEnv
+  -> ContractId VestingLock
+  -> Party
+  -> Metadata
+  -> Script (Either SubmitError (Optional (ContractId VestingLock)))
+vestingWithdrawV1 = subsequentTransferV1 @VestingLock @VestingLock \lock ->
+  tsv1RequestMemo' governanceLockRequestWithdrawVestedFunds lock.specification.kind
+    [ (vestingControllersMetaKey, encodeControllerSpecification lock.specification.vestingControllers)
+    , (lockVestingDurationMetaKey, encodeRelTime lock.vestingPeriod)
+    , (lockVestingEndTimeMetaKey, encodeTime lock.endTime)
+    ]
 
 governanceLockV2 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockV2 env owner amount kind meta = do

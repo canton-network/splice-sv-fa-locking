@@ -146,11 +146,13 @@ class GovernanceLockTimeBasedIntegrationTest
 
       val (_, (remainingVestingLockCid, remainingVestingAmount)) = actAndCheck(
         "the owner withdraws the VestingLock mid-vesting",
-        withdrawTransferInstruction(
+        withdrawVestingLockViaTokenStandard(
           aliceValidatorBackend.participantClientWithAdminToken,
           owner,
-          vestingLockCid,
-          meta = Map(vestedUntilTimeMetaKey -> vestingStartTime.plusSeconds(30).toInstant.toString),
+          lockKind,
+          lockSubject,
+          vestingLock,
+          vestedUntilTime = vestingStartTime.plusSeconds(30),
         ),
       )(
         "a new VestingLock remains with half of the total vesting amount",
@@ -186,11 +188,14 @@ class GovernanceLockTimeBasedIntegrationTest
 
       actAndCheck(
         "the owner withdraws the fully-vested VestingLock",
-        withdrawTransferInstruction(
+        // The remaining VestingLock has the same vesting period and end time as the original one
+        withdrawVestingLockViaTokenStandard(
           aliceValidatorBackend.participantClientWithAdminToken,
           owner,
-          remainingVestingLockCid,
-          meta = Map(vestedUntilTimeMetaKey -> vestingStartTime.plusSeconds(120).toInstant.toString),
+          lockKind,
+          lockSubject,
+          vestingLock,
+          vestedUntilTime = vestingStartTime.plusSeconds(120),
         ),
       )(
         "the VestingLock is archived and no pending TransferInstruction remains",
