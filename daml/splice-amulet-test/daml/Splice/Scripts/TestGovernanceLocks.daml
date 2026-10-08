@@ -7,6 +7,7 @@ import Prelude hiding (forA)
 import DA.Action (unless, when)
 import DA.Assert ((===))
 import DA.Either
+import DA.List (maximumOn)
 import DA.Optional
 import DA.TextMap qualified as TM
 import DA.Time
@@ -21,6 +22,7 @@ import Splice.Api.Token.HoldingV2 qualified as V2
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyAmuletRules
+import Splice.ExternalPartyConfigState (ExternalPartyConfigState)
 import Splice.GovernanceLock
 import Splice.Round
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
@@ -577,6 +579,56 @@ testGovernanceLockProvisionalPartialWithdrawScenario ops = do
 
 testGovernanceLockProvisionalFullWithdrawRawChoices : Script ()
 testGovernanceLockProvisionalFullWithdrawRawChoices = testGovernanceLockProvisionalFullWithdrawScenario rawOperations
+
+testGovernanceAndVestingLocksUnlockAfterSvLockingDeactivated : Script ()
+testGovernanceAndVestingLocksUnlockAfterSvLockingDeactivated = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      dso = registry.dso
+      someSvKind = GLK_SuperValidatorRightsOwner "TestSV"
+      aliceBalance = 180000.0
+
+  AmuletRegistryV2.tapFaucet registry alice (aliceBalance - 1000.0)
+  WalletClientV2.checkUnlockedBalance alice env.instrId aliceBalance
+  aliceLock <- governanceLockRawChoice registry alice aliceBalance someSvKind
+  WalletClientV2.checkUnlockedBalance alice env.instrId 0.0
+
+  -- Create a config state where we want SV locking to deactivate in 30 days from now
+  now <- getTime
+  let deactivatesAt = now `addRelTime` days 30
+  configStates <- query @ExternalPartyConfigState dso
+
+  (_, newestConfigState) <- pure $ maximumOn (\(_, config) -> config.targetArchiveAfter) configStates
+  submit dso $ createCmd newestConfigState with
+    targetArchiveAfter = newestConfigState.targetArchiveAfter `addRelTime` days 31
+    svLockingDeactivatesAt = Some deactivatesAt
+
+  -- Before deactivation, we should still be able to partial unlock
+  let partialUnlock = 80000.0
+  (Some aliceVestingLock, Some aliceLock', None) <-
+    governanceUnlockRawChoice registry aliceLock (Some partialUnlock) (now `addRelTime` minutes 5) [alice]
+  checkLockedHolding alice aliceLock' 100000.0
+
+  -- passTime to after svLockingDeactivatesAt should be true
+  passTime $ days 30
+  now <- getTime
+
+  -- Now that we are past svLockingDeactivatesAt, any amount specified should unlock the full amount for a governanceLock
+  (None, None, Some unlockedAmulet) <-
+    governanceUnlockRawChoice registry aliceLock' (Some 20000.0) (now `addRelTime` minutes 5) [alice]
+  WalletClientV2.checkUnlockedBalance alice env.instrId (aliceBalance - partialUnlock)
+  checkHolding' alice unlockedAmulet 100000.0
+
+  -- Should also fullUnlock for any vestedLocks
+  (unlockedAmulet', None) <- vestingWithdrawRawChoice registry aliceVestingLock now [alice]
+  checkHolding' alice unlockedAmulet' partialUnlock
+  WalletClientV2.checkUnlockedBalance alice env.instrId aliceBalance
+
+  -- Alice should no longer have any governanceLocks or vestingLocks
+  [] <- query @GovernanceLock alice
+  [] <- query @VestingLock alice
+
+  pure ()
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()

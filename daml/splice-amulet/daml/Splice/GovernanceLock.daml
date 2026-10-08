@@ -322,52 +322,66 @@ governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount unlockAt 
 governanceLock_executeUnlock : ContractId GovernanceLock -> GovernanceLock -> Optional Decimal -> Time -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_UnlockResult
 governanceLock_executeUnlock self this@(GovernanceLock {..}) unlockAmount unlockAt context state
     = do
-        let actualUnlockAmount = fromOptional amount unlockAmount
-        let isFullUnlock = actualUnlockAmount == amount
-        require' ("unlockAmount", actualUnlockAmount) isGreaterR ("zero", 0.0)
-        require' ("unlockAmount", actualUnlockAmount) isLessOrEqualR ("amount", amount)
-        unless isFullUnlock $ do
-          requireMinimumLock state actualUnlockAmount
-          requireMinimumLock state (amount - actualUnlockAmount)
-
-        let vestingPeriod = vestingDurationFor specification.kind state
-        let endTime = unlockAt `addRelTime` vestingPeriod
-        let specification = governanceToVestingSpecification this.specification
+        isDeactivedTimePassed <- case state.svLockingDeactivatesAt of
+          Some deactivatesAt -> do
+            isLedgerTimeGE deactivatesAt
+          None -> pure False
         let forOwner = ForOwner with dso; owner
-        let vestingLockProperties = LockProperties with
-              context = describeVestingSpecification specification
-              expiresAt = endTime
 
-        (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if vestingPeriod == days 0
-          then do
-            (optStillLocked, unlockedAmulet) <- partialUnlock forOwner lockedAmulet actualUnlockAmount context
-            pure (None, optStillLocked, Some unlockedAmulet)
-          else do
-            (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (actualUnlockAmount, vestingLockProperties) context
-            pure (Some vestingLockedAmulet, optStillLocked, None)
+        -- if svLockingDeactivatesAt time has passed, unlock full amount to liquid
+        if isDeactivedTimePassed then do
+          (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
+          pure $ GovernanceLock_UnlockResult_Completed with
+            vestingLock = None
+            governanceLock = None
+            unlockedAmulet = Some unlockedAmulet
 
-        governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
-          this with
+        else do
+          let actualUnlockAmount = fromOptional amount unlockAmount
+          let isFullUnlock = actualUnlockAmount == amount
+          require' ("unlockAmount", actualUnlockAmount) isGreaterR ("zero", 0.0)
+          require' ("unlockAmount", actualUnlockAmount) isLessOrEqualR ("amount", amount)
+          unless isFullUnlock $ do
+            requireMinimumLock state actualUnlockAmount
+            requireMinimumLock state (amount - actualUnlockAmount)
+
+          let vestingPeriod = vestingDurationFor specification.kind state
+          let endTime = unlockAt `addRelTime` vestingPeriod
+          let specification = governanceToVestingSpecification this.specification
+          let vestingLockProperties = LockProperties with
+                context = describeVestingSpecification specification
+                expiresAt = endTime
+
+          (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if vestingPeriod == days 0
+            then do
+              (optStillLocked, unlockedAmulet) <- partialUnlock forOwner lockedAmulet actualUnlockAmount context
+              pure (None, optStillLocked, Some unlockedAmulet)
+            else do
+              (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (actualUnlockAmount, vestingLockProperties) context
+              pure (Some vestingLockedAmulet, optStillLocked, None)
+
+          governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
+            this with
+              lockedAmulet
+              amount = stillLockedAmount
+              pendingUnlockApprovals = Map.empty)
+
+          vestingLock <- forA optVestingLockedAmulet (\(lockedAmulet, vestingAmount) -> create VestingLock with
+            dso
+            owner
             lockedAmulet
-            amount = stillLockedAmount
-            pendingUnlockApprovals = Map.empty)
+            vestingPeriod
+            endTime
+            vestingAmount
+            specification
+            originalLockCid = guard isFullUnlock $> coerceContractId self
+            meta
+            pendingWithdrawApprovals = Map.empty)
 
-        vestingLock <- forA optVestingLockedAmulet (\(lockedAmulet, vestingAmount) -> create VestingLock with
-          dso
-          owner
-          lockedAmulet
-          vestingPeriod
-          endTime
-          vestingAmount
-          specification
-          originalLockCid = guard isFullUnlock $> coerceContractId self
-          meta
-          pendingWithdrawApprovals = Map.empty)
-
-        pure $ GovernanceLock_UnlockResult_Completed with
-          vestingLock
-          governanceLock
-          unlockedAmulet
+          pure $ GovernanceLock_UnlockResult_Completed with
+            vestingLock
+            governanceLock
+            unlockedAmulet
 
 
 loopUntilRightA : Action m => (a -> m (Either a r)) -> a -> m r
@@ -495,8 +509,8 @@ template VestingLock
         actors : [Party]
       controller actors
       do
-        (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-        vestingLock_withdrawImpl self this requestedAt actors context
+        (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+        vestingLock_withdrawImpl self this requestedAt actors context state
 
     choice VestingLock_DsoExpire : VestingLock_DsoExpireResult
       -- ^ Garbage-collect a fully vested lock, so that SV nodes are not left
@@ -608,10 +622,10 @@ vestingLock_tokenStandard_withdrawImpl : ContractId VestingLock -> VestingLock -
 vestingLock_tokenStandard_withdrawImpl self this actors extraArgs = do
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext this.dso extraArgs.context
   requestedAt <- getWithdrawRequestedAtTime this.endTime this.vestingPeriod extraArgs.meta state
-  vestingLock_withdrawImpl self this requestedAt actors context
+  vestingLock_withdrawImpl self this requestedAt actors context state
 
-vestingLock_withdrawImpl : ContractId VestingLock -> VestingLock -> Time -> [Party] -> ExternalPartyTransferContext -> Update VestingLock_WithdrawResult
-vestingLock_withdrawImpl self this@(VestingLock {..}) requestedAt actors context
+vestingLock_withdrawImpl : ContractId VestingLock -> VestingLock -> Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update VestingLock_WithdrawResult
+vestingLock_withdrawImpl self this@(VestingLock {..}) requestedAt actors context state
     = do
         assertDeadlineExceeded "requestedAt" requestedAt
         recorded <- vestingLock_updateWithdrawApprovals this requestedAt actors
@@ -621,30 +635,41 @@ vestingLock_withdrawImpl self this@(VestingLock {..}) requestedAt actors context
               pendingWithdrawApprovals = stillPending
               originalLockCid = Some $ fromOptional (coerceContractId self) originalLockCid
             pure VestingLock_WithdrawResult_Pending with pendingLock
-          Right approvedRequestedAt -> vestingLock_executeWithdraw this approvedRequestedAt context
+          Right approvedRequestedAt -> vestingLock_executeWithdraw this approvedRequestedAt context state
 
-vestingLock_executeWithdraw : VestingLock -> Time -> ExternalPartyTransferContext -> Update VestingLock_WithdrawResult
-vestingLock_executeWithdraw this@(VestingLock {..}) requestedAt context
+vestingLock_executeWithdraw : VestingLock -> Time -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update VestingLock_WithdrawResult
+vestingLock_executeWithdraw this@(VestingLock {..}) requestedAt context state
     = do
-        let unvestedAmount = calculateUnvestedAmount requestedAt this
-
-        case unvestedAmount of
-          None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
+        isDeactivedTimePassed <- case state.svLockingDeactivatesAt of
+          Some deactivatesAt -> do
+            isLedgerTimeGE deactivatesAt
+          None -> pure False
+        if isDeactivedTimePassed
+          then do
+            (unlocked, _) <- unlockAmulet (ForOwner with dso; owner) lockedAmulet
+            --(lockedOpt, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet withdrawAmount context
             pure VestingLock_WithdrawResult_Completed with
               vestingLock = None
-              vested = toInterfaceContractId lockedAmulet
-          Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
-            let withdrawAmount = vestingAmount - stillLockedAmount
-            require' ("withdraw amount", withdrawAmount) isGreaterR ("zero", 0.0)
-            (lockedOpt, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet withdrawAmount context
-            vestingLock <- forA lockedOpt (\(lockedAmulet, vestingAmount) -> create this with
-              lockedAmulet
-              vestingPeriod = endTime `subTime` requestedAt
-              vestingAmount
-              pendingWithdrawApprovals = Map.empty)
-            pure VestingLock_WithdrawResult_Completed with
-              vestingLock
               vested = toInterfaceContractId unlocked
+          else do
+            let unvestedAmount = calculateUnvestedAmount requestedAt this
+            case unvestedAmount of
+              None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
+                pure VestingLock_WithdrawResult_Completed with
+                  vestingLock = None
+                  vested = toInterfaceContractId lockedAmulet
+              Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
+                let withdrawAmount = vestingAmount - stillLockedAmount
+                require' ("withdraw amount", withdrawAmount) isGreaterR ("zero", 0.0)
+                (lockedOpt, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet withdrawAmount context
+                vestingLock <- forA lockedOpt (\(lockedAmulet, vestingAmount) -> create this with
+                  lockedAmulet
+                  vestingPeriod = endTime `subTime` requestedAt
+                  vestingAmount
+                  pendingWithdrawApprovals = Map.empty)
+                pure VestingLock_WithdrawResult_Completed with
+                  vestingLock
+                  vested = toInterfaceContractId unlocked
 
 
 data VestingLock_DsoExpireResult

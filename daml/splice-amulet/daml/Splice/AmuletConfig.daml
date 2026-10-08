@@ -236,6 +236,9 @@ data GovernanceLockConfig = GovernanceLockConfig with
     featuredAppUnderlockGracePeriod : Optional RelTime
       -- ^ How long an underlocked provider has to cure before its right becomes archivable.
       --   Default: 7 days.
+    svLockingDeactivatesAfter : Optional RelTime
+      -- ^ Relative time representing the termination of the Lock-up requirement, relative to the opening of the first round of the network.
+      --   Default: 5 years and 30 days.
   deriving (Show, Eq, Serializable)
 
 getGovernanceLockConfigValue : a -> (GovernanceLockConfig -> Optional a) -> Optional GovernanceLockConfig -> a
@@ -258,6 +261,9 @@ governanceLockFeaturedAppUnderlockGracePeriod = getGovernanceLockConfigValue (da
 
 governanceLockFeaturedAppLockThreshold : Optional GovernanceLockConfig -> Decimal
 governanceLockFeaturedAppLockThreshold = getGovernanceLockConfigValue 5_000_000.0 (.featuredAppLockThreshold)
+
+governanceLockSvLockingDeactivatesAfter : Optional GovernanceLockConfig -> RelTime
+governanceLockSvLockingDeactivatesAfter = getGovernanceLockConfigValue (days 1825 + days 30) (.svLockingDeactivatesAfter)
 
 instance Patchable RewardVersion where
   patch = patchScalar
@@ -318,3 +324,4 @@ instance Patchable GovernanceLockConfig where
     searchTimeGranularity = patch new.searchTimeGranularity base.searchTimeGranularity current.searchTimeGranularity
     featuredAppLockThreshold = patch new.featuredAppLockThreshold base.featuredAppLockThreshold current.featuredAppLockThreshold
     featuredAppUnderlockGracePeriod = patch new.featuredAppUnderlockGracePeriod base.featuredAppUnderlockGracePeriod current.featuredAppUnderlockGracePeriod
+    svLockingDeactivatesAfter = patch new.svLockingDeactivatesAfter base.svLockingDeactivatesAfter current.svLockingDeactivatesAfter

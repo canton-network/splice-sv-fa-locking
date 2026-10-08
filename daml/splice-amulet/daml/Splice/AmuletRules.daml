@@ -1051,9 +1051,16 @@ template AmuletRules
         externalPartyConfigState1 <- fetchReferenceData (ForDso dso) externalPartyConfigStateCid1
         assertDeadlineExceeded "ExternalPartyConfigState0.targetArchiveAfter" externalPartyConfigState0.targetArchiveAfter
         require "ExternalPartyConfigState0.targetArchiveAfter <= ExternalPartyConfigState1.targetArchiveAfter" (externalPartyConfigState0.targetArchiveAfter <= externalPartyConfigState1.targetArchiveAfter)
+        let targetArchiveAfter = now `addRelTime` (getExternalPartyConfigStateTickDuration config + getExternalPartyConfigStateTickDuration config)
+            svLockingDeactivatesAt = do
+              governanceLockConfig <- config.governanceLockConfig
+              svLockingDeactivatesAfter <- governanceLockConfig.svLockingDeactivatesAfter
+              let deactivatesAt = now `addRelTime` (svLockingDeactivatesAfter - validatedRounds.latestUsableRound.issuingFor)
+              guard $ deactivatesAt < targetArchiveAfter
+              pure deactivatesAt
         newExternalPartyConfigStateCid <- create ExternalPartyConfigState with
           dso
-          targetArchiveAfter = now `addRelTime` (getExternalPartyConfigStateTickDuration config + getExternalPartyConfigStateTickDuration config)
+          targetArchiveAfter
           -- We use the oldest round for holding fees. That ensures that the rounds on ExternalPartyConfigState always lag behind the rounds on
           -- OpenMiningRound contracts so we underapproximate holding fees. Using the latest round can break that invariant if rounds stop advancing
           -- but ExternalPartyConfigState still advances. Not super relevant in practice but better to be safe.
@@ -1063,6 +1070,7 @@ template AmuletRules
           rewardCalculationVersion = (.mintingVersion) <$> validatedRounds.latestUsableRound.rewardConfig
           amuletSwitchOverTimes = config.amuletSwitchOverTimes
           governanceLockConfig = config.governanceLockConfig
+          svLockingDeactivatesAt
         pure AmuletRules_UpdateExternalPartyConfigStatesResult with ..
 
 
@@ -2430,15 +2438,23 @@ bootstrapExternalPartyConfigState AmuletRules{..} openMiningRoundTriple = do
   config <- getValueAsOfLedgerTime configSchedule
   validatedRounds <- validateOpenMiningRoundTriple dso openMiningRoundTriple
   let transferConfig = transferConfigToTransferConfigV2 validatedRounds.latestUsableRound.transferConfigUsd
+      targetArchiveAfter = now `addRelTime` getExternalPartyConfigStateTickDuration config
+      svLockingDeactivatesAt = do
+        governanceLockConfig <- config.governanceLockConfig
+        svLockingDeactivatesAfter <- governanceLockConfig.svLockingDeactivatesAfter
+        let deactivatesAt = now `addRelTime` (svLockingDeactivatesAfter - validatedRounds.latestUsableRound.issuingFor)
+        guard $ deactivatesAt < targetArchiveAfter
+        pure deactivatesAt
   let configState0 = ExternalPartyConfigState with
         dso
-        targetArchiveAfter = now `addRelTime` getExternalPartyConfigStateTickDuration config
+        targetArchiveAfter
         holdingFeesOpenRoundNumber = validatedRounds.oldestRound.round
         amuletPrice = validatedRounds.latestUsableRound.amuletPrice
         transferConfig = transferConfig
         rewardCalculationVersion = (.mintingVersion) <$> validatedRounds.latestUsableRound.rewardConfig
         amuletSwitchOverTimes = config.amuletSwitchOverTimes
         governanceLockConfig = config.governanceLockConfig
+        svLockingDeactivatesAt
       configState1 = configState0 with
         targetArchiveAfter = configState0.targetArchiveAfter `addRelTime` getExternalPartyConfigStateTickDuration config
   create configState0
