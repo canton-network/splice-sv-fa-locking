@@ -2082,15 +2082,15 @@ glr_substituteLock_parser tag admin proposer = do
 
 governanceLockRequestTSv1Parser : Party -> Party -> Parser Metadata GovernanceLockRequest
 governanceLockRequestTSv1Parser sender receiver = requiredMetadataParser requestMetaKey >>= \case
-    r | r == governanceLockRequestCreateLock -> do
-          checkReceiverIsLockManager
-          rejectTargetLockMetadataKeysParser "for a lock creation"
+    r | r == governanceLockRequestCreateLock ->
+        checkReceiverIsLockManager *>
+          rejectTargetLockMetadataKeysParser "for a lock creation" *>
           glr_createGovernanceLock_parser governanceLockKindParser sender
-    r | r == governanceLockRequestUnlockAndStartVesting -> do
-          checkReceiverIsLockManager
+    r | r == governanceLockRequestUnlockAndStartVesting ->
+        checkReceiverIsLockManager *>
           glr_unlockGovernanceLock_parser governanceLockKindParser sender
-    r | r == governanceLockRequestTransferLock -> do
-          checkReceiverIsLockManager
+    r | r == governanceLockRequestTransferLock ->
+        checkReceiverIsLockManager *>
           glr_transferGovernanceLock_parser governanceLockKindParser sender
     r | r == governanceLockRequestSubstituteLock -> assertFail tsv1SubstitutionRequestUnsupported
     r -> assertFail $ "Invalid request: '" <> r <> "'"
@@ -2108,9 +2108,9 @@ governanceLockRequestTSv2Parser : Party -> Text -> Party -> Parser Metadata Gove
 governanceLockRequestTSv2Parser admin id owner = do
   tag <- governanceLockTagParser' id
   let kindParser = governanceLockKindParser' tag
-      createLock = do
-        rejectTargetLockMetadataKeysParser "for a lock creation"
-        glr_createGovernanceLock_parser kindParser owner
+      createLock =
+        rejectTargetLockMetadataKeysParser "for a lock creation" *>
+          glr_createGovernanceLock_parser kindParser owner
   optionalMetadataParser requestMetaKey >>= \case
     None -> createLock
     Some r | r == governanceLockRequestCreateLock -> createLock
