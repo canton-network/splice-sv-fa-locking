@@ -8,7 +8,7 @@ module Splice.GovernanceLock where
 import Prelude hiding (forA)
 import DA.Action (filterA, unless)
 import DA.Assert
-import DA.Foldable (forA_, mapA_, maximum, toList)
+import DA.Foldable (foldMap, forA_, mapA_, maximum, toList)
 import DA.Functor (($>))
 import DA.List.Total (head, minimumOn)
 import DA.Map (Map)
@@ -794,8 +794,8 @@ template GovernanceLockSubstitution with
       -- Mirrors the metadata that the `GovernanceLock` created on acceptance will report through its own
       -- `V2.Allocation` view, so that `AllocationView.allocation` only loses the substitution request,
       -- the encoded target, and the accept request in the memo on acceptance.
-      view = substitution_allocationView target.dso target.specification.kind (substitutionGovernanceLockCompatMemo newLockSpecification.kind)
-        owner amount (encodeGovernanceLockSpecMetadata newLockSpecification) requestedAt lockedAmulet originalSubstitutionCid
+      view = substitution_allocationView target.dso target.specification.kind (substitutionGovernanceLockCompatMemo owner newLockSpecification)
+        owner amount (encodeGovernanceLockSpecMetadata owner newLockSpecification) requestedAt lockedAmulet originalSubstitutionCid
         (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (encodeGovernanceLockSubstitutionTargetMetadata target)
 
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
@@ -825,8 +825,8 @@ template GovernanceLockSubstitution with
         targetOwner = target.owner
         proposer = owner
         amount
-        meta = substitution_allocationMeta (substitutionGovernanceLockCompatMemo newLockSpecification.kind)
-          (encodeGovernanceLockSpecMetadata newLockSpecification) (encodeGovernanceLockSubstitutionTargetMetadata target)
+        meta = substitution_allocationMeta (substitutionGovernanceLockCompatMemo owner newLockSpecification)
+          (encodeGovernanceLockSpecMetadata owner newLockSpecification) (encodeGovernanceLockSubstitutionTargetMetadata target)
         requestedAt
         lockedAmulet
         originalSubstitutionCid
@@ -887,8 +887,8 @@ template VestingLockSubstitution with
       -- `V2.Allocation` view, except for the accept request in the memo. The new lock keeps the vesting
       -- period and end time of the target.
       view = substitution_allocationView target.dso target.specification.kind
-        (substitutionVestingLockCompatMemo newLockSpecification.kind target.vestingPeriod target.endTime)
-        owner amount (encodeVestingLockSpecMetadata newLockSpecification target.vestingPeriod target.endTime)
+        (substitutionVestingLockCompatMemo owner newLockSpecification target.vestingPeriod target.endTime)
+        owner amount (encodeVestingLockSpecMetadata owner newLockSpecification target.vestingPeriod target.endTime)
         requestedAt lockedAmulet originalSubstitutionCid
         (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (encodeVestingLockSubstitutionTargetMetadata target)
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
@@ -919,8 +919,8 @@ template VestingLockSubstitution with
         proposer = owner
         amount
         meta = substitution_allocationMeta
-          (substitutionVestingLockCompatMemo newLockSpecification.kind target.vestingPeriod target.endTime)
-          (encodeVestingLockSpecMetadata newLockSpecification target.vestingPeriod target.endTime)
+          (substitutionVestingLockCompatMemo owner newLockSpecification target.vestingPeriod target.endTime)
+          (encodeVestingLockSpecMetadata owner newLockSpecification target.vestingPeriod target.endTime)
           (encodeVestingLockSubstitutionTargetMetadata target)
         requestedAt
         lockedAmulet
@@ -1199,7 +1199,7 @@ substitution_allocationView admin kind memo proposer amount newLockMeta requeste
 -- same substitution.
 substitution_allocationMeta : Text -> Metadata -> Metadata -> Metadata
 substitution_allocationMeta memo newLockMeta targetMeta =
-  reasonToMeta memo $ unionMetadata newLockMeta $ unionMetadata substitutionRequestMetadata targetMeta
+  reasonToMeta memo $ newLockMeta <> substitutionRequestMetadata <> targetMeta
 
 data SubstitutionTransferInstructionViewArgs = SubstitutionTransferInstructionViewArgs with
   admin : Party
@@ -1273,15 +1273,17 @@ substitutionAcceptRequestMetadata : Metadata
 substitutionAcceptRequestMetadata = Metadata $ TextMap.singleton requestMetaKey governanceLockRequestAcceptToSubstituteLock
 
 -- | Memo of a substitution proposal of a `GovernanceLock`: the memo of the new lock plus the accept request.
-substitutionGovernanceLockCompatMemo : GovernanceLockKind -> Text
-substitutionGovernanceLockCompatMemo kind =
-  encodeLockCompatMemo $ encodeCommonLockMetadata kind LS_Locked substitutionAcceptRequestMetadata
+substitutionGovernanceLockCompatMemo : Party -> GovernanceLockSpecification -> Text
+substitutionGovernanceLockCompatMemo owner spec =
+  encodeLockCompatMemo $ encodeCommonLockMetadata spec.kind LS_Locked substitutionAcceptRequestMetadata <>
+    encodeGovernanceLockSpecControllers owner spec
 
 -- | Memo of a substitution proposal of a `VestingLock`: the memo of the new lock plus the accept request.
-substitutionVestingLockCompatMemo : GovernanceLockKind -> RelTime -> Time -> Text
-substitutionVestingLockCompatMemo kind vestingPeriod endTime =
-  encodeLockCompatMemo $ unionMetadata substitutionAcceptRequestMetadata $
-    encodeVestingLockSpecCompatMetadata kind vestingPeriod endTime
+substitutionVestingLockCompatMemo : Party -> VestingLockSpecification -> RelTime -> Time -> Text
+substitutionVestingLockCompatMemo owner spec vestingPeriod endTime =
+  encodeLockCompatMemo $ substitutionAcceptRequestMetadata <>
+    encodeVestingLockSpecCompatMetadata spec.kind vestingPeriod endTime <>
+    encodeVestingLockSpecControllers owner spec
 
 substitutionAcceptMeta : Metadata
 substitutionAcceptMeta = simpleHoldingTxMeta TxKind_Unlock (Some "substitute governance lock") None
@@ -1530,45 +1532,56 @@ getRequiredMetadata' parse key meta = case getOptionalMetadata key meta of
 getRequiredMetadata : CanAssert m => Text -> Metadata -> m Text
 getRequiredMetadata = getRequiredMetadata' pure
 
-unionMetadata : Metadata -> Metadata -> Metadata
-unionMetadata x y = Metadata $ TextMap.union x.values y.values
-
-encodeControllerSpecification : ControllerSpecification -> Text
-encodeControllerSpecification ControllerSpecification{controllers} =
-  Text.intercalate ";" $ fmap (Text.intercalate "," . fmap partyToText) controllers
+encodeControllerSpecification : Party -> Text -> ControllerSpecification -> Metadata
+encodeControllerSpecification owner key ControllerSpecification{controllers} =
+  if controllers == [[owner]]
+  then emptyMetadata
+  else Metadata $ TextMap.singleton key $ Text.intercalate ";" $ fmap (Text.intercalate "," . fmap partyToText) controllers
 
 encodeCommonLockMetadata : GovernanceLockKind -> LockState -> Metadata -> Metadata
 encodeCommonLockMetadata kind state meta =
   let (tag, subject) = governanceLockKindToTagAndSubject kind
-  in unionMetadata meta $ Metadata $ TextMap.fromList
+  in meta <> (Metadata $ TextMap.fromList
     [ (lockKindMetaKey, governanceLockTagToText tag)
     , (lockSubjectMetaKey, subject)
     , (lockStatusMetaKey, lockStateToText state)
-    ]
+    ])
 
-encodeGovernanceLockSpecMetadata : GovernanceLockSpecification -> Metadata
-encodeGovernanceLockSpecMetadata (GovernanceLockSpecification kind unlockControllers substitutionControllers vestingControllers) =
-  encodeCommonLockMetadata kind LS_Locked $ Metadata $ TextMap.fromList $
-    fmap (\(k, cs) -> (k, encodeControllerSpecification cs))
-      [ (unlockControllersMetaKey, unlockControllers)
-      , (substitutionControllersMetaKey, substitutionControllers)
-      , (vestingControllersMetaKey, vestingControllers) ]
+encodeGovernanceLockSpecControllers' : Text -> Text -> Text -> Party -> GovernanceLockSpecification -> Metadata
+encodeGovernanceLockSpecControllers' unlockControllersKey substitutionControllersKey vestingControllersKey owner (GovernanceLockSpecification
+  _kind
+  unlockControllers
+  substitutionControllers
+  vestingControllers) =
+    foldMap (\(key, controllers) -> encodeControllerSpecification owner key controllers)
+      [ (unlockControllersKey, unlockControllers)
+      , (substitutionControllersKey, substitutionControllers)
+      , (vestingControllersKey, vestingControllers) ]
+
+encodeGovernanceLockSpecControllers : Party -> GovernanceLockSpecification -> Metadata
+encodeGovernanceLockSpecControllers =
+  encodeGovernanceLockSpecControllers' unlockControllersMetaKey substitutionControllersMetaKey vestingControllersMetaKey
+
+encodeGovernanceLockSpecMetadata : Party -> GovernanceLockSpecification -> Metadata
+encodeGovernanceLockSpecMetadata owner spec =
+  encodeCommonLockMetadata spec.kind LS_Locked $ encodeGovernanceLockSpecControllers owner spec
 
 encodeGovernanceLockMetadata : GovernanceLock -> Metadata
-encodeGovernanceLockMetadata GovernanceLock{specification} = encodeGovernanceLockSpecMetadata specification
+encodeGovernanceLockMetadata GovernanceLock{owner, specification} = encodeGovernanceLockSpecMetadata owner specification
 
 encodeVestingLockCompatMetadata : VestingLock -> Metadata
 encodeVestingLockCompatMetadata (VestingLock
   _dso
-  _owner
+  owner
   _lockedAmulet
   vestingPeriod
   endTime
   _vestingAmount
-  (VestingLockSpecification kind _vestingControllers)
+  specification
   _originalLockCid
   _pendingWithdrawApprovals) =
-    encodeVestingLockSpecCompatMetadata kind vestingPeriod endTime
+    encodeVestingLockSpecCompatMetadata specification.kind vestingPeriod endTime
+    <> encodeVestingLockSpecControllers owner specification
 
 encodeVestingLockSpecCompatMetadata : GovernanceLockKind -> RelTime -> Time -> Metadata
 encodeVestingLockSpecCompatMetadata kind vestingPeriod endTime =
@@ -1578,14 +1591,21 @@ encodeVestingLockSpecCompatMetadata kind vestingPeriod endTime =
     , (lockVestingInfoMetaKey, "\"vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime <> "\"")
     ]
 
-encodeVestingLockSpecMetadata : VestingLockSpecification -> RelTime -> Time -> Metadata
-encodeVestingLockSpecMetadata (VestingLockSpecification kind vestingControllers) vestingPeriod endTime =
-  unionMetadata (encodeVestingLockSpecCompatMetadata kind vestingPeriod endTime) $
-    Metadata $ TextMap.singleton vestingControllersMetaKey (encodeControllerSpecification vestingControllers)
+encodeVestingLockSpecControllers' : Text -> Party -> VestingLockSpecification -> Metadata
+encodeVestingLockSpecControllers' vestingControllersKey owner (VestingLockSpecification _kind vestingControllers) =
+  encodeControllerSpecification owner vestingControllersKey vestingControllers
+
+encodeVestingLockSpecControllers : Party -> VestingLockSpecification -> Metadata
+encodeVestingLockSpecControllers = encodeVestingLockSpecControllers' vestingControllersMetaKey
+
+encodeVestingLockSpecMetadata : Party -> VestingLockSpecification -> RelTime -> Time -> Metadata
+encodeVestingLockSpecMetadata owner spec vestingPeriod endTime =
+  encodeVestingLockSpecCompatMetadata spec.kind vestingPeriod endTime <>
+    encodeVestingLockSpecControllers owner spec
 
 encodeVestingLockMetadata : VestingLock -> Metadata
-encodeVestingLockMetadata VestingLock{specification, vestingPeriod, endTime} =
-  encodeVestingLockSpecMetadata specification vestingPeriod endTime
+encodeVestingLockMetadata VestingLock{owner, specification, vestingPeriod, endTime} =
+  encodeVestingLockSpecMetadata owner specification vestingPeriod endTime
 
 encodeLockCompatMemo : Metadata -> Text
 encodeLockCompatMemo meta =
@@ -1593,35 +1613,34 @@ encodeLockCompatMemo meta =
       keyValues = fmap encodeKeyValue $ TextMap.toList $ meta.values
   in cipMemoPrefix <> Text.intercalate "&" keyValues
 
-encodeGovernanceLockSpecCompatMemo : GovernanceLockKind -> Text
-encodeGovernanceLockSpecCompatMemo kind =
-  encodeLockCompatMemo $ encodeCommonLockMetadata kind LS_Locked mempty
-
 encodeGovernanceLockCompatMemo : GovernanceLock -> Text
-encodeGovernanceLockCompatMemo GovernanceLock{specification} =
-  encodeGovernanceLockSpecCompatMemo specification.kind
+encodeGovernanceLockCompatMemo GovernanceLock{owner, specification} =
+  encodeLockCompatMemo $
+    encodeCommonLockMetadata specification.kind LS_Locked emptyMetadata
+    <> encodeGovernanceLockSpecControllers owner specification
 
 encodeVestingLockCompatMemo : VestingLock -> Text
 encodeVestingLockCompatMemo lock =
   encodeLockCompatMemo $ encodeVestingLockCompatMetadata lock
 
 encodeGovernanceLockSubstitutionTargetMetadata : GovernanceLockKey -> Metadata
-encodeGovernanceLockSubstitutionTargetMetadata (GovernanceLockKey _dso owner specification) = Metadata $ TextMap.fromList $
-  [ (targetLockOwnerMetaKey, partyToText owner)
-  , (lockStatusMetaKey, lockStateToText LS_Locked)
-  , (targetLockUnlockControllersMetaKey, encodeControllerSpecification specification.unlockControllers)
-  , (targetLockSubstitutionControllersMetaKey, encodeControllerSpecification specification.substitutionControllers)
-  , (targetLockVestingControllersMetaKey, encodeControllerSpecification specification.vestingControllers)
-  ]
+encodeGovernanceLockSubstitutionTargetMetadata (GovernanceLockKey _dso owner specification) =
+  (Metadata $ TextMap.fromList $ [(targetLockOwnerMetaKey, partyToText owner), (lockStatusMetaKey, lockStateToText LS_Locked)]) <>
+    encodeGovernanceLockSpecControllers'
+      targetLockUnlockControllersMetaKey
+      targetLockSubstitutionControllersMetaKey
+      targetLockVestingControllersMetaKey
+      owner
+      specification
 
 encodeVestingLockSubstitutionTargetMetadata : VestingLockKey -> Metadata
-encodeVestingLockSubstitutionTargetMetadata (VestingLockKey _dso owner specification vestingPeriod endTime) = Metadata $ TextMap.fromList $
-  [ (targetLockOwnerMetaKey, partyToText owner)
-  , (lockStatusMetaKey, lockStateToText LS_Vesting)
-  , (targetLockVestingControllersMetaKey, encodeControllerSpecification specification.vestingControllers)
-  , (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
-  , (lockVestingEndTimeMetaKey, encodeTime endTime)
-  ]
+encodeVestingLockSubstitutionTargetMetadata (VestingLockKey _dso owner specification vestingPeriod endTime) =
+  (Metadata $ TextMap.fromList $
+    [ (targetLockOwnerMetaKey, partyToText owner)
+    , (lockStatusMetaKey, lockStateToText LS_Vesting)
+    , (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
+    , (lockVestingEndTimeMetaKey, encodeTime endTime)
+    ]) <> encodeVestingLockSpecControllers' targetLockVestingControllersMetaKey owner specification
 
 -- TSv1 support
 -- ============

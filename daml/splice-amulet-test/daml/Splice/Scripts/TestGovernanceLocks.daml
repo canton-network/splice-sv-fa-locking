@@ -1007,10 +1007,10 @@ vestingWithdrawV1
   -> Script (Either SubmitError (Optional (ContractId VestingLock)))
 vestingWithdrawV1 = subsequentTransferV1 @VestingLock @VestingLock \lock ->
   tsv1RequestMemo' governanceLockRequestWithdrawVestedFunds lock.specification.kind
-    [ (vestingControllersMetaKey, encodeControllerSpecification lock.specification.vestingControllers)
-    , (lockVestingDurationMetaKey, encodeRelTime lock.vestingPeriod)
-    , (lockVestingEndTimeMetaKey, encodeTime lock.endTime)
-    ]
+    (TM.toList (encodeVestingLockSpecControllers lock.owner lock.specification).values <>
+      [ (lockVestingDurationMetaKey, encodeRelTime lock.vestingPeriod)
+      , (lockVestingEndTimeMetaKey, encodeTime lock.endTime)
+      ])
 
 governanceLockV2 : TestEnv -> Party -> Decimal -> GovernanceLockKind -> Metadata -> Script (Either SubmitError (ContractId GovernanceLock))
 governanceLockV2 env owner amount kind meta = do
