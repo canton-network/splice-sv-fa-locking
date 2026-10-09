@@ -67,9 +67,8 @@ targetDisclosures
   => Party -> ContractId t -> Script Disclosures'
 targetDisclosures owner cid = do
   Some lock <- queryContractId owner cid
-  lockDisclosure <- queryDisclosure' owner cid
   amuletDisclosure <- queryDisclosure' owner lock.lockedAmulet
-  pure $ lockDisclosure <> amuletDisclosure
+  pure amuletDisclosure
 
 acceptGovernanceSubstitutionRaw
   :  TestEnv -> Disclosures' -> ContractId GovernanceLockSubstitution -> [Party]
@@ -378,19 +377,41 @@ testSubstitution_governanceLock = do
 
   -- accept substitution
   acceptOneSubstitution
-  {-
-  [(aliceLock, _ )] <- query @GovernanceLock alice
-  [(substitutionCid, _)] <- query @SubstitutionProposal dso
-  result <- submitWithTransferContext registry (actAs [alice]) $ \context ->
-    exerciseCmd substitutionCid SubstitutionProposal_Accept with
-      target = ST_GovernanceLock aliceLock
-      extraArgs = emptyExtraArgs with context
-  errorIfLeft result
-  -}
 
   checkBalances (testLockAmount, 0.0) (0.0, testLockAmount)
 
   pure ()
+
+testSubstitutionRaw_oneStepApprovalWithoutOwner : Script ()
+testSubstitutionRaw_oneStepApprovalWithoutOwner = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      kind = GLK_SuperValidatorRightsOwner "TestSV"
+  AmuletRegistryV2.tapFaucet registry alice 49000.0 -- alice starts with 1000.0
+  AmuletRegistryV2.tapFaucet registry bob 20000.0
+
+  let targetSpec = (ownerControlledSpecification alice kind emptyMetadata) with
+        substitutionControllers = ControllerSpecification [[charlie]]
+  governanceLockCid <- governanceLockWithSpecRawChoice registry alice 50000.0 targetSpec
+
+  -- Some (GovernanceLock { lockedAmulet }) <- queryContractId bob governanceLockCid
+  -- lockedAmuletDisclosure <- queryDisclosure bob lockedAmulet
+
+  expectSuccess $ createSubstitutionRaw env bob
+    (AS_Governance with
+      governanceLockKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
+      governanceSpecification = ownerControlledSpecification bob kind emptyMetadata)
+    20000.0
+  [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob
+
+  disclosures <- targetDisclosures alice governanceLockCid
+  GovernanceLockSubstitution_AcceptResult_Complete newLockCid (Some remainderCid) <-
+    expectSuccess $ acceptGovernanceSubstitutionRaw env disclosures substitutionCid [charlie]
+
+  checkLockedHolding bob newLockCid 20000.0
+  checkLockedHolding alice remainderCid 30000.0
+  WalletClientV2.checkUnlockedBalance alice instrId 20000.0
+  WalletClientV2.checkUnlockedBalance bob instrId 0.0
 
 testSubstitutionRaw_twoStepApprovalWithoutOwner : Script ()
 testSubstitutionRaw_twoStepApprovalWithoutOwner = do
@@ -422,6 +443,35 @@ testSubstitutionRaw_twoStepApprovalWithoutOwner = do
   checkLockedHolding alice remainderCid 30000.0
   WalletClientV2.checkUnlockedBalance alice instrId 20000.0
   WalletClientV2.checkUnlockedBalance bob instrId 0.0
+
+testSubstitutionRaw_failures : Script ()
+testSubstitutionRaw_failures = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      kind = GLK_SuperValidatorRightsOwner "TestSV"
+  AmuletRegistryV2.tapFaucet registry alice 49000.0 -- alice starts with 1000.0
+  AmuletRegistryV2.tapFaucet registry bob 60000.0
+
+  let targetSpec = (ownerControlledSpecification alice kind emptyMetadata) with
+  _ <- governanceLockWithSpecRawChoice registry alice 50000.0 targetSpec
+
+  -- Insufficient funds to create the substitution
+  expectFailureContaining "Insufficient funds: you are missing" =<< createSubstitutionRaw env charlie
+    (AS_Governance with
+      governanceLockKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
+      governanceSpecification = ownerControlledSpecification bob kind emptyMetadata)
+    60000.0
+
+  -- Insufficient lock size on the accepter side
+  expectSuccess $ createSubstitutionRaw env bob
+    (AS_Governance with
+      governanceLockKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
+      governanceSpecification = ownerControlledSpecification bob kind emptyMetadata)
+    60000.0
+  [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob
+
+  expectFailureContaining "substituted lock has less funds " =<<
+    acceptGovernanceSubstitutionRaw env mempty substitutionCid [alice]
 
 testSubstitutionRaw_vestingWithoutOwner : Script ()
 testSubstitutionRaw_vestingWithoutOwner = do
