@@ -267,7 +267,7 @@ testGovernanceLockCompatUnlockAmountCappedTSv1 = testGovernanceLockCompatUnlockA
 testGovernanceLockCompatUnlockAmountCappedTSv2 : Script ()
 testGovernanceLockCompatUnlockAmountCappedTSv2 = testGovernanceLockCompatUnlockAmountCappedScenario tsv2Operations
 
--- | An unlock amount larger than the locked amount unlocks the full locked amount.
+-- | An unlock amount larger than the locked amount raises an error.
 testGovernanceLockCompatUnlockAmountCappedScenario : CompatGovernanceLockOperations -> Script ()
 testGovernanceLockCompatUnlockAmountCappedScenario ops = do
   env@TestEnv{..} <- setupTest
@@ -280,17 +280,9 @@ testGovernanceLockCompatUnlockAmountCappedScenario ops = do
 
   vestingStartTime <- (`addRelTime` hours 1) <$> getTime
 
-  -- Request to unlock 40k of the 30k, which starts vesting all 30k
-  aliceVesting <- expectSuccess $ ops.governanceUnlock env aliceLock alice $
+  -- Request to unlock 40k of the 30k
+  actionMustFail (expectMessageContains "'unlockAmount' is greater than 'amount'") $ ops.governanceUnlock env aliceLock alice $
     iso8601TimeToMeta vestingStartTimeMetaKey vestingStartTime $ Metadata $ TM.fromList [(unlockAmountMetaKey, "40000.0")]
-
-  Some vestingLock <- queryContractId alice aliceVesting
-  vestingLock.vestingAmount === 30000.0
-  checkLockedHolding alice aliceVesting 30000.0
-
-  -- No governance lock remains
-  remainingLocks <- query @GovernanceLock alice
-  length remainingLocks === 0
 
 testGovernanceLockMinimumLocksLockUnlockWithdraw : Script ()
 testGovernanceLockMinimumLocksLockUnlockWithdraw = testGovernanceLockMinimumLocksLockUnlockWithdrawScenario rawOperations

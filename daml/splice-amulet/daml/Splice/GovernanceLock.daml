@@ -306,13 +306,12 @@ governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount vestingSt
 governanceLock_executeUnlock : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_UnlockResult
 governanceLock_executeUnlock self this@(GovernanceLock {..}) unlockAmount vestingStartTime context state
     = do
-        -- Cap the approved amount at the locked amount, as approvals are kept when the lock shrinks, e.g. with a partial substitution
-        let actualUnlockAmount = min amount unlockAmount
-        let isFullUnlock = actualUnlockAmount == amount
-        require' ("unlockAmount", actualUnlockAmount) isGreaterR ("zero", 0.0)
+        require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", amount)
+        let isFullUnlock = unlockAmount == amount
+        require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
         unless isFullUnlock $ do
-          requireMinimumLock state actualUnlockAmount
-          requireMinimumLock state (amount - actualUnlockAmount)
+          requireMinimumLock state unlockAmount
+          requireMinimumLock state (amount - unlockAmount)
 
         let vestingPeriod = vestingDurationFor specification.kind state
         let endTime = vestingStartTime `addRelTime` vestingPeriod
@@ -324,10 +323,10 @@ governanceLock_executeUnlock self this@(GovernanceLock {..}) unlockAmount vestin
 
         (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if vestingPeriod == days 0
           then do
-            (optStillLocked, unlockedAmulet) <- partialUnlock forOwner lockedAmulet actualUnlockAmount context
+            (optStillLocked, unlockedAmulet) <- partialUnlock forOwner lockedAmulet unlockAmount context
             pure (None, optStillLocked, Some unlockedAmulet)
           else do
-            (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (actualUnlockAmount, vestingLockProperties) context
+            (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (unlockAmount, vestingLockProperties) context
             pure (Some vestingLockedAmulet, optStillLocked, None)
 
         governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
