@@ -1207,7 +1207,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        void $ getAndValidateSvParty this (Some sv)
+        void $ getAndValidateSvNodeOperatorParty this (Some sv)
         instruction <- fetchAndArchive (ForDso dso) instructionCid
         void $ exercise amuletRulesCid AmuletRules_UpdateFeaturedAppUnderlockState with
           rightCid
@@ -1221,7 +1221,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        void $ getAndValidateSvParty this (Some sv)
+        void $ getAndValidateSvNodeOperatorParty this (Some sv)
         void $ fetchChecked (ForDso with dso) rightCid
         void $ exercise rightCid FeaturedAppRight_EnforcePermanentUnderlock
         pure DsoRules_EnforceFeaturedAppPermanentUnderlockResult
@@ -1244,7 +1244,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        void $ getAndValidateSvParty this (Some sv)
+        void $ getAndValidateSvNodeOperatorParty this (Some sv)
         instruction <- fetchAndArchive (ForDso dso) instructionCid
         void $ fetchChecked (ForOwner with dso; owner = instruction.provider) rightCid
         result <- exercise rightCid instruction.update
@@ -1851,7 +1851,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        _ <- getAndValidateSvParty this (Some sv)
+        _ <- getAndValidateSvNodeOperatorParty this (Some sv)
         exercise governanceLockCid GovernanceLock_DsoConvertProvisionalFeaturedAppLock with featuredAppRightCid
         pure DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLockResult
 
@@ -1863,7 +1863,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        _ <- getAndValidateSvParty this (Some sv)
+        _ <- getAndValidateSvNodeOperatorParty this (Some sv)
         exercise vestingLockCid VestingLock_DsoExpire
         pure $ DsoRules_VestingLock_ExpireVestingLockResult
 

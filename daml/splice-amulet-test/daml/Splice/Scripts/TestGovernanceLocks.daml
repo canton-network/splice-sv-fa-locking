@@ -363,7 +363,8 @@ testTopUpWithSvRewardCouponsHappyPath : Script ()
 testTopUpWithSvRewardCouponsHappyPath = do
   env@TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
-  let someSvKind = GLK_SuperValidatorRightsOwner "TestSV"
+      svRightOwnerName = "TestSV"
+  let someSvKind = GLK_SuperValidatorRightsOwner svRightOwnerName
       dso = env.instrId.admin
   let createSvRewardCoupon provider beneficiary weight = submit (actAs dso) $ createCmd SvRewardCoupon with
         dso
@@ -371,6 +372,7 @@ testTopUpWithSvRewardCouponsHappyPath = do
         beneficiary = beneficiary
         weight
         round = Round 0
+        svRightOwnerName = Some svRightOwnerName
   let aliceWeight = 10 * 100
       aliceLockAmount = 10000.0
       aliceBalance = 100000000.0
@@ -440,7 +442,8 @@ testTopUpNegativePath = do
   env@TestEnv{..} <- setupTest
   let registry = registriesEnv.amuletV2
       dso = env.instrId.admin
-      someSvKind = GLK_SuperValidatorRightsOwner "TestSV"
+      svRightOwnerName = "TestSV"
+      someSvKind = GLK_SuperValidatorRightsOwner svRightOwnerName
 
   AmuletRegistryV2.tapFaucet registry alice 280000.0
 
@@ -484,6 +487,7 @@ testTopUpNegativePath = do
         beneficiary = alice
         weight = aliceWeight
         round = Round 0
+        svRightOwnerName = Some svRightOwnerName
 
   -- Advance until issuing mining round 0 is opened.
   AmuletRegistryV2.runNextIssuance dso 0.5
