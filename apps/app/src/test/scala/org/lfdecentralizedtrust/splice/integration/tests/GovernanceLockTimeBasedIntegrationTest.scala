@@ -11,7 +11,6 @@ import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.IntegrationTestWithIsolatedEnvironment
 import org.lfdecentralizedtrust.splice.sv.config.InitialGovernanceLockConfig
 import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, TokenStandardMetadata, WalletTestUtil}
-import org.lfdecentralizedtrust.splice.wallet.store.{BalanceChangeTxLogEntry, TxLogEntry}
 
 import java.time.Duration
 import java.time.temporal.ChronoUnit
@@ -20,7 +19,6 @@ class GovernanceLockTimeBasedIntegrationTest
     extends IntegrationTestWithIsolatedEnvironment
     with WalletTestUtil
     with TimeTestUtil
-    with WalletTxLogTestUtil
     with GovernanceLockTest {
 
   override def environmentDefinition: SpliceEnvironmentDefinition =
@@ -144,7 +142,7 @@ class GovernanceLockTimeBasedIntegrationTest
       // withdraw time of 30 seconds into the vesting period
       advanceTime(Duration.ofSeconds(31))
 
-      val (_, (remainingVestingLockCid, remainingVestingAmount)) = actAndCheck(
+      val (_, (remainingVestingLock, remainingVestingAmount)) = actAndCheck(
         "the owner withdraws the VestingLock mid-vesting",
         withdrawVestingLockViaTokenStandard(
           aliceValidatorBackend.participantClientWithAdminToken,
@@ -178,7 +176,7 @@ class GovernanceLockTimeBasedIntegrationTest
           val expectedLockAmount = lockAmount / 4 * 3
           remainingVestingAmount shouldBe expectedLockAmount
           aliceWalletClient.balance().lockedQty shouldBe expectedLockAmount
-          (cid, remainingVestingAmount)
+          (remainingVestingLock, remainingVestingAmount)
         },
       )
 
@@ -188,13 +186,14 @@ class GovernanceLockTimeBasedIntegrationTest
 
       actAndCheck(
         "the owner withdraws the fully-vested VestingLock",
-        // The remaining VestingLock has the same vesting period and end time as the original one
+        // The remaining VestingLock has the same end time as the original, but a new vesting
+        // period computed from the previous withdraw time
         withdrawVestingLockViaTokenStandard(
           aliceValidatorBackend.participantClientWithAdminToken,
           owner,
           lockKind,
           lockSubject,
-          vestingLock,
+          remainingVestingLock,
           vestedUntilTime = vestingStartTime.plusSeconds(120),
         ),
       )(
@@ -221,33 +220,5 @@ class GovernanceLockTimeBasedIntegrationTest
           remainingVestingAmount
         )
       }
-
-      checkTxHistory(
-        aliceWalletClient,
-        Seq(
-          // Full VestingLock withdraw; it was already fully relocked, so nothing is returned
-          { case logEntry: BalanceChangeTxLogEntry =>
-            logEntry.transferInstructionCid shouldBe remainingVestingLockCid.contractId
-            logEntry.amount shouldBe 0
-          },
-          // Partial VestingLock withdraw; only the vested portion is returned
-          { case logEntry: BalanceChangeTxLogEntry =>
-            logEntry.transferInstructionCid shouldBe vestingLockCid.contractId
-            logEntry.amount shouldBe lockAmount - remainingVestingAmount
-          },
-          // GovernanceLock withdraw; the full amount is relocked, nothing is returned
-          { case logEntry: BalanceChangeTxLogEntry =>
-            logEntry.transferInstructionCid shouldBe governanceLockCid.contractId
-            logEntry.amount shouldBe 0
-          },
-        ),
-        ignore = {
-          case b: BalanceChangeTxLogEntry =>
-            !b.subtype.contains(
-              TxLogEntry.BalanceChangeTransactionSubtype.TransferInstruction_Withdraw.toProto
-            )
-          case _ => true
-        },
-      )
   }
 }

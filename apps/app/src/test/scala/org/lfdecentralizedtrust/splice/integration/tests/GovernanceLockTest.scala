@@ -2,6 +2,7 @@ package org.lfdecentralizedtrust.splice.integration.tests
 
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.topology.PartyId
+import org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.transferinstructionv1
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
@@ -37,12 +38,12 @@ trait GovernanceLockTest extends TokenStandardTest {
         },
       )
   case object WithdrawVestedFunds
-      extends LockRequest[(CantonTimestamp, Long, Instant)](
+      extends LockRequest[(CantonTimestamp, RelTime, Instant)](
         "withdraw-vested-funds",
-        { case (vestedUntilTime, vestingPeriodMicros, vestingEndTime) =>
+        { case (vestedUntilTime, vestingPeriod, vestingEndTime) =>
           List(
             "vested-until-time" -> vestedUntilTime.toInstant.toString,
-            "lock-vesting-duration-micros" -> vestingPeriodMicros.toString,
+            "lock-vesting-duration-micros" -> vestingPeriod.microseconds.toString,
             "lock-vesting-end-time-micros" -> ChronoUnit.MICROS
               .between(Instant.EPOCH, vestingEndTime)
               .toString,
@@ -118,20 +119,27 @@ trait GovernanceLockTest extends TokenStandardTest {
     // `GovernanceLock`s or `VestingLock`s), so only look at the new one.
     val existingInstructionCids =
       listTransferInstructions(participant, owner.partyId).map(_._1).toSet
-    executeTransferViaTokenStandard(
-      participant,
-      owner,
-      lockManagerParty,
-      amount,
-      transferinstruction.v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer,
-      description = Some(makeInputLockMemo(CreateLock, lockKind, lockSubject)(())),
-    )
-    listTransferInstructions(participant, owner.partyId).collect {
-      case (cid, view)
-          if view.transfer.receiver == lockManagerParty.toProtoPrimitive &&
-            !existingInstructionCids.contains(cid) =>
-        cid
-    }.loneElement
+
+    actAndCheck(
+      "the owner creates the GovernanceLock",
+      executeTransferViaTokenStandard(
+        participant,
+        owner,
+        lockManagerParty,
+        amount,
+        transferinstruction.v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer,
+        description = Some(makeInputLockMemo(CreateLock, lockKind, lockSubject)(())),
+      ),
+    )(
+      "a GovernanceLock is now the pending TransferInstruction",
+      _ =>
+        listTransferInstructions(participant, owner.partyId).collect {
+          case (cid, view)
+              if view.transfer.receiver == lockManagerParty.toProtoPrimitive &&
+                !existingInstructionCids.contains(cid) =>
+            cid
+        }.loneElement,
+    )._2
   }
 
   /** Unlocks a governance lock by submitting an unlock request */
@@ -197,7 +205,7 @@ trait GovernanceLockTest extends TokenStandardTest {
       transferinstruction.v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer,
       description = Some(
         makeInputLockMemo(WithdrawVestedFunds, lockKind, lockSubject)(
-          (vestedUntilTime, vestingLock.vestingPeriod.microseconds, vestingLock.endTime)
+          (vestedUntilTime, vestingLock.vestingPeriod, vestingLock.endTime)
         )
       ),
       wait = false,
