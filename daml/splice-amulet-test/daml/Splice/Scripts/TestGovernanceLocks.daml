@@ -194,7 +194,7 @@ testGovernanceLockCompatTimesFromMetaScenario ops = do
     ops.governanceUnlock env aliceLock alice (iso8601TimeToMeta vestingStartTimeMetaKey now unlockAmountMeta)
   actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'vestingStartTime - 1 day' at") $
     ops.governanceUnlock env aliceLock alice (iso8601TimeToMeta vestingStartTimeMetaKey (now `addRelTime` (days 1 + seconds 1)) unlockAmountMeta)
-  actionMustFail (expectMessageContains $ "Error in metadata field '" <> vestingStartTimeMetaKey <> "': Invalid character at index 0: 'n'") $
+  actionMustFail (expectMessageContains $ "Error in metadata field '" <> vestingStartTimeMetaKey <> "': Invalid Time: 'not-a-time'") $
     ops.governanceUnlock env aliceLock alice (Metadata $ TM.fromList [(unlockAmountMetaKey, "80000.0"), (vestingStartTimeMetaKey, "not-a-time")])
 
   -- Unlock with an explicit vesting start time
@@ -210,7 +210,7 @@ testGovernanceLockCompatTimesFromMetaScenario ops = do
   -- The withdraw time must be in the past
   actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'requestedAt' at") $
     ops.vestingWithdraw env aliceVesting alice (iso8601TimeToMeta vestedUntilTimeMetaKey (now `addRelTime` seconds 1) emptyMetadata)
-  actionMustFail (expectMessageContains $ "Error in metadata field '" <> vestedUntilTimeMetaKey <> "': Invalid character at index 0: 'n'") $
+  actionMustFail (expectMessageContains $ "Error in metadata field '" <> vestedUntilTimeMetaKey <> "': Invalid Time: 'not-a-time'") $
     ops.vestingWithdraw env aliceVesting alice (Metadata $ TM.fromList [(vestedUntilTimeMetaKey, "not-a-time")])
 
   -- Withdraw with an explicit withdraw time after 1/4th of the 60 day vesting period

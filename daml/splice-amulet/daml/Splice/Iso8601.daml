@@ -1,45 +1,18 @@
 -- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
-{-# LANGUAGE AllowAmbiguousTypes #-}
-
 module Splice.Iso8601 (
   parseIso8601UtcTime
 ) where
 
-import DA.Action (foldlA)
 import DA.Date
 import DA.Either (optionalToEither)
-import DA.Optional
 import DA.Text qualified as Text
-
--- | Fallback behavior for Optional values.
-(<|>) : Optional a -> Optional a -> Optional a
-(<|>) x y = optional y Some x
-
--- Error message helpers
-------------------------
-
-internalError message = "Internal error; " <> message
-atIndex index = "at index " <> show index
-
--- Parsers
-----------
-
-ensureCharactersEqual : Text -> Text -> Int -> Either Text ()
-ensureCharactersEqual expected actual index =
-  assertMsg ("Invalid character " <> atIndex index <> ": '" <> actual <> "'. Expected: '" <> expected <> "'") (actual == expected)
-
-parseInt' : Text -> Text -> Either Text Int
-parseInt' errMsg input = optionalToEither (errMsg <> ": '" <> input <> "'") $ Text.parseInt input
 
 -- This is an internal error because at this point the component should be completely parsed from its individual
 -- characters, which would have produced errors if they didn't form a valid Int
 parseInt : Text -> Text -> Either Text Int
-parseInt type_ = parseInt' (internalError "failed to parse " <> type_ <> " as Int")
-
-ensureDigit : Text -> Int -> Either Text Int
-ensureDigit char index = parseInt' ("Invalid character " <> atIndex index) char
+parseInt type_ input = optionalToEither ("Failed to parse " <> type_ <> " as Int" <> ": '" <> input <> "'") $ Text.parseInt input
 
 ensureInRange : Text -> Int -> Int -> Int -> Either Text Int
 ensureInRange type_ low high i =
@@ -49,150 +22,43 @@ ensureInRange type_ low high i =
 parseIntInRange : Text -> Int -> Int -> Text -> Either Text Int
 parseIntInRange type_ low high input = parseInt type_ input >>= ensureInRange type_ low high
 
--- Parser state
----------------
+parseYear : Text -> Either Text Int
+parseYear = parseInt "year"
 
--- | The parser state of a single Time component.
-data Iso8601ParserComponentState a
-  = PCS_Uninitialized
-  | PCS_Partial Text
-  | PCS_Complete a
-  deriving (Show)
+parseMonth : Text -> Either Text Month
+parseMonth input = (\i -> toEnum (i - 1)) <$> parseIntInRange "month" 1 12 input
 
--- | The parser state encapsulating all Time components.
-data Iso8601ParserState = Iso8601ParserState with
-    year : Iso8601ParserComponentState Int
-    month : Iso8601ParserComponentState Month
-    day : Iso8601ParserComponentState Int
-    hour : Iso8601ParserComponentState Int
-    minute : Iso8601ParserComponentState Int
-    second : Iso8601ParserComponentState Int
-  deriving (Show)
+parseDay : Int -> Month -> Text -> Either Text Int
+parseDay year month = parseIntInRange "day" 1 (monthDayCount year month)
 
--- | The initial parser state with all Time components uninitialized.
-initialIso8601ParserState : Iso8601ParserState
-initialIso8601ParserState = Iso8601ParserState with
-  year = PCS_Uninitialized
-  month = PCS_Uninitialized
-  day = PCS_Uninitialized
-  hour = PCS_Uninitialized
-  minute = PCS_Uninitialized
-  second = PCS_Uninitialized
+parseHour : Text -> Either Text Int
+parseHour = parseIntInRange "hour" 0 23
 
--- | Complete the parser state and produce a Time using all completed components.
-completeIso8601ParserState : Text -> Iso8601ParserState -> Either Text Time
-completeIso8601ParserState _ Iso8601ParserState{
-  year = PCS_Complete year,
-  month = PCS_Complete month,
-  day = PCS_Complete day,
-  hour = PCS_Complete hour,
-  minute = PCS_Complete minute,
-  second = PCS_Complete second} = Right $ datetime year month day hour minute second
-completeIso8601ParserState input _ = Left $ "Invalid Time: '" <> input <> "'"
+parseMinute : Text -> Either Text Int
+parseMinute = parseIntInRange "minute" 0 59
 
--- | A single Time component used in parsing.
-data Iso8601ParserComponent a = Iso8601ParserComponent with
-  name : Text
-  get : (Iso8601ParserState -> Iso8601ParserComponentState a)
-  set : (Iso8601ParserState -> Iso8601ParserComponentState a -> Iso8601ParserState)
-  parse : Text -> Int -> Iso8601ParserState -> Either Text a
-
--- | Make an Iso8601ParserComponent given a name and a parse function.
-makeComponent
-  :  forall x a. HasField x Iso8601ParserState (Iso8601ParserComponentState a)
-  => Text
-  -> (Text -> Text -> Int -> Iso8601ParserState -> Either Text a)
-  -> Iso8601ParserComponent a
-makeComponent name parse = Iso8601ParserComponent with
-  name
-  get = getField @x
-  set = \state value -> setField @x value state
-  parse = parse name
-
-yearComponent = makeComponent @"year" "year" \name input _ _ -> parseInt name input
-
-monthComponent = makeComponent @"month" "month" \name input _ _ -> (\i -> toEnum (i - 1)) <$> parseIntInRange name 1 12 input
-
-dayComponent = makeComponent @"day" "day" \name input index state -> do
-  month <- getCompletedComponent index monthComponent state
-  year <- getCompletedComponent index yearComponent state
-  let daysInMonth = monthDayCount year month
-  parseIntInRange name 1 daysInMonth input
-
-hourComponent = makeComponent @"hour" "hour" \name input _ _ -> parseIntInRange name 0 23 input
-
-minuteComponent = makeComponent @"minute" "minute" \name input _ _ -> parseIntInRange name 0 59 input
-
-secondComponent = makeComponent @"second" "second" \name input _ _ -> parseIntInRange name 0 59 input
-
--- | Ensure a component is uninitialized in the parser state.
-ensureUninitializedComponent : Show a => Int -> Iso8601ParserComponent a -> Iso8601ParserState -> Either Text ()
-ensureUninitializedComponent index Iso8601ParserComponent{name, get} state = case get state of
-  PCS_Uninitialized -> Right ()
-  other -> Left $ internalError "expected an uninitialized " <> name <> " component " <> atIndex index <> ": " <> show other
-
--- | Ensure a component is in a partial state in the parser state.
-ensurePartialComponent : Show a => Int -> Iso8601ParserComponent a -> Iso8601ParserState -> Either Text ()
-ensurePartialComponent index Iso8601ParserComponent{name, get} state = case get state of
-  PCS_Partial _ -> Right ()
-  other -> Left $ internalError "expected an initialized" <> name <> " component " <> atIndex index <> ": " <> show other
-
--- | Extract a completed component from the parser state.
-getCompletedComponent : Show a => Int -> Iso8601ParserComponent a -> Iso8601ParserState -> Either Text a
-getCompletedComponent index Iso8601ParserComponent{name, get} state = case get state of
-  PCS_Complete a -> Right a
-  other -> Left $ internalError "expected a completed " <> name <> " component " <> atIndex index <> ":" <> show other
-
--- | Update an uninitialized or partial component in the parser state.
-updateComponent : Show a => Text -> Int -> Iso8601ParserComponent a -> Iso8601ParserState -> Either Text Iso8601ParserState
-updateComponent char index Iso8601ParserComponent{name, get, set} state = case get state of
-  PCS_Uninitialized -> Right $ set state $ PCS_Partial char
-  PCS_Partial acc -> Right $ set state $ PCS_Partial (acc <> char)
-  PCS_Complete a -> Left $ internalError "attempting to update a completed " <> name <> " component " <> atIndex index <> ": " <> show a
-
--- | Complete a component in the parser state by parsing it to the expected type.
-completeComponent : Show a => Int -> Iso8601ParserComponent a -> Iso8601ParserState -> Either Text Iso8601ParserState
-completeComponent index Iso8601ParserComponent{get, set, parse} state = case get state of
-  PCS_Uninitialized -> Left $ internalError "attempting to complete an uninitialized component " <> atIndex index
-  PCS_Partial acc -> set state . PCS_Complete <$> parse acc index state
-  PCS_Complete a -> Left $ internalError "attempting to complete an already completed component " <> atIndex index <> ": " <> show a
-
--- | Parse a single character in the larger parsing logic.
--- Determines how to parse based on the index of the character in the input state.
-parseIso8601UtcChar : Iso8601ParserState -> Text -> Int -> Either Text Iso8601ParserState
-parseIso8601UtcChar state char index =
-  let
-    parseComponentFromRange : Show a => Int -> Int -> Text -> Iso8601ParserComponent a -> Optional (Either Text Iso8601ParserState)
-    parseComponentFromRange low high terminator component = case index of
-      i | i == low -> Some $ do
-        ensureUninitializedComponent index component state
-        ensureDigit char index
-        updateComponent char index component state
-      i | i > low && i < high -> Some $ do
-        ensurePartialComponent index component state
-        ensureDigit char index
-        updateComponent char index component state
-      i | i == high -> Some $ do
-        ensureCharactersEqual terminator char index
-        completeComponent index component state
-      _ -> None
-
-    parsed : Optional (Either Text Iso8601ParserState)
-    parsed =
-      (parseComponentFromRange 0 4 "-" yearComponent)
-      <|> (parseComponentFromRange 5 7 "-" monthComponent)
-      <|> (parseComponentFromRange 8 10 "T" dayComponent)
-      <|> (parseComponentFromRange 11 13 ":" hourComponent)
-      <|> (parseComponentFromRange 14 16 ":" minuteComponent)
-      <|> (parseComponentFromRange 17 19 "Z" secondComponent)
-
-  in fromOptional (Left $ "Character " <> atIndex index <> " out of range: '" <> char <> "'") parsed
+parseSecond : Text -> Either Text Int
+parseSecond = parseIntInRange "second" 0 59
 
 -- Parse ISO 8601 formatted text into a Time.
 parseIso8601UtcTime : Text -> Either Text Time
 parseIso8601UtcTime input = do
-  (state, _) <- foldlA
-    (\(acc, index) char -> (, index + 1) <$> parseIso8601UtcChar acc char index)
-    (initialIso8601ParserState, 0)
-    (Text.explode input)
-  completeIso8601ParserState input state
+  let
+    invalidTime = "Invalid Time: '" <> input <> "'"
+
+    parseFromRange : Int -> Int -> Text -> (Text -> Either Text a) -> Either Text a
+    parseFromRange low high terminator parse = do
+      let numChars = high - low
+          textWithTerminator = Text.take (numChars + 1) (Text.drop low input)
+      case Text.splitAt numChars textWithTerminator of
+        (text, end) | Text.length text == numChars && end == terminator -> parse text
+        _ -> Left $ invalidTime
+
+  assertMsg invalidTime $ Text.length input <= 20
+  year <- parseFromRange 0 4 "-" parseYear
+  month <- parseFromRange 5 7 "-" parseMonth
+  day <- parseFromRange 8 10 "T" $ parseDay year month
+  hour <- parseFromRange 11 13 ":" parseHour
+  minute <- parseFromRange 14 16 ":" parseMinute
+  second <- parseFromRange 17 19 "Z" parseSecond
+  pure $ datetime year month day hour minute second

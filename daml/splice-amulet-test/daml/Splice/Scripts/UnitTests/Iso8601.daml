@@ -30,29 +30,29 @@ test_parseIso8601UtcTime_valid = do
 
 test_parseIso8601UtcTime_invalidDigit : Script ()
 test_parseIso8601UtcTime_invalidDigit = do
-  expectError "20x6-01-01T00:00:00Z" "Invalid character at index 2: 'x'"
-  expectError "2026-0a-01T00:00:00Z" "Invalid character at index 6: 'a'"
-  expectError "2026-01-0bT00:00:00Z" "Invalid character at index 9: 'b'"
-  expectError "2026-01-01T0c:00:00Z" "Invalid character at index 12: 'c'"
-  expectError "2026-01-01T00:d0:00Z" "Invalid character at index 14: 'd'"
-  expectError "2026-01-01T00:00:0eZ" "Invalid character at index 18: 'e'"
-  expectError "-026-01-01T00:00:00Z" "Invalid character at index 0: '-'"
+  expectError "20x6-01-01T00:00:00Z" "Failed to parse year as Int: '20x6'"
+  expectError "2026-0a-01T00:00:00Z" "Failed to parse month as Int: '0a'"
+  expectError "2026-01-0bT00:00:00Z" "Failed to parse day as Int: '0b'"
+  expectError "2026-01-01T0c:00:00Z" "Failed to parse hour as Int: '0c'"
+  expectError "2026-01-01T00:d0:00Z" "Failed to parse minute as Int: 'd0'"
+  expectError "2026-01-01T00:00:0eZ" "Failed to parse second as Int: '0e'"
 
 test_parseIso8601UtcTime_invalidSeparator : Script ()
 test_parseIso8601UtcTime_invalidSeparator = do
-  expectError "2026/01-01T00:00:00Z" "Invalid character at index 4: '/'. Expected: '-'"
-  expectError "2026-01/01T00:00:00Z" "Invalid character at index 7: '/'. Expected: '-'"
-  expectError "2026-01-01 00:00:00Z" "Invalid character at index 10: ' '. Expected: 'T'"
-  expectError "2026-01-01t00:00:00Z" "Invalid character at index 10: 't'. Expected: 'T'"
-  expectError "2026-01-01T00-00:00Z" "Invalid character at index 13: '-'. Expected: ':'"
-  expectError "2026-01-01T00:00-00Z" "Invalid character at index 16: '-'. Expected: ':'"
-  expectError "2026-01-01T00:00:00z" "Invalid character at index 19: 'z'. Expected: 'Z'"
-  expectError "2026-01-01T00:00:00+" "Invalid character at index 19: '+'. Expected: 'Z'"
+  expectError "2026/01-01T00:00:00Z" "Invalid Time: '2026/01-01T00:00:00Z'"
+  expectError "2026-01/01T00:00:00Z" "Invalid Time: '2026-01/01T00:00:00Z'"
+  expectError "2026-01-01 00:00:00Z" "Invalid Time: '2026-01-01 00:00:00Z'"
+  expectError "2026-01-01t00:00:00Z" "Invalid Time: '2026-01-01t00:00:00Z'"
+  expectError "2026-01-01T00-00:00Z" "Invalid Time: '2026-01-01T00-00:00Z'"
+  expectError "2026-01-01T00:00-00Z" "Invalid Time: '2026-01-01T00:00-00Z'"
+  expectError "2026-01-01T00:00:00z" "Invalid Time: '2026-01-01T00:00:00z'"
+  expectError "2026-01-01T00:00:00+" "Invalid Time: '2026-01-01T00:00:00+'"
 
 test_parseIso8601UtcTime_invalidMonth : Script ()
 test_parseIso8601UtcTime_invalidMonth = do
   expectError "2026-00-01T00:00:00Z" "Invalid month: 0. Expected a value between 1 and 12"
   expectError "2026-13-01T00:00:00Z" "Invalid month: 13. Expected a value between 1 and 12"
+  expectError "2026--1-01T00:00:00Z" "Invalid month: -1. Expected a value between 1 and 12"
 
 test_parseIso8601UtcTime_invalidDay : Script ()
 test_parseIso8601UtcTime_invalidDay = do
@@ -69,6 +69,7 @@ test_parseIso8601UtcTime_invalidHour : Script ()
 test_parseIso8601UtcTime_invalidHour = do
   expectError "2026-01-01T24:00:00Z" "Invalid hour: 24. Expected a value between 0 and 23"
   expectError "2026-01-01T99:00:00Z" "Invalid hour: 99. Expected a value between 0 and 23"
+  expectError "2026-01-01T-1:00:00Z" "Invalid hour: -1. Expected a value between 0 and 23"
 
 test_parseIso8601UtcTime_invalidMinute : Script ()
 test_parseIso8601UtcTime_invalidMinute = do
@@ -89,5 +90,5 @@ test_parseIso8601UtcTime_tooShort = do
 
 test_parseIso8601UtcTime_tooLong : Script ()
 test_parseIso8601UtcTime_tooLong = do
-  expectError "2026-01-01T00:00:00ZZ" "Character at index 20 out of range: 'Z'"
-  expectError "2026-01-01T00:00:00.000Z" "Invalid character at index 19: '.'. Expected: 'Z'"
+  expectError "2026-01-01T00:00:00ZZ" "Invalid Time: '2026-01-01T00:00:00ZZ'"
+  expectError "2026-01-01T00:00:00.000Z" "Invalid Time: '2026-01-01T00:00:00.000Z'"
