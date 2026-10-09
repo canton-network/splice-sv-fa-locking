@@ -796,7 +796,7 @@ template GovernanceLockSubstitution with
       -- the encoded target, and the accept request in the memo on acceptance.
       view = substitution_allocationView target.dso target.specification.kind (substitutionGovernanceLockCompatMemo newLockSpecification.kind)
         owner amount (encodeGovernanceLockSpecMetadata newLockSpecification) requestedAt lockedAmulet originalSubstitutionCid
-        (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (encodeGovernanceLockTargetMetadata target)
+        (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (encodeGovernanceLockSubstitutionTargetMetadata target)
 
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
         -- `AllocationInstruction_Accept` is nonconsuming, so archive here
@@ -826,7 +826,7 @@ template GovernanceLockSubstitution with
         proposer = owner
         amount
         meta = substitution_allocationMeta (substitutionGovernanceLockCompatMemo newLockSpecification.kind)
-          (encodeGovernanceLockSpecMetadata newLockSpecification) (encodeGovernanceLockTargetMetadata target)
+          (encodeGovernanceLockSpecMetadata newLockSpecification) (encodeGovernanceLockSubstitutionTargetMetadata target)
         requestedAt
         lockedAmulet
         originalSubstitutionCid
@@ -890,7 +890,7 @@ template VestingLockSubstitution with
         (substitutionVestingLockCompatMemo newLockSpecification.kind target.vestingPeriod target.endTime)
         owner amount (encodeVestingLockSpecMetadata newLockSpecification target.vestingPeriod target.endTime)
         requestedAt lockedAmulet originalSubstitutionCid
-        (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (encodeVestingLockTargetMetadata target)
+        (substitutable_substituteController target) withdrawSubstitutionControllers pendingSubstituteApprovals (encodeVestingLockSubstitutionTargetMetadata target)
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
         -- `AllocationInstruction_Accept` is nonconsuming, so archive here
         potentiallyUnsafeArchive self
@@ -921,7 +921,7 @@ template VestingLockSubstitution with
         meta = substitution_allocationMeta
           (substitutionVestingLockCompatMemo newLockSpecification.kind target.vestingPeriod target.endTime)
           (encodeVestingLockSpecMetadata newLockSpecification target.vestingPeriod target.endTime)
-          (encodeVestingLockTargetMetadata target)
+          (encodeVestingLockSubstitutionTargetMetadata target)
         requestedAt
         lockedAmulet
         originalSubstitutionCid
@@ -1605,8 +1605,8 @@ encodeVestingLockCompatMemo : VestingLock -> Text
 encodeVestingLockCompatMemo lock =
   encodeLockCompatMemo $ encodeVestingLockCompatMetadata lock
 
-encodeGovernanceLockTargetMetadata : GovernanceLockKey -> Metadata
-encodeGovernanceLockTargetMetadata (GovernanceLockKey _dso owner specification) = Metadata $ TextMap.fromList $
+encodeGovernanceLockSubstitutionTargetMetadata : GovernanceLockKey -> Metadata
+encodeGovernanceLockSubstitutionTargetMetadata (GovernanceLockKey _dso owner specification) = Metadata $ TextMap.fromList $
   [ (targetLockOwnerMetaKey, partyToText owner)
   , (lockStatusMetaKey, lockStateToText LS_Locked)
   , (targetLockUnlockControllersMetaKey, encodeControllerSpecification specification.unlockControllers)
@@ -1614,8 +1614,8 @@ encodeGovernanceLockTargetMetadata (GovernanceLockKey _dso owner specification) 
   , (targetLockVestingControllersMetaKey, encodeControllerSpecification specification.vestingControllers)
   ]
 
-encodeVestingLockTargetMetadata : VestingLockKey -> Metadata
-encodeVestingLockTargetMetadata (VestingLockKey _dso owner specification vestingPeriod endTime) = Metadata $ TextMap.fromList $
+encodeVestingLockSubstitutionTargetMetadata : VestingLockKey -> Metadata
+encodeVestingLockSubstitutionTargetMetadata (VestingLockKey _dso owner specification vestingPeriod endTime) = Metadata $ TextMap.fromList $
   [ (targetLockOwnerMetaKey, partyToText owner)
   , (lockStatusMetaKey, lockStateToText LS_Vesting)
   , (targetLockVestingControllersMetaKey, encodeControllerSpecification specification.vestingControllers)
