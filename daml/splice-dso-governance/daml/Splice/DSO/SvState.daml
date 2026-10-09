@@ -53,7 +53,7 @@ data RewardAdjustmentState = RewardAdjustmentState
     recoverableUnderlocks : [ UnderlockEvent ]
       -- ^ Still-recoverable underlocks, sorted by the time they become permanent, latest first.
       -- Additional invariant: weight factors are strictly increasing (less-penalizing later in the list)
-  deriving (Eq, Show)
+  deriving (Eq, Show, Serializable)
 
 
 data UnderlockEvent = UnderlockEvent
@@ -62,7 +62,7 @@ data UnderlockEvent = UnderlockEvent
       -- ^ Start time of the underlock event; becomes effective after 7 days, and permanent after 30.
     newFactor : Decimal
       -- ^ the new weight factor
-  deriving (Eq, Show)
+  deriving (Eq, Show, Serializable)
 
 
 -- | State of reward collection for a sv identified by their sv name.

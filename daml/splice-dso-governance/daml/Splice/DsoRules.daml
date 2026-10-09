@@ -461,10 +461,12 @@ data DsoRules_ExpireAmuletAllocationsV2Result = DsoRules_ExpireAmuletAllocations
 data DsoRules_UpdateTemporaryUnderlockStateResult = DsoRules_UpdateTemporaryUnderlockStateResult
   with
     newRewardStateCid : ContractId SvRewardState
+  deriving (Eq, Show, Serializable)
+
 data DsoRules_UpdatePermanentUnderlockStateResult = DsoRules_UpdatePermanentUnderlockStateResult
   with
     newRewardStateCid : ContractId SvRewardState
-
+  deriving (Eq, Show, Serializable)
 
 -- Workflow templates
 ---------------------
