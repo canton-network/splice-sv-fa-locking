@@ -236,6 +236,19 @@ data GovernanceLockConfig = GovernanceLockConfig with
     featuredAppUnderlockGracePeriod : Optional RelTime
       -- ^ How long an underlocked provider has to cure before its right becomes archivable.
       --   Default: 7 days.
+    superValidatorUnderlockEnforcementActivatesAt : Optional Time
+      -- ^ Time from which SV reward mints are tracked on ledger and SV underlocks are enforced.
+      --   Default: None
+    superValidatorUnderlockTemporaryGracePeriod : Optional RelTime
+      -- ^ How long an underlocked provider has to cure before it temporarily drops a reward tier.
+      --   Default: 7 days.
+    superValidatorUnderlockPermanentGracePeriod : Optional RelTime
+      -- ^ How long an underlocked provider has to cure before it permanently drops a reward tier.
+      --   Default: 30 days.
+    superValidatorWeightSchedule : Optional (Schedule RelTime [SvLockingTier])
+      -- ^ Tiers in effect, keyed by the time elapsed since `superValidatorUnderlockEnforcementActivatesAt`.
+      -- Tiers are sorted from highest to lowest. An SV below lowest tier earns 0
+      -- Default: Refer to table in CIP-0105 section 5.
   deriving (Show, Eq, Serializable)
 
 getGovernanceLockConfigValue : a -> (GovernanceLockConfig -> Optional a) -> Optional GovernanceLockConfig -> a
@@ -253,11 +266,39 @@ governanceLockFeaturedAppLockVestingDuration = getGovernanceLockConfigValue (day
 governanceLockSearchTimeGranularity : Optional GovernanceLockConfig -> RelTime
 governanceLockSearchTimeGranularity = getGovernanceLockConfigValue (days 1) (.searchTimeGranularity)
 
+governanceLockSuperValidatorUnderlockTemporaryGracePeriod : Optional GovernanceLockConfig -> RelTime
+governanceLockSuperValidatorUnderlockTemporaryGracePeriod = getGovernanceLockConfigValue (days 7) (.superValidatorUnderlockTemporaryGracePeriod)
+
+governanceLockSuperValidatorUnderlockPermanentGracePeriod : Optional GovernanceLockConfig -> RelTime
+governanceLockSuperValidatorUnderlockPermanentGracePeriod = getGovernanceLockConfigValue (days 30) (.superValidatorUnderlockPermanentGracePeriod)
+
 governanceLockFeaturedAppUnderlockGracePeriod : Optional GovernanceLockConfig -> RelTime
 governanceLockFeaturedAppUnderlockGracePeriod = getGovernanceLockConfigValue (days 7) (.featuredAppUnderlockGracePeriod)
 
 governanceLockFeaturedAppLockThreshold : Optional GovernanceLockConfig -> Decimal
 governanceLockFeaturedAppLockThreshold = getGovernanceLockConfigValue 5_000_000.0 (.featuredAppLockThreshold)
+
+governanceLockSuperValidatorWeightSchedule : Optional GovernanceLockConfig -> Schedule RelTime [SvLockingTier]
+governanceLockSuperValidatorWeightSchedule = getGovernanceLockConfigValue defaultSvWeightSchedule (.superValidatorWeightSchedule)
+
+-- | Represents a SV locking tier. An SV that has locked at least `minLockedFraction` of its
+-- lifetime SV rewards earns `rewardWeightFactor` of its SV weight.
+data SvLockingTier = SvLockingTier with
+    minLockedFraction : Decimal -- ^ Should be between [0.0, 1.0] inclusive
+    rewardWeightFactor : Decimal -- ^ Should be between (0.0, 1.0] where 0.0 is not inclusive
+  deriving (Eq, Show, Serializable)
+
+defaultSvWeightSchedule : Schedule RelTime [SvLockingTier]
+defaultSvWeightSchedule = Schedule with
+    initialValue = [tier 0.7 1.0, tier 0.45 0.6, tier 0.35 0.4]
+    futureValues =
+      [ (years 1, [tier 0.65 1.0, tier 0.5 0.6])
+      , (years 2, [tier 0.6  1.0])
+      , (years 3, [tier 0.55 1.0])
+      ]
+  where
+    tier = SvLockingTier
+    years n = days (365 * n) + hours (6 * n) -- 365.25 days a year
 
 instance Patchable RewardVersion where
   patch = patchScalar
@@ -318,3 +359,15 @@ instance Patchable GovernanceLockConfig where
     searchTimeGranularity = patch new.searchTimeGranularity base.searchTimeGranularity current.searchTimeGranularity
     featuredAppLockThreshold = patch new.featuredAppLockThreshold base.featuredAppLockThreshold current.featuredAppLockThreshold
     featuredAppUnderlockGracePeriod = patch new.featuredAppUnderlockGracePeriod base.featuredAppUnderlockGracePeriod current.featuredAppUnderlockGracePeriod
+    superValidatorUnderlockEnforcementActivatesAt = patch new.superValidatorUnderlockEnforcementActivatesAt base.superValidatorUnderlockEnforcementActivatesAt current.superValidatorUnderlockEnforcementActivatesAt
+    superValidatorUnderlockTemporaryGracePeriod = patch new.superValidatorUnderlockTemporaryGracePeriod base.superValidatorUnderlockTemporaryGracePeriod current.superValidatorUnderlockTemporaryGracePeriod
+    superValidatorUnderlockPermanentGracePeriod = patch new.superValidatorUnderlockPermanentGracePeriod base.superValidatorUnderlockPermanentGracePeriod current.superValidatorUnderlockPermanentGracePeriod
+    superValidatorWeightSchedule = patch new.superValidatorWeightSchedule base.superValidatorWeightSchedule current.superValidatorWeightSchedule
+
+instance Patchable SvLockingTier where
+  patch new base current = SvLockingTier with
+    minLockedFraction = patch new.minLockedFraction base.minLockedFraction current.minLockedFraction
+    rewardWeightFactor = patch new.rewardWeightFactor base.rewardWeightFactor current.rewardWeightFactor
+
+instance Patchable [SvLockingTier] where
+  patch = patchScalar
