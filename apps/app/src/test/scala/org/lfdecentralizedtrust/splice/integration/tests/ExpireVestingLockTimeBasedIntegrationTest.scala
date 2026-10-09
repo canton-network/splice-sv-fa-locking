@@ -102,7 +102,7 @@ class ExpireVestingLockTimeBasedIntegrationTest
     val vestingStartTime = getLedgerTime.plus(unlockDelay)
     val endTime = vestingStartTime.toInstant.plus(vestingDuration)
 
-    // `createGovernanceLockViaTokenStandard` feeds all of the owner's unlocked
+    // `createGovernanceLockTSv1` feeds all of the owner's unlocked
     // holdings into the `TransferFactory_Transfer` choice. Thus, the tap has to
     // have landed before the first lock is submitted.
     actAndCheck(
@@ -116,14 +116,14 @@ class ExpireVestingLockTimeBasedIntegrationTest
     actAndCheck(
       s"Lock and unlock $numLocks times, vesting until $endTime", {
         (1 to numLocks).map { _ =>
-          val governanceLock = createGovernanceLockViaTokenStandard(
+          val governanceLock = createGovernanceLockTSv1(
             participant,
             owner,
             lockKind,
             lockSubject = sv1Name,
             amount = lockAmount,
           )
-          unlockGovernanceLockViaTokenStandard(
+          unlockGovernanceLockTSv1(
             participant,
             owner,
             lockKind,

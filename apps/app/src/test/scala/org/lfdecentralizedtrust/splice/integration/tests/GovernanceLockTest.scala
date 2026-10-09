@@ -11,6 +11,7 @@ import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.SpliceTestC
 import org.lfdecentralizedtrust.tokenstandard.transferinstruction
 
 import java.time.Instant
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import scala.jdk.OptionConverters.*
 
@@ -21,6 +22,23 @@ trait GovernanceLockTest extends TokenStandardTest {
   val lockManagerParty = PartyId.tryFromProtoPrimitive(
     s"${lockCipPrefix}_lock-manager::1220000000000000000000000000000000000000000000000000000000000000abcd"
   )
+
+  private val lockStatusMetaKey = "lock-status"
+  private val lockVestingDurationMetaKey = "lock-vesting-duration-micros"
+  private val lockVestingEndTimeMetaKey = "lock-vesting-end-time-micros"
+
+  private def instantToMicros(i: Instant): Long = ChronoUnit.MICROS.between(Instant.EPOCH, i)
+
+  private def formatTimestamp(t: CantonTimestamp): String =
+    DateTimeFormatter.ISO_INSTANT.format(t.toInstant.truncatedTo(ChronoUnit.SECONDS))
+
+  sealed abstract class LockKind(val kind: String)
+  case object SuperValidatorLock extends LockKind("sv-lock")
+  case object ProvisionalFeaturedAppLock extends LockKind("provisional-fa-lock")
+
+  sealed abstract class LockStatus(val status: String)
+  case object Locked extends LockStatus("locked")
+  case object Vesting extends LockStatus("vesting")
 
   sealed abstract class LockRequest[A](
       val request: String,
@@ -33,7 +51,7 @@ trait GovernanceLockTest extends TokenStandardTest {
         { case (unlockAmount, vestingStartTime) =>
           List(
             "unlock-amount" -> unlockAmount.toString,
-            "vesting-start-time" -> vestingStartTime.toInstant.toString,
+            "vesting-start-time" -> formatTimestamp(vestingStartTime),
           )
         },
       )
@@ -42,22 +60,27 @@ trait GovernanceLockTest extends TokenStandardTest {
         "withdraw-vested-funds",
         { case (vestedUntilTime, vestingPeriod, vestingEndTime) =>
           List(
-            "vested-until-time" -> vestedUntilTime.toInstant.toString,
-            "lock-vesting-duration-micros" -> vestingPeriod.microseconds.toString,
-            "lock-vesting-end-time-micros" -> ChronoUnit.MICROS
-              .between(Instant.EPOCH, vestingEndTime)
-              .toString,
+            "vested-until-time" -> formatTimestamp(vestedUntilTime),
+            lockVestingDurationMetaKey -> vestingPeriod.microseconds.toString,
+            lockVestingEndTimeMetaKey -> instantToMicros(vestingEndTime).toString,
           )
         },
       )
 
-  sealed abstract class LockKind(val kind: String)
-  case object SuperValidatorLock extends LockKind("sv-lock")
-  case object ProvisionalFeaturedAppLock extends LockKind("provisional-fa-lock")
+  type SubstituteLockData = (LockStatus, PartyId, Option[RelTime], Option[Instant])
 
-  sealed abstract class LockStatus(val status: String)
-  case object Locked extends LockStatus("locked")
-  case object Vesting extends LockStatus("vesting")
+  case object SubstituteLock
+      extends LockRequest[SubstituteLockData](
+        "substitute-lock",
+        { case (lockStatus, targetLockOwner, vestingPeriod, vestingEndTime) =>
+          List(
+            lockStatusMetaKey -> lockStatus.status,
+            "target-lock-owner" -> targetLockOwner.toProtoPrimitive,
+          ) ++
+            vestingPeriod.map(t => (lockVestingDurationMetaKey, t.microseconds.toString)) ++
+            vestingEndTime.map(t => (lockVestingEndTimeMetaKey, instantToMicros(t).toString))
+        },
+      )
 
   private def makeLockMemo(entries: List[(String, String)]): String =
     lockMemoPrefix + entries.map { case (k, v) => s"$k=$v" }.mkString("&")
@@ -85,7 +108,7 @@ trait GovernanceLockTest extends TokenStandardTest {
   ): String =
     makeLockMemo(
       commonLockMemoEntries(lockKind, lockSubject) ++
-        Map("lock-status" -> lockStatus.status)
+        Map(lockStatusMetaKey -> lockStatus.status)
     )
 
   // Using a Map so order doesn't matter when comparing below
@@ -106,7 +129,7 @@ trait GovernanceLockTest extends TokenStandardTest {
     actualEntries shouldBe expectedEntries withClue s"actual: $actual, expected: $expected"
   }
 
-  def createGovernanceLockViaTokenStandard(
+  def createGovernanceLockTSv1(
       participant: ParticipantClientReference,
       owner: RichPartyId,
       lockKind: LockKind,
@@ -143,7 +166,7 @@ trait GovernanceLockTest extends TokenStandardTest {
   }
 
   /** Unlocks a governance lock by submitting an unlock request */
-  def unlockGovernanceLockViaTokenStandard(
+  def unlockGovernanceLockTSv1(
       participant: ParticipantClientReference,
       owner: RichPartyId,
       lockKind: LockKind,
@@ -189,7 +212,7 @@ trait GovernanceLockTest extends TokenStandardTest {
     )._2
 
   /** Withdraws the vested funds of a vesting lock by submitting a withdraw request */
-  def withdrawVestingLockViaTokenStandard(
+  def withdrawVestingLockTSv1(
       participant: ParticipantClientReference,
       owner: RichPartyId,
       lockKind: LockKind,
@@ -209,5 +232,58 @@ trait GovernanceLockTest extends TokenStandardTest {
         )
       ),
       wait = false,
+    )
+
+  final class SubstituteLockTSv1(data: SubstituteLockData) {
+    final def apply(
+        participant: ParticipantClientReference,
+        owner: RichPartyId,
+        lockKind: LockKind,
+        lockSubject: String,
+        substitutionAmount: BigDecimal,
+    )(implicit
+        env: SpliceTestConsoleEnvironment
+    ): transferinstructionv1.TransferInstruction.ContractId = {
+      val (_, targetLockOwner, _, _) = data
+      // `owner` may already have pending instructions, so only look at the new one.
+      val existingInstructionCids =
+        listTransferInstructions(participant, owner.partyId).map(_._1).toSet
+
+      actAndCheck(
+        "the owner proposes the substitution",
+        executeTransferViaTokenStandard(
+          participant,
+          owner,
+          lockManagerParty,
+          substitutionAmount,
+          transferinstruction.v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer,
+          description = Some(makeInputLockMemo(SubstituteLock, lockKind, lockSubject)(data)),
+        ),
+      )(
+        "the substitution is now a pending TransferInstruction to the owner of the target lock",
+        _ =>
+          listTransferInstructions(participant, owner.partyId).collect {
+            case (cid, view)
+                if view.transfer.receiver == targetLockOwner.toProtoPrimitive &&
+                  !existingInstructionCids.contains(cid) =>
+              cid
+          }.loneElement,
+      )._2
+    }
+  }
+
+  /** Propose a substitution of a GovernanceLock */
+  def substituteGovernanceLockTSv1(lock: governancelock.GovernanceLock) =
+    new SubstituteLockTSv1((Locked, PartyId.tryFromProtoPrimitive(lock.owner), None, None))
+
+  /** Propose a substitution of a VestingLock */
+  def substituteVestingLockTSv1(lock: governancelock.VestingLock) =
+    new SubstituteLockTSv1(
+      (
+        Vesting,
+        PartyId.tryFromProtoPrimitive(lock.owner),
+        Some(lock.vestingPeriod),
+        Some(lock.endTime),
+      )
     )
 }

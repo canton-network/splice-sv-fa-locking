@@ -57,7 +57,7 @@ class GovernanceLockTimeBasedIntegrationTest
       aliceWalletClient.tap(lockAmount)
 
       // Create the governance lock via a transfer to the magic party
-      val governanceLockCid = createGovernanceLockViaTokenStandard(
+      val governanceLockCid = createGovernanceLockTSv1(
         aliceValidatorBackend.participantClientWithAdminToken,
         owner,
         lockKind,
@@ -103,7 +103,7 @@ class GovernanceLockTimeBasedIntegrationTest
 
       // Withdraw the governance lock; it's relocked as a VestingLock and funds remain locked
       val vestingStartTime = getLedgerTime.plusSeconds(1)
-      val (vestingLockCid, vestingLockView) = unlockGovernanceLockViaTokenStandard(
+      val (vestingLockCid, vestingLockView) = unlockGovernanceLockTSv1(
         aliceValidatorBackend.participantClientWithAdminToken,
         owner,
         lockKind,
@@ -144,7 +144,7 @@ class GovernanceLockTimeBasedIntegrationTest
 
       val (_, (remainingVestingLock, remainingVestingAmount)) = actAndCheck(
         "the owner withdraws the VestingLock mid-vesting",
-        withdrawVestingLockViaTokenStandard(
+        withdrawVestingLockTSv1(
           aliceValidatorBackend.participantClientWithAdminToken,
           owner,
           lockKind,
@@ -188,7 +188,7 @@ class GovernanceLockTimeBasedIntegrationTest
         "the owner withdraws the fully-vested VestingLock",
         // The remaining VestingLock has the same end time as the original, but a new vesting
         // period computed from the previous withdraw time
-        withdrawVestingLockViaTokenStandard(
+        withdrawVestingLockTSv1(
           aliceValidatorBackend.participantClientWithAdminToken,
           owner,
           lockKind,
