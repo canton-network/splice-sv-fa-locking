@@ -23,7 +23,7 @@ data SvRightOwnerInfo = SvRightOwnerInfo
       -- ^ Adjustment to this SV's lifetime rewards. Used for example to
       -- reflect the lifetime rewards accumulated before Phase 1 of
       -- SV locking. Can be changed by the SVs via voting.
-  deriving (Eq, Show)
+  deriving (Eq, Show, Serializable)
 
 instance Patchable SvRightOwnerInfo where
   patch new base current = SvRightOwnerInfo
