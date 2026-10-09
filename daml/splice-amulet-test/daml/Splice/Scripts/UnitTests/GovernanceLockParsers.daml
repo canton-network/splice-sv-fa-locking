@@ -561,8 +561,8 @@ test_substitutionTSv2Parser_examples = do
         , ("cip-127/lock-vesting-end-time-micros", "1767225600000000")
         ]
 
-test_substitutionTSv2Parser_errors : Script ()
-test_substitutionTSv2Parser_errors = do
+test_substitutionTSv2Parser_failures : Script ()
+test_substitutionTSv2Parser_failures = do
   let run entries =
         runParser (substitutionTSv2Parser testAdmin (governanceLockTagToText GLT_SuperValidator) bob)
           (mkMeta $ substitutionRequest :: entries)

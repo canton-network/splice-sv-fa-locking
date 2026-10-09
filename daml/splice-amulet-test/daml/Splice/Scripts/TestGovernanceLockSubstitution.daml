@@ -225,8 +225,8 @@ testSubstitutionMeta_vestingTargetRoundTrip = do
   parsed <- expectParsed $ parseSubstitutionTSv2 (admin, governanceLockTagToText GLT_SuperValidator, meta, bob)
   parsed === AS_Vesting with vestingLockKey = targetKey; vestingSpecification = newSpec
 
-testSubstitutionMeta_errors : Script ()
-testSubstitutionMeta_errors = do
+testSubstitutionMeta_failures : Script ()
+testSubstitutionMeta_failures = do
   admin <- allocateParty "admin"
   alice <- allocateParty "alice"
   bob <- allocateParty "bob"
