@@ -3,7 +3,7 @@
 
 sdk-version: 3.5.2
 name: splice-token-test-dummy-holding
-version: 0.0.5
+version: 0.0.6
 source: daml
 dependencies:
   - daml-prim
