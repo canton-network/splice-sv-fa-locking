@@ -5,7 +5,7 @@ module Splice.AmuletConfig where
 
 import DA.Optional
 import DA.Time
-import DA.TextMap
+import DA.TextMap hiding (filter)
 
 import Splice.Fees
 import Splice.DecentralizedSynchronizer
@@ -153,6 +153,7 @@ validAmuletConfig AmuletConfig
     , featuredAppActivityMarkerAmount
     , rewardConfig
     , minDevelopmentFundMintingDelay
+    , governanceLockConfig
     }
   =
     validTransferConfig transferConfig &&
@@ -164,7 +165,8 @@ validAmuletConfig AmuletConfig
     optional True (>= 0.0) featuredAppActivityMarkerAmount &&
     featuredAppActivityMarkerAmount == Some transferConfig.extraFeaturedAppRewardAmount &&
     optional True validRewardConfig rewardConfig &&
-    optional True (>= days 0) minDevelopmentFundMintingDelay
+    optional True (>= days 0) minDevelopmentFundMintingDelay &&
+    optional True validGovernanceLockConfig governanceLockConfig
 
 validTransferConfig : TransferConfig unit -> Bool
 validTransferConfig TransferConfig
@@ -250,6 +252,44 @@ data GovernanceLockConfig = GovernanceLockConfig with
       -- Default: Refer to table in CIP-0105 section 5.
   deriving (Show, Eq, Serializable)
 
+validGovernanceLockConfig : GovernanceLockConfig -> Bool
+validGovernanceLockConfig GovernanceLockConfig
+    { minimumLockAmount
+    , superValidatorLockVestingDuration
+    , featuredAppLockVestingDuration
+    , searchTimeGranularity
+    , featuredAppLockThreshold
+    , featuredAppUnderlockGracePeriod
+    , superValidatorUnderlockEnforcementActivatesAt
+    , superValidatorUnderlockTemporaryGracePeriod
+    , superValidatorUnderlockPermanentGracePeriod
+    , superValidatorWeightSchedule
+    }
+  =
+    optional True validSuperValidatorWeightSchedule superValidatorWeightSchedule
+    && optional True (> days 0) superValidatorUnderlockTemporaryGracePeriod
+    && optional True (> days 0) superValidatorUnderlockPermanentGracePeriod
+    && validGracePeriodTimes superValidatorUnderlockTemporaryGracePeriod superValidatorUnderlockPermanentGracePeriod
+    where
+      -- Assume first is temp
+      validGracePeriodTimes (Some tempPeriod) (Some permanentPeriod) = tempPeriod <= permanentPeriod
+      validGracePeriodTimes _ _ = True
+
+
+validSuperValidatorWeightSchedule : Schedule RelTime [SvLockingTier] -> Bool
+validSuperValidatorWeightSchedule schedule = ((allValues schedule) /= [])
+  && all validateSvLockingTier schedule.initialValue
+  && (all (\(_, tier) -> all validateSvLockingTier tier) schedule.futureValues)
+  where
+    validateSvLockingTier : SvLockingTier -> Bool
+    validateSvLockingTier (SvLockingTier minLockedFraction rewardWeightFactor) =
+      validMinLockedFraction minLockedFraction
+      && validRewardWeightFactor rewardWeightFactor
+    validMinLockedFraction : Decimal -> Bool
+    validMinLockedFraction val = 0.0 <= val && val <= 1.0
+    validRewardWeightFactor : Decimal -> Bool
+    validRewardWeightFactor val = 0.0 < val && val <= 1.0
+
 getGovernanceLockConfigValue : a -> (GovernanceLockConfig -> Optional a) -> Optional GovernanceLockConfig -> a
 getGovernanceLockConfigValue defaultValue getValue config = fromOptional defaultValue $ config >>= getValue
 
@@ -295,6 +335,12 @@ defaultSvWeightSchedule = Schedule with
   where
     tier = SvLockingTier
     years n = days (365 * n) + hours (6 * n) -- 365.25 days a year
+
+svLockingWeightFactor : [SvLockingTier] -> Decimal -> Decimal -> Decimal
+svLockingWeightFactor tiers lifetimeRewardTotal lockedAmount =
+  case filter (\t -> lockedAmount >= t.minLockedFraction * lifetimeRewardTotal) tiers of
+    t :: _ -> t.rewardWeightFactor
+    [] -> 0.0
 
 instance Patchable RewardVersion where
   patch = patchScalar
