@@ -94,6 +94,9 @@ withdrawSubstitutionV2 : TestEnv -> ContractId V2.AllocationInstruction -> Party
 withdrawSubstitutionV2 env cid actor =
   WalletClientV2.tryWithdrawAllocationInstructionV2 env.registries actor env.instrId.admin cid
 
+substitutionRequestMetadata : Metadata
+substitutionRequestMetadata = Metadata $ TextMap.singleton requestMetaKey governanceLockRequestSubstituteLock
+
 -- | Checks that the `allocation.meta` of a substitution proposal view contains the encoded target.
 expectTargetInAllocationMeta : Metadata -> V2.AllocationSpecification -> Script ()
 expectTargetInAllocationMeta targetMeta allocation =
@@ -107,7 +110,7 @@ expectSubstitutionAllocation targetMeta allocation newLockAllocation = do
   let withoutMemo meta = Metadata $ TextMap.delete reasonMetaKey meta.values
       memoFields meta = parseGovernanceLockMetadata @(Either Text) $ Metadata $ TextMap.singleton reasonMetaKey (reasonFromMeta meta)
   (allocation with meta = withoutMemo allocation.meta) === newLockAllocation with
-    meta = withoutMemo $ newLockAllocation.meta <> substitutionRequestMetadata <> targetMeta
+    meta = withoutMemo $ newLockAllocation.meta <> substitutionAcceptRequestMetadata <> targetMeta
   memoFields allocation.meta === ((<>) substitutionAcceptRequestMetadata <$> memoFields newLockAllocation.meta)
 
 expectInstructionPending : V2.AllocationInstructionResult -> Script (ContractId V2.AllocationInstruction)
@@ -720,34 +723,3 @@ testSubstitutionV1_vestingTarget = do
   newLock.endTime === vestingLock.endTime
   newLock.specification === newSpec
   WalletClientV2.checkUnlockedBalance alice instrId 20000.0
-
--- | Passing the `transfer` of the TSv1 view of a proposal to `TransferFactory_Transfer`, with
--- `lockManagerParty` as the receiver, proposes the same substitution.
-testSubstitutionV1_transferFactoryRoundTrip : Script ()
-testSubstitutionV1_transferFactoryRoundTrip = do
-  (TestEnv{..}, _, _, _, substitutionCid) <- setupRawSubstitution
-  let registry = registriesEnv.amuletV2
-  AmuletRegistryV2.tapFaucet registry bob 20000.0
-  Some transferView <- queryInterfaceContractId bob (asTransferInstruction substitutionCid)
-  Some substitution <- queryContractId bob (fromInterfaceContractId @GovernanceLockSubstitution substitutionCid)
-
-  now <- getTime
-  inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob instrId
-  (rulesCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
-  result <- expectSuccess $ submitWithTransferContext registry (actAs bob <> discloseMany' disc) \context ->
-    exerciseCmd (toInterfaceContractId @V1.TransferFactory rulesCid) V1.TransferFactory_Transfer with
-      expectedAdmin = instrId.admin
-      transfer = transferView.transfer with
-        receiver = lockManagerParty
-        requestedAt = now
-        inputHoldingCids = map downcast inputHoldingCids
-      extraArgs = emptyExtraArgs with context
-  newCid <- expectTransferPending result
-
-  Some newView <- queryInterfaceContractId bob newCid
-  newView.transfer.meta === transferView.transfer.meta
-  newView.transfer.receiver === alice
-  newView.transfer.amount === transferView.transfer.amount
-  Some newSubstitution <- queryContractId bob (fromInterfaceContractId @GovernanceLockSubstitution newCid)
-  newSubstitution.target === substitution.target
-  newSubstitution.newLockSpecification === substitution.newLockSpecification

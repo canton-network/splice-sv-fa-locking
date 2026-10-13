@@ -881,9 +881,7 @@ vestingLockSubstitution_withdrawImpl _self this actors = do
 
 -- | View of a substitution proposal. `settlement` and `allocation` have the same shape as the
 -- `V2.AllocationView` of the lock that the proposal creates when it is accepted, except that
--- `allocation.meta` also contains the substitution request and the encoded target, with the same
--- prefixed keys that `AllocationFactory_Allocate` uses to request a substitution and specify the target.
--- This way `settlement` and `allocation` can be passed to `AllocationFactory_Allocate` to propose the same substitution.
+-- `allocation.meta` also contains the substitution request and the encoded target.
 substitution_allocationView
   :  Party -- ^ Registry admin.
   -> Party -- ^ Owner of the target lock.
@@ -922,13 +920,9 @@ substitution_allocationView admin targetOwner kind memo proposer amount newLockM
 
 -- | Metadata of a substitution proposal: the metadata of the new lock, plus the substitution request
 -- and the encoded target, with `memo` as the reason.
---
--- The `substitute-lock` request in the metadata takes precedence over the `accept-to-substitute-lock`
--- request in the memo when parsed, so the metadata can be passed back to the factories to propose the
--- same substitution.
 substitution_allocationMeta : Text -> Metadata -> Metadata -> Metadata
 substitution_allocationMeta memo newLockMeta targetMeta =
-  reasonToMeta memo $ newLockMeta <> substitutionRequestMetadata <> targetMeta
+  reasonToMeta memo $ newLockMeta <> substitutionAcceptRequestMetadata <> targetMeta
 
 data SubstitutionTransferInstructionViewArgs = SubstitutionTransferInstructionViewArgs with
   admin : Party
@@ -941,9 +935,7 @@ data SubstitutionTransferInstructionViewArgs = SubstitutionTransferInstructionVi
   lockedAmulet : ContractId LockedAmulet
   originalSubstitutionCid : Optional (ContractId V2.AllocationInstruction)
 
--- | TSv1 view of a substitution proposal. `transfer.meta` is equal to `allocation.meta` of the TSv2 view,
--- so that `transfer` can be passed to `TransferFactory_Transfer` to propose the same substitution,
--- except for `receiver`.
+-- | TSv1 view of a substitution proposal. `transfer.meta` is equal to `allocation.meta` of the TSv2 view.
 --
 -- The receiver is the owner of the target lock, instead of `lockManagerParty`, so that the owner of the
 -- target lock can accept the proposal with `TransferInstruction_Accept`.
@@ -979,9 +971,6 @@ substitutionTransferResult_failed unlockedAmulet = V1.TransferInstructionResult 
   output = V1.TransferInstructionResult_Failed
   senderChangeCids = [toInterfaceContractId unlockedAmulet]
   meta = emptyMetadata
-
-substitutionRequestMetadata : Metadata
-substitutionRequestMetadata = Metadata $ TextMap.singleton requestMetaKey governanceLockRequestSubstituteLock
 
 -- | Request in the memo of a substitution proposal, which the owner of the target lock accepts.
 substitutionAcceptRequestMetadata : Metadata
