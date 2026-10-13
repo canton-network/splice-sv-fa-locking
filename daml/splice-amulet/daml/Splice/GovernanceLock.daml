@@ -192,6 +192,17 @@ template GovernanceLock
       do
         governanceLock_splitForSubstitutionImpl self this splitAmount newSpecification extraArgs
 
+    choice GovernanceLock_DsoTransfer : GovernanceLock_DsoTransferResult
+      -- ^ Release `transferredAmount` of the locked funds as part of an approved transfer.
+      -- The accept step of a `GovernanceLockTransfer` calls this choice, and locks the unlocked
+      -- funds again for the receiver, as only that step has the receiver's authority.
+      with
+        transferredAmount : Decimal
+        extraArgs : ExtraArgs
+      controller dso
+      do
+        governanceLock_transferImpl self this transferredAmount extraArgs
+
     interface instance V1.TransferInstruction for GovernanceLock where
       view = V1.TransferInstructionView with
           originalInstructionCid = toInterfaceContractId . (fromAnyContractId @GovernanceLock) <$> originalLockCid
@@ -387,6 +398,17 @@ template VestingLock
       controller dso
       do
         vestingLock_splitForSubstitutionImpl self this splitAmount newSpecification extraArgs
+
+    choice VestingLock_DsoTransfer : VestingLock_DsoTransferResult
+      -- ^ Release `transferredAmount` of the locked funds as part of an approved transfer.
+      -- The accept step of a `VestingLockTransfer` calls this choice, and locks the unlocked
+      -- funds again for the receiver, as only that step has the receiver's authority.
+      with
+        transferredAmount : Decimal
+        extraArgs : ExtraArgs
+      controller dso
+      do
+        vestingLock_transferImpl self this transferredAmount extraArgs
 
     interface instance V1.TransferInstruction for VestingLock where
       view = V1.TransferInstructionView with
@@ -1289,6 +1311,43 @@ data LockTransferArgs lockKey = LockTransferArgs with
     extraArgs : ExtraArgs
   deriving (Eq, Show, Serializable)
 
+data TransferTransferInstructionViewArgs lockKey = TransferTransferInstructionViewArgs with
+  transfer : LockTransfer lockKey
+  expiresAt : Time
+
+transfer_transferInstructionView : LockKeyForOwner lockKey => TransferTransferInstructionViewArgs lockKey -> V1.TransferInstructionView
+transfer_transferInstructionView TransferTransferInstructionViewArgs{..} =
+  V1.TransferInstructionView with
+    originalInstructionCid = None -- implement and use `originalTransferCid` when adding custom controllers
+    transfer = V1.Transfer with
+      sender = lockKeyOwner transfer
+      receiver = transfer.receiver
+      amount = transfer.amount
+      instrumentId = amuletInstrumentId (lockKeyDso transfer)
+      requestedAt = transfer.requestedAt
+      executeBefore = expiresAt
+      inputHoldingCids = []
+      meta = emptyMetadata
+    status = V1.TransferPendingInternalWorkflow with
+      pendingActions = Map.fromListWithR (\x y -> x <> "; " <> y)
+        [(transfer.receiver, "accept transfer; reject transfer"), (lockKeyOwner transfer, "withdraw transfer")]
+    meta = emptyMetadata
+
+transferTransferResult_completed : ContractId LockedAmulet -> V1.TransferInstructionResult
+transferTransferResult_completed lockedAmulet = V1.TransferInstructionResult with
+  output = V1.TransferInstructionResult_Completed with
+    receiverHoldingCids = [toInterfaceContractId lockedAmulet]
+  senderChangeCids = []
+  meta = emptyMetadata
+
+transferTransferResult_failed : V1.TransferInstructionResult
+transferTransferResult_failed = V1.TransferInstructionResult with
+  output = V1.TransferInstructionResult_Failed
+  senderChangeCids = []
+  meta = emptyMetadata
+
+transferTransferUpdateUnsupported = "Transfers representing governance lock transfers cannot be updated"
+
 -- | A proposal by the owner of `GovernanceLock`s to transfer all or part of
 -- them to a new owner. The proposal holds no funds: on accept, the locks
 -- matching `transfer.source` are resolved by key, merged and split.
@@ -1302,7 +1361,47 @@ template GovernanceLockTransfer with
     observer transfer.receiver
     ensure isValidLockTransfer transfer
 
-    -- TODO(canton-network/splice-sv-fa-locking#105): implement `V1.TransferInstruction` to accept, reject and withdraw.
+    choice GovernanceLockTransfer_Accept : GovernanceLockTransfer_AcceptResult
+      with
+        actors : [Party]
+        extraArgs : ExtraArgs
+      controller actors
+      do
+        governanceLockTransfer_acceptImpl self this actors extraArgs
+
+    choice GovernanceLockTransfer_Withdraw : GovernanceLockTransfer_WithdrawResult
+      with
+        actors : [Party]
+      controller actors
+      do
+        governanceLockTransfer_withdrawImpl this actors
+
+    choice GovernanceLockTransfer_Reject : GovernanceLockTransfer_RejectResult
+      with
+        actors : [Party]
+      controller actors
+      do
+        governanceLockTransfer_rejectImpl this actors
+
+    interface instance V1.TransferInstruction for GovernanceLockTransfer where
+      view = transfer_transferInstructionView TransferTransferInstructionViewArgs with
+        transfer
+        expiresAt
+
+      transferInstruction_acceptImpl self V1.TransferInstruction_Accept{..} = do
+        result <- governanceLockTransfer_acceptImpl (fromInterfaceContractId self) this [transfer.receiver] extraArgs
+        pure $ transferTransferResult_completed result.lockedAmulet
+
+      transferInstruction_rejectImpl _self _arg = do
+        governanceLockTransfer_rejectImpl this [transfer.receiver]
+        pure $ transferTransferResult_failed
+
+      transferInstruction_withdrawImpl _self _arg = do
+        governanceLockTransfer_withdrawImpl this [lockKeyOwner transfer]
+        pure $ transferTransferResult_failed
+
+      transferInstruction_updateImpl _ _ = assertFail transferTransferUpdateUnsupported
+
     -- TODO(canton-network/splice-sv-fa-locking#109): add an expiry choice
     -- controlled by the DSO party.
 
@@ -1321,9 +1420,97 @@ template VestingLockTransfer with
     ensure isValidLockTransfer transfer
       && expiresAt <= transfer.source.endTime
 
-    -- TODO(canton-network/splice-sv-fa-locking#105): implement `V1.TransferInstruction` to accept, reject and withdraw.
+    choice VestingLockTransfer_Accept : VestingLockTransfer_AcceptResult
+      with
+        actors : [Party]
+        extraArgs : ExtraArgs
+      controller actors
+      do
+        vestingLockTransfer_acceptImpl self this actors extraArgs
+
+    choice VestingLockTransfer_Withdraw : VestingLockTransfer_WithdrawResult
+      with
+        actors : [Party]
+      controller actors
+      do
+        vestingLockTransfer_withdrawImpl this actors
+
+    choice VestingLockTransfer_Reject : VestingLockTransfer_RejectResult
+      with
+        actors : [Party]
+      controller actors
+      do
+        vestingLockTransfer_rejectImpl this actors
+
+    interface instance V1.TransferInstruction for VestingLockTransfer where
+      view = transfer_transferInstructionView TransferTransferInstructionViewArgs with
+        transfer
+        expiresAt
+
+      transferInstruction_acceptImpl self V1.TransferInstruction_Accept{..} = do
+        result <- vestingLockTransfer_acceptImpl (fromInterfaceContractId self) this [transfer.receiver] extraArgs
+        pure $ transferTransferResult_completed result.lockedAmulet
+
+      transferInstruction_rejectImpl _self _arg = do
+        vestingLockTransfer_rejectImpl this [transfer.receiver]
+        pure $ transferTransferResult_failed
+
+      transferInstruction_withdrawImpl _self _arg = do
+        vestingLockTransfer_withdrawImpl this [lockKeyOwner transfer]
+        pure $ transferTransferResult_failed
+
+      transferInstruction_updateImpl _ _ = assertFail transferTransferUpdateUnsupported
+
     -- TODO(canton-network/splice-sv-fa-locking#109): add an expiry choice
     -- controlled by the DSO party.
+
+data GovernanceLockTransfer_AcceptResult
+  = GovernanceLockTransfer_AcceptResult with
+    lockCid : ContractId GovernanceLock
+      -- ^ The new lock of the receiver, which holds the transferred funds.
+    remainderCid : Optional (ContractId GovernanceLock)
+      -- ^ The lock of the sender that keeps the funds that were not transferred, if any.
+    lockedAmulet : ContractId LockedAmulet
+      -- ^ The transferred funds, now locked for the owner of the new lock.
+  deriving (Serializable)
+
+data GovernanceLockTransfer_WithdrawResult = GovernanceLockTransfer_WithdrawResult
+  deriving (Serializable)
+
+data GovernanceLockTransfer_RejectResult = GovernanceLockTransfer_RejectResult
+  deriving (Serializable)
+
+data GovernanceLock_DsoTransferResult
+  = GovernanceLock_DsoTransferResult with
+    remainderCid : Optional (ContractId GovernanceLock)
+      -- ^ The lock that keeps the funds that were not transferred, if any.
+    unlockedAmulet : ContractId Amulet
+      -- ^ The transferred funds, returned to the owner of the source lock.
+  deriving (Serializable)
+
+data VestingLockTransfer_AcceptResult
+  = VestingLockTransfer_AcceptResult with
+    lockCid : ContractId VestingLock
+      -- ^ The new lock of the receiver, which holds the transferred funds.
+    remainderCid : Optional (ContractId VestingLock)
+      -- ^ The lock of the sender that keeps the funds that were not transferred, if any.
+    lockedAmulet : ContractId LockedAmulet
+      -- ^ The transferred funds, now locked for the owner of the new lock.
+  deriving (Serializable)
+
+data VestingLockTransfer_WithdrawResult = VestingLockTransfer_WithdrawResult
+  deriving (Serializable)
+
+data VestingLockTransfer_RejectResult = VestingLockTransfer_RejectResult
+  deriving (Serializable)
+
+data VestingLock_DsoTransferResult
+  = VestingLock_DsoTransferResult with
+    remainderCid : Optional (ContractId VestingLock)
+      -- ^ The lock that keeps the funds that were not transferred, if any.
+    unlockedAmulet : ContractId Amulet
+      -- ^ The transferred funds, returned to the owner of the source lock.
+  deriving (Serializable)
 
 -- | Creates a proposal to transfer `amount` of the governance locks with key
 -- `source` from their owner to `receiver`. Requires the authority of the
@@ -1363,6 +1550,145 @@ createVestingLockTransfer LockTransferArgs{transfer, extraArgs} = do
   create VestingLockTransfer with
     transfer
     expiresAt = min maxExpiresAt transfer.source.endTime
+
+governanceLock_transferImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> ExtraArgs -> Update GovernanceLock_DsoTransferResult
+governanceLock_transferImpl self this@GovernanceLock{..} transferredAmount extraArgs = do
+  let forOwner = ForOwner with dso; owner
+  case transferredAmount `compare` amount of
+    LT -> do
+      (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+      (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet transferredAmount context
+      requireMinimumLock state remainingAmount
+      requireMinimumLock state transferredAmount
+      remainderCid <- create this with
+        amount = remainingAmount
+        lockedAmulet = newLockedAmulet
+        originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
+      pure GovernanceLock_DsoTransferResult with
+        remainderCid = Some remainderCid
+        unlockedAmulet
+    EQ -> do
+      (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
+      pure GovernanceLock_DsoTransferResult with
+        remainderCid = None
+        unlockedAmulet
+    GT ->
+      fail $ "transferred lock has less funds (" <> show amount <> ") than the amount proposed to be transferred (" <> show transferredAmount <> ")"
+
+governanceLockTransfer_acceptImpl : ContractId GovernanceLockTransfer -> GovernanceLockTransfer -> [Party] -> ExtraArgs -> Update GovernanceLockTransfer_AcceptResult
+governanceLockTransfer_acceptImpl self GovernanceLockTransfer{..} actors extraArgs = do
+  checkActors actors [[transfer.receiver]]
+  let dso = lockKeyDso transfer
+      source = lockTransferSource transfer
+  (lockCid, _lock) <- fetchByKey @GovernanceLock source
+  result <- exercise lockCid GovernanceLock_DsoTransfer with
+    transferredAmount = transfer.amount
+    extraArgs
+  -- Lock the unlocked funds of the sender again, now for the receiver.
+  -- This needs the authority of the receiver, which is the controller of this choice.
+  (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+  let lockProperties = LockProperties with
+        context = describeGovernanceSpecification source.specification
+        expiresAt = maxBound
+  ([newLockedAmulet], None) <- lockAmuletFor
+    (ForOwner with dso; owner = lockKeyOwner transfer)
+    transfer.receiver
+    [(transfer.amount, lockProperties)]
+    [toInterfaceContractId result.unlockedAmulet]
+    context
+    ""
+  newLockCid <- create GovernanceLock with
+    dso
+    owner = transfer.receiver
+    amount = transfer.amount
+    lockedAmulet = newLockedAmulet
+    specification = source.specification
+    originalLockCid = Some $ toAnyContractId self
+    requestedAt = transfer.requestedAt
+  pure GovernanceLockTransfer_AcceptResult with
+    lockCid = newLockCid
+    remainderCid = result.remainderCid
+    lockedAmulet = newLockedAmulet
+
+governanceLockTransfer_withdrawImpl : GovernanceLockTransfer -> [Party] -> Update GovernanceLockTransfer_WithdrawResult
+governanceLockTransfer_withdrawImpl GovernanceLockTransfer{..} actors = do
+  checkActors actors [[lockKeyOwner transfer]]
+  pure GovernanceLockTransfer_WithdrawResult
+
+governanceLockTransfer_rejectImpl : GovernanceLockTransfer -> [Party] -> Update GovernanceLockTransfer_RejectResult
+governanceLockTransfer_rejectImpl GovernanceLockTransfer{..} actors = do
+  checkActors actors [[transfer.receiver]]
+  pure GovernanceLockTransfer_RejectResult
+
+vestingLock_transferImpl : ContractId VestingLock -> VestingLock -> Decimal -> ExtraArgs -> Update VestingLock_DsoTransferResult
+vestingLock_transferImpl self this@VestingLock{..} transferredAmount extraArgs = do
+  let forOwner = ForOwner with dso; owner
+  case transferredAmount `compare` vestingAmount of
+    LT -> do
+      (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+      (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet transferredAmount context
+      requireMinimumLock state remainingAmount
+      requireMinimumLock state transferredAmount
+      remainderCid <- create this with
+        vestingAmount = remainingAmount
+        lockedAmulet = newLockedAmulet
+        originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
+      pure VestingLock_DsoTransferResult with
+        remainderCid = Some remainderCid
+        unlockedAmulet
+    EQ -> do
+      (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
+      pure VestingLock_DsoTransferResult with
+        remainderCid = None
+        unlockedAmulet
+    GT ->
+      fail $ "transferred lock has less funds (" <> show vestingAmount <> ") than the amount proposed to be transferred (" <> show transferredAmount <> ")"
+
+vestingLockTransfer_acceptImpl : ContractId VestingLockTransfer -> VestingLockTransfer -> [Party] -> ExtraArgs -> Update VestingLockTransfer_AcceptResult
+vestingLockTransfer_acceptImpl self VestingLockTransfer{..} actors extraArgs = do
+  checkActors actors [[transfer.receiver]]
+  let dso = lockKeyDso transfer
+      source = lockTransferSource transfer
+  (lockCid, lock) <- fetchByKey @VestingLock source
+  result <- exercise lockCid VestingLock_DsoTransfer with
+    transferredAmount = transfer.amount
+    extraArgs
+  -- Lock the unlocked funds of the sender again, now for the receiver, until the end of the vesting period.
+  -- This needs the authority of the receiver, which is the controller of this choice.
+  (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+  let lockProperties = LockProperties with
+        context = describeVestingSpecification source.specification
+        expiresAt = lock.endTime
+  ([newLockedAmulet], None) <- lockAmuletFor
+    (ForOwner with dso; owner = lockKeyOwner transfer)
+    transfer.receiver
+    [(transfer.amount, lockProperties)]
+    [toInterfaceContractId result.unlockedAmulet]
+    context
+    ""
+  newLockCid <- create VestingLock with
+    dso
+    owner = transfer.receiver
+    lockedAmulet = newLockedAmulet
+    vestingPeriod = lock.vestingPeriod
+    endTime = lock.endTime
+    vestingAmount = transfer.amount
+    specification = source.specification
+    originalLockCid = Some $ toAnyContractId self
+  pure VestingLockTransfer_AcceptResult with
+    lockCid = newLockCid
+    remainderCid = result.remainderCid
+    lockedAmulet = newLockedAmulet
+
+vestingLockTransfer_withdrawImpl : VestingLockTransfer -> [Party] -> Update VestingLockTransfer_WithdrawResult
+vestingLockTransfer_withdrawImpl VestingLockTransfer{..} actors = do
+  checkActors actors [[lockKeyOwner transfer]]
+  pure VestingLockTransfer_WithdrawResult
+
+vestingLockTransfer_rejectImpl : VestingLockTransfer -> [Party] -> Update VestingLockTransfer_RejectResult
+vestingLockTransfer_rejectImpl VestingLockTransfer{..} actors = do
+  checkActors actors [[transfer.receiver]]
+  pure VestingLockTransfer_RejectResult
 
 -- | Checks shared by different types of lock transfers
 validateLockTransfer
@@ -1438,12 +1764,15 @@ unlockAmulet forOwner lockedAmuletCid = do
   return (unlockResult.amuletCid, (lock.amulet.amount.initialAmount, LockProperties with context = fromOptional "governance" lock.lock.optContext; expiresAt = lock.lock.expiresAt))
 
 lockAmulet : ForOwner -> [LockSpecification] -> [ContractId Holding] -> ExternalPartyTransferContext -> Text -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
-lockAmulet forOwner@ForOwner {..} specs holdingInputs context reasonSuffix = do
+lockAmulet forOwner = lockAmuletFor forOwner forOwner.owner
+
+lockAmuletFor : ForOwner -> Party -> [LockSpecification] -> [ContractId Holding] -> ExternalPartyTransferContext -> Text -> Update ([ContractId LockedAmulet], Optional (ContractId Amulet))
+lockAmuletFor forOwner@ForOwner {..} receiver specs holdingInputs context reasonSuffix = do
   -- lock the amulet
   transferInputsFromHoldings <- holdingToTransferInputs forOwner holdingInputs
   let mkOutput (amount, spec) =
             TransferOutput with
-              receiver = owner
+              receiver
               amount = amount
               receiverFeeRatio = 0.0 -- irrelevant as fees are always zero
               lock = Some TimeLock with
