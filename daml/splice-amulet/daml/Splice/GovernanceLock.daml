@@ -1246,8 +1246,7 @@ createSubstitution CreateSubstitutionArgs {..} = do
 -- ========
 
 -- | The terms of a lock transfer: how much of the sender's locks moves to the
--- receiver. Stored as the `transfer` field of both lock transfer proposal
--- templates.
+-- receiver. A shared part of both vesting and governance lock transfers.
 data LockTransfer = LockTransfer with
     dso : Party
     sender : Party
@@ -1285,8 +1284,7 @@ template GovernanceLockTransfer with
     source : GovernanceLockKey
       -- ^ Source locks, to be resolved by key on accept.
     expiresAt : Time
-      -- ^ Set by `createGovernanceLockTransfer`: `requestedAt` plus the
-      -- `tokenStandardMaxTTL` config.
+      -- ^ When the transfer proposal expires.
   where
     signatory transfer.dso, transfer.sender
     observer transfer.receiver
