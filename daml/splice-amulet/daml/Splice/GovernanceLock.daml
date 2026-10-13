@@ -403,7 +403,7 @@ template VestingLock
           holdingCids = [toInterfaceContractId lockedAmulet]
           createdAt = endTime `addRelTime` (- vestingPeriod)
           numIterations = 0
-          expiresAt = Some maxBound
+          expiresAt = Some endTime
           availableActions = Map.singleton V2.AA_Withdraw [[owner]]
           meta = emptyMetadata
       allocation_settleImpl _ _ = assertFail "Allocations representing vesting locks cannot be settled"
