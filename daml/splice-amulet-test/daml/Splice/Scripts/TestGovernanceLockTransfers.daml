@@ -17,39 +17,37 @@ import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 
--- | Proposes, as `proposer`, a transfer of the governance locks with key
--- `source` through `ExternalPartyAmuletRules_ProposeGovernanceLockTransfer`.
+-- | Proposes, as `proposer`, a transfer of governance locks through
+-- `ExternalPartyAmuletRules_ProposeGovernanceLockTransfer`.
 createGovernanceLockTransferRaw
-  :  TestEnv -> Party -> LockTransfer -> GovernanceLockKey
+  :  TestEnv -> Party -> LockTransfer GovernanceLockKey
   -> Script (Either SubmitError (ContractId GovernanceLockTransfer))
-createGovernanceLockTransferRaw env proposer transfer source = do
+createGovernanceLockTransferRaw env proposer transfer = do
   (rulesCid, disc) <-
     AmuletRegistryV2.getExtAmuletRulesWithDisclosures env.registriesEnv.amuletV2
   result <- submitWithTransferContext env.registriesEnv.amuletV2
     (actAs proposer <> discloseMany' disc) \context ->
       exerciseCmd rulesCid
         ExternalPartyAmuletRules_ProposeGovernanceLockTransfer with
-          args = GovernanceLockTransferArgs with
+          args = LockTransferArgs with
             transfer
-            source
             extraArgs = emptyExtraArgs with context
   pure $ fmap (.proposal) result
 
--- | Proposes, as `proposer`, a transfer of the vesting locks with key `source`
--- through `ExternalPartyAmuletRules_ProposeVestingLockTransfer`.
+-- | Proposes, as `proposer`, a transfer of vesting locks through
+-- `ExternalPartyAmuletRules_ProposeVestingLockTransfer`.
 createVestingLockTransferRaw
-  :  TestEnv -> Party -> LockTransfer -> VestingLockKey
+  :  TestEnv -> Party -> LockTransfer VestingLockKey
   -> Script (Either SubmitError (ContractId VestingLockTransfer))
-createVestingLockTransferRaw env proposer transfer source = do
+createVestingLockTransferRaw env proposer transfer = do
   (rulesCid, disc) <-
     AmuletRegistryV2.getExtAmuletRulesWithDisclosures env.registriesEnv.amuletV2
   result <- submitWithTransferContext env.registriesEnv.amuletV2
     (actAs proposer <> discloseMany' disc) \context ->
       exerciseCmd rulesCid
         ExternalPartyAmuletRules_ProposeVestingLockTransfer with
-          args = VestingLockTransferArgs with
+          args = LockTransferArgs with
             transfer
-            source
             extraArgs = emptyExtraArgs with context
   pure $ fmap (.proposal) result
 
@@ -58,14 +56,13 @@ createVestingLockTransferRaw env proposer transfer source = do
 lockTransferTTL : RelTime
 lockTransferTTL = days 90
 
--- | Terms of a valid transfer of `amount` from `sender` to `receiver`,
--- requested now.
-validLockTransfer : TestEnv -> Party -> Party -> Decimal -> Script LockTransfer
-validLockTransfer env sender receiver amount = do
+-- | Terms of a valid transfer of `amount` of the locks with key `source` to
+-- `receiver`, requested now.
+validLockTransfer : lockKey -> Party -> Decimal -> Script (LockTransfer lockKey)
+validLockTransfer source receiver amount = do
   now <- getTime
   pure LockTransfer with
-    dso = env.instrId.admin
-    sender
+    source
     receiver
     amount
     requestedAt = now
@@ -142,15 +139,14 @@ testLockTransferRaw_governanceLock = do
   checkBalances env alice (1000.0, 100000.0)
   checkBalances env bob (0.0, 0.0)
 
-  transfer <- validLockTransfer env alice bob 40000.0
+  transfer <- validLockTransfer (key lock) bob 40000.0
   transferCid <- expectSuccess $
-    createGovernanceLockTransferRaw env alice transfer (key lock)
+    createGovernanceLockTransferRaw env alice transfer
 
   -- The proposal stores the terms and the source key as given, and expires 90
   -- days after `requestedAt`.
   let expected = GovernanceLockTransfer with
         transfer
-        source = key lock
         expiresAt = transfer.requestedAt `addRelTime` lockTransferTTL
   forA_ [alice, bob, instrId.admin] \p -> do
     governanceLockTransfer <- queryContractId p transferCid
@@ -159,7 +155,7 @@ testLockTransferRaw_governanceLock = do
   -- The expiry counts from `requestedAt`, not from the time of creation.
   let earlierTransfer = transfer with requestedAt = transfer.requestedAt `addRelTime` hours (-12)
   earlierTransferCid <- expectSuccess $
-    createGovernanceLockTransferRaw env alice earlierTransfer (key lock)
+    createGovernanceLockTransferRaw env alice earlierTransfer
   Some earlierGovernanceLockTransfer <- queryContractId bob earlierTransferCid
   earlierGovernanceLockTransfer.expiresAt ===
     earlierTransfer.requestedAt `addRelTime` lockTransferTTL
@@ -172,9 +168,9 @@ testLockTransferRaw_governanceLock = do
 
   -- A proposal for the full amount can be created for the same lock: proposals
   -- do not reserve funds.
-  fullTransfer <- validLockTransfer env alice bob 100000.0
+  fullTransfer <- validLockTransfer (key lock) bob 100000.0
   _ <- expectSuccess $
-    createGovernanceLockTransferRaw env alice fullTransfer (key lock)
+    createGovernanceLockTransferRaw env alice fullTransfer
   checkLockUntouched alice lockCid lock
   checkBalances env alice (1000.0, 100000.0)
 
@@ -191,25 +187,24 @@ testLockTransferRaw_vestingLock = do
   now <- getTime
   assertMsg "the SV vesting lock must end after the transfer expiry" $
     vestingLock.endTime > now `addRelTime` lockTransferTTL
-  transfer <- validLockTransfer env alice bob 30000.0
+  transfer <- validLockTransfer (key vestingLock) bob 30000.0
   transferCid <- expectSuccess $
-    createVestingLockTransferRaw env alice transfer (key vestingLock)
+    createVestingLockTransferRaw env alice transfer
   vestingLockTransfer <- queryContractId bob transferCid
   vestingLockTransfer === Some VestingLockTransfer with
     transfer
-    source = key vestingLock
     expiresAt = transfer.requestedAt `addRelTime` lockTransferTTL
 
   -- A source lock that ends within 90 days:
   -- the proposal expires at its `endTime`.
   assertMsg "the FA vesting lock must end before the transfer expiry" $
     faVestingLock.endTime < now `addRelTime` lockTransferTTL
+  let faTransfer = transfer with source = key faVestingLock
   faTransferCid <- expectSuccess $
-    createVestingLockTransferRaw env alice transfer (key faVestingLock)
+    createVestingLockTransferRaw env alice faTransfer
   faVestingLockTransfer <- queryContractId bob faTransferCid
   faVestingLockTransfer === Some VestingLockTransfer with
-    transfer
-    source = key faVestingLock
+    transfer = faTransfer
     expiresAt = faVestingLock.endTime
 
   -- No funds move, and the source locks are untouched.
@@ -226,7 +221,6 @@ testLockTransferRaw_keyWithoutLock : Script ()
 testLockTransferRaw_keyWithoutLock = do
   env@TestEnv{..} <- setupTest
   now <- getTime
-  transfer <- validLockTransfer env alice bob 40000.0
   let governanceKey = GovernanceLockKey with
         dso = instrId.admin
         owner = alice
@@ -238,10 +232,12 @@ testLockTransferRaw_keyWithoutLock = do
         specification = governanceToVestingSpecification governanceKey.specification
         vestingPeriod = days 365
         endTime = now `addRelTime` days 100
+  governanceTransfer <- validLockTransfer governanceKey bob 40000.0
   governanceTransferCid <- expectSuccess $
-    createGovernanceLockTransferRaw env alice transfer governanceKey
+    createGovernanceLockTransferRaw env alice governanceTransfer
+  vestingTransfer <- validLockTransfer vestingKey bob 40000.0
   vestingTransferCid <- expectSuccess $
-    createVestingLockTransferRaw env alice transfer vestingKey
+    createVestingLockTransferRaw env alice vestingTransfer
   Some _ <- queryContractId bob governanceTransferCid
   Some _ <- queryContractId bob vestingTransferCid
   -- Nothing was locked or moved.

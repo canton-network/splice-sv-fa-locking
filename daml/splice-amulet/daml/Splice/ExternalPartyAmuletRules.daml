@@ -180,8 +180,8 @@ template ExternalPartyAmuletRules
     nonconsuming choice ExternalPartyAmuletRules_ProposeGovernanceLockTransfer
       : ExternalPartyAmuletRules_ProposeGovernanceLockTransferResult
       with
-        args : GovernanceLockTransferArgs
-      controller args.transfer.sender
+        args : LockTransferArgs GovernanceLockKey
+      controller lockKeyOwner args.transfer
       do
         proposal <- createGovernanceLockTransfer args
         pure ExternalPartyAmuletRules_ProposeGovernanceLockTransferResult with
@@ -190,8 +190,8 @@ template ExternalPartyAmuletRules
     nonconsuming choice ExternalPartyAmuletRules_ProposeVestingLockTransfer
       : ExternalPartyAmuletRules_ProposeVestingLockTransferResult
       with
-        args : VestingLockTransferArgs
-      controller args.transfer.sender
+        args : LockTransferArgs VestingLockKey
+      controller lockKeyOwner args.transfer
       do
         proposal <- createVestingLockTransfer args
         pure ExternalPartyAmuletRules_ProposeVestingLockTransferResult with
