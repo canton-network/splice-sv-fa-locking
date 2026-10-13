@@ -248,7 +248,7 @@ template GovernanceLock
 governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_UnlockResult
 governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount vestingStartTime actors context state
     = do
-        checkActors actors [[owner]] -- remove when implementing custom controllers
+        checkActors actors [[owner]]
         assertWithinDeadline "vestingStartTime" vestingStartTime
         assertDeadlineExceeded "vestingStartTime - 1 day" (vestingStartTime `addRelTime` days (-1))
         require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", amount)
@@ -430,7 +430,7 @@ template VestingLock
 vestingLock_withdrawImpl : ContractId VestingLock -> VestingLock -> Time -> [Party] -> ExternalPartyTransferContext -> Update VestingLock_WithdrawResult
 vestingLock_withdrawImpl _self this@(VestingLock {..}) requestedAt actors context
     = do
-        checkActors actors [[owner]] -- remove when implementing custom controllers
+        checkActors actors [[owner]]
         assertDeadlineExceeded "requestedAt" requestedAt
         let unvestedAmount = calculateUnvestedAmount requestedAt this
 
@@ -826,7 +826,7 @@ vestingLock_substituteImpl self this@VestingLock{..} substitutedAmount extraArgs
 
 governanceLockSubstitution_acceptImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> ExtraArgs -> Update GovernanceLockSubstitution_AcceptResult
 governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors extraArgs = do
-  checkActors actors [[target.owner]] -- remove when implementing custom controllers
+  checkActors actors [[target.owner]]
   (lockCid, _lock) <- fetchByKey @GovernanceLock target
   substituteResult <- exercise lockCid GovernanceLock_DsoSubstitute with
     substitutedAmount = amount
@@ -846,7 +846,7 @@ governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors
 
 vestingLockSubstitution_acceptImpl : ContractId VestingLockSubstitution -> VestingLockSubstitution -> [Party] -> ExtraArgs -> Update VestingLockSubstitution_AcceptResult
 vestingLockSubstitution_acceptImpl self VestingLockSubstitution{..} actors extraArgs = do
-  checkActors actors [[target.owner]] -- remove when implementing custom controllers
+  checkActors actors [[target.owner]]
   (lockCid, lock) <- fetchByKey @VestingLock target
   substituteResult <- exercise lockCid VestingLock_DsoSubstitute with
     substitutedAmount = amount
@@ -867,13 +867,13 @@ vestingLockSubstitution_acceptImpl self VestingLockSubstitution{..} actors extra
 
 governanceLockSubstitution_withdrawImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> Update GovernanceLockSubstitution_WithdrawResult
 governanceLockSubstitution_withdrawImpl _self this actors = do
-  checkActors actors [[this.owner]] -- remove when implementing custom controllers
+  checkActors actors [[this.owner]]
   (unlockedAmulet, _) <- unlockAmulet (ForOwner with dso = this.target.dso; owner = this.owner) this.lockedAmulet
   pure $ GovernanceLockSubstitution_WithdrawResult unlockedAmulet
 
 vestingLockSubstitution_withdrawImpl : ContractId VestingLockSubstitution -> VestingLockSubstitution -> [Party] -> Update VestingLockSubstitution_WithdrawResult
 vestingLockSubstitution_withdrawImpl _self this actors = do
-  checkActors actors [[this.owner]] -- remove when implementing custom controllers
+  checkActors actors [[this.owner]]
   (unlockedAmulet, _) <- unlockAmulet (ForOwner with dso = this.target.dso; owner = this.owner) this.lockedAmulet
   pure $ VestingLockSubstitution_WithdrawResult unlockedAmulet
 
