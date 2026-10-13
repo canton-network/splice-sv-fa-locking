@@ -1369,7 +1369,6 @@ validateLockTransfer transfer = do
   assertWithinDeadline "requestedAt + 1 day" $ transfer.requestedAt `addRelTime` days 1
   require' ("receiver", transfer.receiver)
     (notR isEqualR) ("sender", lockKeyOwner transfer)
-  require' ("receiver", transfer.receiver) (notR isEqualR) ("lock manager party", lockManagerParty)
   -- Not checked against the minimum lock amount: CIP-0127 exempts actions that
   -- archive the existing locks and produce a single new lock, so only partial
   -- transfers must meet it, and whether a transfer is partial will be known
