@@ -596,7 +596,6 @@ data VestingLockKey = VestingLockKey with
 -- | A proposal for a substitution of a governance lock.
 template GovernanceLockSubstitution with
     target : GovernanceLockKey
-    newLockSpecification : GovernanceLockSpecification
     owner : Party -- ^ Party that proposed the substitution
     amount : Decimal -- ^ Amount being substituted
     lockedAmulet : Optional (ContractId LockedAmulet)
@@ -606,10 +605,9 @@ template GovernanceLockSubstitution with
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
     signatory target.dso, owner
-    observer target.owner, governanceLockKindObservers target.specification.kind, governanceLockKindObservers newLockSpecification.kind
-    ensure target.specification.kind == newLockSpecification.kind
-      -- A proposal by the target lock owner is funded by the target lock, not by `lockedAmulet`
-      && (if owner == target.owner then isNone lockedAmulet else True)
+    observer target.owner, governanceLockKindObservers target.specification.kind
+    -- A proposal by the target lock owner is funded by the target lock, not by `lockedAmulet`
+    ensure if owner == target.owner then isNone lockedAmulet else True
 
     choice GovernanceLockSubstitution_Accept : GovernanceLockSubstitution_AcceptResult
       with
@@ -644,8 +642,8 @@ template GovernanceLockSubstitution with
       -- Mirrors the metadata that the `GovernanceLock` created on acceptance will report through its own
       -- `V2.Allocation` view, so that `AllocationView.allocation` only loses the substitution request,
       -- the encoded target, and the accept request in the memo on acceptance.
-      view = substitution_allocationView target.dso target.owner target.specification.kind (substitutionGovernanceLockCompatMemo newLockSpecification)
-        owner amount (encodeGovernanceLockSpecMetadata newLockSpecification) requestedAt expiresAt lockedAmulet originalSubstitutionCid
+      view = substitution_allocationView target.dso target.owner target.specification.kind (substitutionGovernanceLockCompatMemo target.specification)
+        owner amount (encodeGovernanceLockSpecMetadata target.specification) requestedAt expiresAt lockedAmulet originalSubstitutionCid
         (encodeGovernanceLockSubstitutionTargetMetadata target)
 
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
@@ -667,8 +665,8 @@ template GovernanceLockSubstitution with
         targetOwner = target.owner
         proposer = owner
         amount
-        meta = substitution_allocationMeta (substitutionGovernanceLockCompatMemo newLockSpecification)
-          (encodeGovernanceLockSpecMetadata newLockSpecification) (encodeGovernanceLockSubstitutionTargetMetadata target)
+        meta = substitution_allocationMeta (substitutionGovernanceLockCompatMemo target.specification)
+          (encodeGovernanceLockSpecMetadata target.specification) (encodeGovernanceLockSubstitutionTargetMetadata target)
         requestedAt
         expiresAt
         lockedAmulet
@@ -687,7 +685,6 @@ template GovernanceLockSubstitution with
 
 template VestingLockSubstitution with
     target : VestingLockKey
-    newLockSpecification : VestingLockSpecification
     owner : Party -- ^ Party that proposed the substitution
     amount : Decimal -- ^ Amount being substituted
     lockedAmulet : Optional (ContractId LockedAmulet)
@@ -699,10 +696,9 @@ template VestingLockSubstitution with
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
     signatory target.dso, owner
-    observer target.owner, governanceLockKindObservers target.specification.kind, governanceLockKindObservers newLockSpecification.kind
-    ensure target.specification.kind == newLockSpecification.kind
-      -- A proposal by the target lock owner is funded by the target lock, not by `lockedAmulet`
-      && (if owner == target.owner then isNone lockedAmulet else True)
+    observer target.owner, governanceLockKindObservers target.specification.kind
+    -- A proposal by the target lock owner is funded by the target lock, not by `lockedAmulet`
+    ensure if owner == target.owner then isNone lockedAmulet else True
 
     choice VestingLockSubstitution_Accept : VestingLockSubstitution_AcceptResult
       with
@@ -738,8 +734,8 @@ template VestingLockSubstitution with
       -- `V2.Allocation` view, except for the accept request in the memo. The new lock keeps the vesting
       -- period and end time of the target.
       view = substitution_allocationView target.dso target.owner target.specification.kind
-        (substitutionVestingLockCompatMemo newLockSpecification target.vestingPeriod target.endTime)
-        owner amount (encodeVestingLockSpecMetadata newLockSpecification target.vestingPeriod target.endTime)
+        (substitutionVestingLockCompatMemo target.specification target.vestingPeriod target.endTime)
+        owner amount (encodeVestingLockSpecMetadata target.specification target.vestingPeriod target.endTime)
         requestedAt expiresAt lockedAmulet originalSubstitutionCid (encodeVestingLockSubstitutionTargetMetadata target)
       allocationInstruction_acceptImpl self V2.AllocationInstruction_Accept{..} = do
         -- `AllocationInstruction_Accept` is nonconsuming, so archive here
@@ -761,8 +757,8 @@ template VestingLockSubstitution with
         proposer = owner
         amount
         meta = substitution_allocationMeta
-          (substitutionVestingLockCompatMemo newLockSpecification target.vestingPeriod target.endTime)
-          (encodeVestingLockSpecMetadata newLockSpecification target.vestingPeriod target.endTime)
+          (substitutionVestingLockCompatMemo target.specification target.vestingPeriod target.endTime)
+          (encodeVestingLockSpecMetadata target.specification target.vestingPeriod target.endTime)
           (encodeVestingLockSubstitutionTargetMetadata target)
         requestedAt
         expiresAt
@@ -972,7 +968,7 @@ governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors
       -- The proposer is the owner of the target lock, so the target lock funds the new lock
       splitResult <- exercise lockCid GovernanceLock_DsoSplitForSubstitution with
         splitAmount = amount
-        newSpecification = newLockSpecification
+        newSpecification = target.specification
         extraArgs
       pure (splitResult.splitAmulet, splitResult.remainderCid, None)
   newLockCid <- create GovernanceLock with
@@ -980,7 +976,7 @@ governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors
     owner
     amount
     lockedAmulet = newLockedAmulet
-    specification = newLockSpecification
+    specification = target.specification
     originalLockCid = Some $ toAnyContractId self
     requestedAt = requestedAt
   pure GovernanceLockSubstitution_AcceptResult with
@@ -1002,7 +998,7 @@ vestingLockSubstitution_acceptImpl self VestingLockSubstitution{..} actors extra
       -- The proposer is the owner of the target lock, so the target lock funds the new lock
       splitResult <- exercise lockCid VestingLock_DsoSplitForSubstitution with
         splitAmount = amount
-        newSpecification = newLockSpecification
+        newSpecification = target.specification
         extraArgs
       pure (splitResult.splitAmulet, splitResult.remainderCid, None)
   newLockCid <- create VestingLock with
@@ -1012,7 +1008,7 @@ vestingLockSubstitution_acceptImpl self VestingLockSubstitution{..} actors extra
     lockedAmulet = newLockedAmulet
     vestingPeriod = lock.vestingPeriod
     endTime = lock.endTime
-    specification = newLockSpecification
+    specification = target.specification
     originalLockCid = Some $ toAnyContractId self
   pure VestingLockSubstitution_AcceptResult with
     lockCid = newLockCid
@@ -1179,10 +1175,8 @@ substitutionInstructionResult_failed unlockedAmulet = V2.AllocationInstructionRe
 data AnySubstitution
   = AS_Governance with
       governanceLockKey : GovernanceLockKey
-      governanceSpecification : GovernanceLockSpecification
   | AS_Vesting with
       vestingLockKey : VestingLockKey
-      vestingSpecification : VestingLockSpecification
   deriving (Eq, Show, Serializable)
 
 
@@ -1228,7 +1222,6 @@ createSubstitution CreateSubstitutionArgs {..} = do
     (AS_Governance with ..) -> do
       substitutionCid <- create GovernanceLockSubstitution with
         target = governanceLockKey
-        newLockSpecification = governanceSpecification
         owner
         amount
         lockedAmulet
@@ -1240,7 +1233,6 @@ createSubstitution CreateSubstitutionArgs {..} = do
     (AS_Vesting with ..) -> do
       substitutionCid <- create VestingLockSubstitution with
         target = vestingLockKey
-        newLockSpecification = vestingSpecification
         owner
         amount
         lockedAmulet
@@ -1962,7 +1954,6 @@ glr_substituteLock_parser tag admin = do
             dso = admin
             owner = targetOwner
             specification = GovernanceLockSpecification kind
-          governanceSpecification = GovernanceLockSpecification kind
     LS_Vesting -> do
       kind <- governanceLockKindParser' tag
       vestingPeriod <- vestingDurationParser
@@ -1975,7 +1966,6 @@ glr_substituteLock_parser tag admin = do
             specification = VestingLockSpecification kind
             vestingPeriod
             endTime
-          vestingSpecification = VestingLockSpecification kind
 
 governanceLockRequestTSv1Parser : Party -> Party -> Parser Metadata GovernanceLockRequest
 governanceLockRequestTSv1Parser admin receiver = requiredMetadataParser requestMetaKey >>= (\tag -> checkReceiverIsLockManager *> case tag of
