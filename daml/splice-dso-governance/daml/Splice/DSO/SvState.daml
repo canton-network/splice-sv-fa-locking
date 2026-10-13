@@ -9,6 +9,7 @@ import Splice.Types
 import Splice.DSO.DecentralizedSynchronizer
 import Splice.Util
 
+import DA.List (last)
 import DA.Optional
 import DA.Time
 
@@ -185,6 +186,31 @@ updatePermanentUnderlockState permanentBefore adjustmentState
           recoverableUnderlocks
   | otherwise = assertFail "Must make an underlock permanent"
   where isStillTemporary = (< permanentBefore). startTime
+
+promotePermanent : Time -> RewardAdjustmentState -> RewardAdjustmentState
+promotePermanent permenanetCutoff s =
+  case span (\underlockEvent -> underlockEvent.startTime > permenanetCutoff) s.recoverableUnderlocks of
+    (_, []) -> s
+    (temporary, p :: _) -> RewardAdjustmentState with
+      permanentWeightFactor = min s.permanentWeightFactor p.newFactor
+      recoverableUnderlocks = temporary
+
+applyWarrantedFactor : Time -> Decimal -> RewardAdjustmentState -> RewardAdjustmentState
+applyWarrantedFactor now warranted s
+  | warranted >= s.permanentWeightFactor = s with recoverableUnderlocks = []
+  | otherwise = s with
+    recoverableUnderlocks =
+      let (recoveredUnderlocks, rest) = span (\underlockEvent -> warranted < underlockEvent.newFactor) s.recoverableUnderlocks
+          start = if null recoveredUnderlocks then now else (last recoveredUnderlocks).startTime
+      in case rest of
+        underlockEvent :: _ | underlockEvent.newFactor == warranted -> rest
+        _ -> (UnderlockEvent with startTime = start; newFactor = warranted) :: rest
+
+effectiveWeightFactor : RelTime -> Time -> RewardAdjustmentState -> Decimal
+effectiveWeightFactor temporaryGrace now s =
+  case dropWhile (\underlockEvent -> underlockEvent.startTime > now `addRelTime` negate temporaryGrace) s.recoverableUnderlocks of
+    underlockEvent :: _ -> underlockEvent.newFactor
+    [] -> s.permanentWeightFactor
 
 -- instances
 ------------
