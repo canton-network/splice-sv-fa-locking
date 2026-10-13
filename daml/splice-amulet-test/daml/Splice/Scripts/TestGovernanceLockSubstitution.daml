@@ -629,7 +629,7 @@ expectTransferMatchesAllocation targetOwner allocationView transferView = do
   Some (TextMap.singleton transferView.transfer.instrumentId.id transferView.transfer.amount) === allocationView.allocation.nextIterationFunding
   transferView.transfer.instrumentId.admin === allocationView.allocation.admin
   transferView.transfer.requestedAt === allocationView.requestedAt
-  transferView.transfer.executeBefore === maxBound
+  transferView.transfer.executeBefore === allocationView.requestedAt `addRelTime` days 90
   transferView.transfer.inputHoldingCids === map coerceContractId allocationView.inputHoldingCids
   transferView.transfer.meta === allocationView.allocation.meta
   transferView.meta === emptyMetadata

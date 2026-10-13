@@ -637,6 +637,7 @@ template GovernanceLockSubstitution with
         meta = substitution_allocationMeta (substitutionGovernanceLockCompatMemo newLockSpecification)
           (encodeGovernanceLockSpecMetadata newLockSpecification) (encodeGovernanceLockSubstitutionTargetMetadata target)
         requestedAt
+        expiresAt
         lockedAmulet
         originalSubstitutionCid
 
@@ -718,6 +719,7 @@ template VestingLockSubstitution with
           (encodeVestingLockSpecMetadata newLockSpecification target.vestingPeriod target.endTime)
           (encodeVestingLockSubstitutionTargetMetadata target)
         requestedAt
+        expiresAt
         lockedAmulet
         originalSubstitutionCid
 
@@ -935,6 +937,7 @@ data SubstitutionTransferInstructionViewArgs = SubstitutionTransferInstructionVi
   amount : Decimal
   meta : Metadata
   requestedAt : Time
+  expiresAt : Time
   lockedAmulet : ContractId LockedAmulet
   originalSubstitutionCid : Optional (ContractId V2.AllocationInstruction)
 
@@ -954,7 +957,7 @@ substitution_transferInstructionView SubstitutionTransferInstructionViewArgs{..}
       amount
       instrumentId = amuletInstrumentId admin
       requestedAt
-      executeBefore = maxBound
+      executeBefore = expiresAt
       inputHoldingCids = [toInterfaceContractId lockedAmulet]
       meta
     status = V1.TransferPendingInternalWorkflow with
