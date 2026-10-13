@@ -83,13 +83,13 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
             expectedTimeBounds = expectedTimeBounds,
             advanceTimeBeforeExecute = advanceTimeBeforeExecute,
           )
-        senderHoldingCids.head
+        senderHoldingCids.headOption
       },
     )(
       // Prepared tx execution does not wait for the tx being committed.
       // We thus wait here, as otherwise multiple transfer commands will use the same input holdings.
       "Wait until we see at least one of the input holdings being consumed",
-      trackingHoldingCid => {
+      _.foreach { trackingHoldingCid =>
         if (wait)
           participant.ledger_api.event_query
             .by_contract_id(trackingHoldingCid.contractId, requestingParties = Seq(sender.partyId))
