@@ -626,6 +626,13 @@ template GovernanceLockSubstitution with
       do
         governanceLockSubstitution_withdrawImpl self this actors
 
+    choice GovernanceLockSubstitution_Reject : GovernanceLockSubstitution_RejectResult
+      with
+        actors : [Party]
+      controller actors
+      do
+        governanceLockSubstitution_rejectImpl self this actors
+
     choice GovernanceLockSubstitution_DsoExpire : GovernanceLockSubstitution_DsoExpireResult
       controller target.dso
       do
@@ -670,7 +677,9 @@ template GovernanceLockSubstitution with
       transferInstruction_acceptImpl self V1.TransferInstruction_Accept{..} = do
         result <- governanceLockSubstitution_acceptImpl (coerceContractId self) this [target.owner] extraArgs
         pure $ substitutionTransferResult_completed result.unlockedAmulet
-      transferInstruction_rejectImpl _ _ = assertFail substitutionTransferRejectUnsupported
+      transferInstruction_rejectImpl self _ = do
+        result <- governanceLockSubstitution_rejectImpl (coerceContractId self) this [target.owner]
+        pure $ substitutionTransferResult_failed result.unlockedAmulet
       transferInstruction_withdrawImpl self _ = do
         result <- governanceLockSubstitution_withdrawImpl (coerceContractId self) this [owner]
         pure $ substitutionTransferResult_failed result.unlockedAmulet
@@ -709,6 +718,13 @@ template VestingLockSubstitution with
       controller actors
       do
         vestingLockSubstitution_withdrawImpl self this actors
+
+    choice VestingLockSubstitution_Reject : VestingLockSubstitution_RejectResult
+      with
+        actors : [Party]
+      controller actors
+      do
+        vestingLockSubstitution_rejectImpl self this actors
 
     choice VestingLockSubstitution_DsoExpire : VestingLockSubstitution_DsoExpireResult
       controller target.dso
@@ -756,7 +772,9 @@ template VestingLockSubstitution with
       transferInstruction_acceptImpl self V1.TransferInstruction_Accept{..} = do
         result <- vestingLockSubstitution_acceptImpl (coerceContractId self) this [target.owner] extraArgs
         pure $ substitutionTransferResult_completed result.unlockedAmulet
-      transferInstruction_rejectImpl _ _ = assertFail substitutionTransferRejectUnsupported
+      transferInstruction_rejectImpl self _ = do
+        result <- vestingLockSubstitution_rejectImpl (coerceContractId self) this [target.owner]
+        pure $ substitutionTransferResult_failed result.unlockedAmulet
       transferInstruction_withdrawImpl self _ = do
         result <- vestingLockSubstitution_withdrawImpl (coerceContractId self) this [owner]
         pure $ substitutionTransferResult_failed result.unlockedAmulet
@@ -777,6 +795,12 @@ data GovernanceLockSubstitution_WithdrawResult
       -- ^ The funds returned to the proposer. `None` if the proposal did not lock any funds.
   deriving (Eq, Show, Serializable)
 
+data GovernanceLockSubstitution_RejectResult
+  = GovernanceLockSubstitution_RejectResult with
+    unlockedAmulet : Optional (ContractId Amulet)
+      -- ^ The funds returned to the proposer. `None` if the proposal did not lock any funds.
+  deriving (Eq, Show, Serializable)
+
 data GovernanceLockSubstitution_DsoExpireResult = GovernanceLockSubstitution_DsoExpireResult
   deriving (Serializable)
 
@@ -791,6 +815,12 @@ data VestingLockSubstitution_AcceptResult
 
 data VestingLockSubstitution_WithdrawResult
   = VestingLockSubstitution_WithdrawResult with
+    unlockedAmulet : Optional (ContractId Amulet)
+      -- ^ The funds returned to the proposer. `None` if the proposal did not lock any funds.
+  deriving (Eq, Show, Serializable)
+
+data VestingLockSubstitution_RejectResult
+  = VestingLockSubstitution_RejectResult with
     unlockedAmulet : Optional (ContractId Amulet)
       -- ^ The funds returned to the proposer. `None` if the proposal did not lock any funds.
   deriving (Eq, Show, Serializable)
@@ -989,17 +1019,31 @@ vestingLockSubstitution_acceptImpl self VestingLockSubstitution{..} actors extra
     remainderCid
     unlockedAmulet
 
+-- | Unlocks the funds of a substitution proposal, which returns them to the proposer.
+-- Returns `None` if the proposal did not lock any funds.
+substitution_returnFunds : Party -> Party -> Optional (ContractId LockedAmulet) -> Update (Optional (ContractId Amulet))
+substitution_returnFunds dso proposer lockedAmulet =
+  forA lockedAmulet (fmap fst . unlockAmulet (ForOwner with dso; owner = proposer))
+
 governanceLockSubstitution_withdrawImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> Update GovernanceLockSubstitution_WithdrawResult
 governanceLockSubstitution_withdrawImpl _self this actors = do
   checkActors actors [[this.owner]]
-  GovernanceLockSubstitution_WithdrawResult <$>
-    forA this.lockedAmulet (fmap fst . unlockAmulet (ForOwner with dso = this.target.dso; owner = this.owner))
+  GovernanceLockSubstitution_WithdrawResult <$> substitution_returnFunds this.target.dso this.owner this.lockedAmulet
+
+governanceLockSubstitution_rejectImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> Update GovernanceLockSubstitution_RejectResult
+governanceLockSubstitution_rejectImpl _self this actors = do
+  checkActors actors [[this.target.owner]]
+  GovernanceLockSubstitution_RejectResult <$> substitution_returnFunds this.target.dso this.owner this.lockedAmulet
 
 vestingLockSubstitution_withdrawImpl : ContractId VestingLockSubstitution -> VestingLockSubstitution -> [Party] -> Update VestingLockSubstitution_WithdrawResult
 vestingLockSubstitution_withdrawImpl _self this actors = do
   checkActors actors [[this.owner]]
-  VestingLockSubstitution_WithdrawResult <$>
-    forA this.lockedAmulet (fmap fst . unlockAmulet (ForOwner with dso = this.target.dso; owner = this.owner))
+  VestingLockSubstitution_WithdrawResult <$> substitution_returnFunds this.target.dso this.owner this.lockedAmulet
+
+vestingLockSubstitution_rejectImpl : ContractId VestingLockSubstitution -> VestingLockSubstitution -> [Party] -> Update VestingLockSubstitution_RejectResult
+vestingLockSubstitution_rejectImpl _self this actors = do
+  checkActors actors [[this.target.owner]]
+  VestingLockSubstitution_RejectResult <$> substitution_returnFunds this.target.dso this.owner this.lockedAmulet
 
 -- | View of a substitution proposal. `settlement` and `allocation` have the same shape as the
 -- `V2.AllocationView` of the lock that the proposal creates when it is accepted, except that
@@ -1075,10 +1119,12 @@ substitution_transferInstructionView SubstitutionTransferInstructionViewArgs{..}
       inputHoldingCids = toInterfaceContractId <$> optionalToList lockedAmulet
       meta
     status = V1.TransferPendingInternalWorkflow with
-      pendingActions = Map.fromListWithR (\x y -> x <> "; " <> y) [(targetOwner, "accept substitution"), (proposer, "withdraw substitution")]
+      pendingActions = Map.fromListWithR (\x y -> x <> "; " <> y)
+        [ (targetOwner, "accept substitution")
+        , (targetOwner, "reject substitution")
+        , (proposer, "withdraw substitution")]
     meta = emptyMetadata
 
-substitutionTransferRejectUnsupported = "Transfers representing governance lock substitutions cannot be rejected"
 substitutionTransferUpdateUnsupported = "Transfers representing governance lock substitutions cannot be updated"
 
 substitutionTransferResult_completed : Optional (ContractId Amulet) -> V1.TransferInstructionResult

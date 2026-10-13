@@ -606,6 +606,26 @@ withdrawSubstitutionV1 env cid actor =
   submitWithTransferContext env.registriesEnv.amuletV2 (actAs actor) \context ->
     exerciseCmd cid V1.TransferInstruction_Withdraw with extraArgs = emptyExtraArgs with context
 
+rejectSubstitutionV1 : TestEnv -> Disclosures' -> ContractId V1.TransferInstruction -> Party -> Script (Either SubmitError V1.TransferInstructionResult)
+rejectSubstitutionV1 env disclosures cid actor =
+  submitWithTransferContext env.registriesEnv.amuletV2 (actAs actor <> discloseMany' disclosures) \context ->
+    exerciseCmd cid V1.TransferInstruction_Reject with extraArgs = emptyExtraArgs with context
+
+rejectGovernanceSubstitutionRaw
+  :  TestEnv -> Disclosures' -> ContractId GovernanceLockSubstitution -> [Party]
+  -> Script (Either SubmitError GovernanceLockSubstitution_RejectResult)
+rejectGovernanceSubstitutionRaw env disclosures cid actors =
+  submitWithTransferContext env.registriesEnv.amuletV2 (actAs actors <> discloseMany' disclosures) \_ ->
+    exerciseCmd cid GovernanceLockSubstitution_Reject with actors
+
+-- | Discloses the funds of a substitution proposal, which the owner of the target lock cannot see.
+proposalDisclosures : Party -> ContractId GovernanceLockSubstitution -> Script Disclosures'
+proposalDisclosures proposer cid = do
+  Some proposal <- queryContractId proposer cid
+  case proposal.lockedAmulet of
+    Some lockedAmulet -> queryDisclosure' proposer lockedAmulet
+    None -> pure mempty
+
 expectTransferPending : V1.TransferInstructionResult -> Script (ContractId V1.TransferInstruction)
 expectTransferPending result = case result.output of
   V1.TransferInstructionResult_Pending cid -> pure cid
@@ -645,7 +665,7 @@ testSubstitutionV1_rawSubstitutionView = do
   expectTransferMatchesAllocation alice allocationView transferView
   transferView.transfer.amount === 20000.0
   transferView.status === V1.TransferPendingInternalWorkflow with
-    pendingActions = Map.fromList [(alice, "accept substitution"), (bob, "withdraw substitution")]
+    pendingActions = Map.fromList [(alice, "accept substitution; reject substitution"), (bob, "withdraw substitution")]
 
 testSubstitutionV1_acceptRawSubstitution : Script ()
 testSubstitutionV1_acceptRawSubstitution = do
@@ -673,14 +693,44 @@ testSubstitutionV1_withdrawRawSubstitution = do
   archived <- queryInterfaceContractId bob substitutionCid
   archived === None
 
-testSubstitutionV1_rejectAndUpdateFail : Script ()
-testSubstitutionV1_rejectAndUpdateFail = do
+testSubstitutionV1_rejectRawSubstitution : Script ()
+testSubstitutionV1_rejectRawSubstitution = do
+  (env@TestEnv{..}, targetCid, _, _, substitutionCid) <- setupRawSubstitution
+  WalletClientV2.checkUnlockedBalance bob instrId 0.0
+  disclosures <- proposalDisclosures bob (fromInterfaceContractId substitutionCid)
+  [change] <- expectTransferFailed =<< expectSuccess (rejectSubstitutionV1 env disclosures (asTransferInstruction substitutionCid) alice)
+  WalletClientV2.checkHolding bob (coerceContractId change) 20000.0
+  WalletClientV2.checkUnlockedBalance bob instrId 20000.0
+  archived <- queryInterfaceContractId bob substitutionCid
+  archived === None
+  Some target <- queryContractId alice targetCid
+  target.amount === 50000.0
+
+-- | Only the owner of the target lock can reject a proposal, and the proposer gets their funds back.
+testSubstitutionRaw_reject : Script ()
+testSubstitutionRaw_reject = do
+  (env@TestEnv{..}, targetCid, _, _, substitutionCid) <- setupRawSubstitution
+  let cid = fromInterfaceContractId @GovernanceLockSubstitution substitutionCid
+  disclosures <- proposalDisclosures bob cid
+
+  -- the proposer cannot reject
+  bobResult <- rejectGovernanceSubstitutionRaw env disclosures cid [bob]
+  case bobResult of
+    Left _ -> pure ()
+    Right r -> fail $ "Expected the reject by the proposer to fail, got " <> show r
+
+  GovernanceLockSubstitution_RejectResult (Some unlockedAmulet) <-
+    expectSuccess $ rejectGovernanceSubstitutionRaw env disclosures cid [alice]
+  checkHolding' bob unlockedAmulet 20000.0
+  WalletClientV2.checkUnlockedBalance bob instrId 20000.0
+  Some target <- queryContractId alice targetCid
+  target.amount === 50000.0
+
+testSubstitutionV1_updateFails : Script ()
+testSubstitutionV1_updateFails = do
   (TestEnv{..}, _, _, _, substitutionCid) <- setupRawSubstitution
   let registry = registriesEnv.amuletV2
       cid = asTransferInstruction substitutionCid
-  expectFailureContaining substitutionTransferRejectUnsupported =<<
-    submitWithTransferContext registry (actAs alice) \context ->
-      exerciseCmd cid V1.TransferInstruction_Reject with extraArgs = emptyExtraArgs with context
   expectFailureContaining substitutionTransferUpdateUnsupported =<<
     submitWithTransferContext registry (actAs instrId.admin) \context ->
       exerciseCmd cid V1.TransferInstruction_Update with extraActors = []; extraArgs = emptyExtraArgs with context
@@ -795,7 +845,7 @@ testSelfSubstitution_fullTSv1 = do
   transferView.transfer.receiver === alice
   transferView.transfer.inputHoldingCids === []
   transferView.status === V1.TransferPendingInternalWorkflow with
-    pendingActions = Map.fromList [(alice, "accept substitution; withdraw substitution")]
+    pendingActions = Map.fromList [(alice, "accept substitution; reject substitution; withdraw substitution")]
 
   acceptResult <- expectSuccess $ acceptSubstitutionV1 env mempty substitutionCid alice
   acceptResult.senderChangeCids === []
@@ -895,3 +945,17 @@ testSelfSubstitution_failures = do
   smallRemainder <- proposeSelfSubstitution env targetSpec targetSpec 45000.0
   expectFailureContaining "minimum governance lock amount" =<<
     acceptGovernanceSubstitutionRaw env mempty (fromInterfaceContractId smallRemainder.proposal) [alice]
+
+-- | Rejecting a proposal by the owner of the target lock returns no funds and leaves the target lock unchanged.
+testSelfSubstitution_reject : Script ()
+testSelfSubstitution_reject = do
+  (env@TestEnv{..}, targetCid, targetSpec) <- setupSelfSubstitution GovernanceLockSpecification with kind = selfSubstitutionKind
+
+  result <- proposeSelfSubstitution env targetSpec targetSpec 20000.0
+  changes <- expectTransferFailed =<< expectSuccess (rejectSubstitutionV1 env mempty (asTransferInstruction result.proposal) alice)
+  changes === []
+
+  Some target <- queryContractId alice targetCid
+  target.amount === 50000.0
+  WalletClientV2.checkUnlockedBalance alice instrId 0.0
+  WalletClientV2.checkBalance alice instrId 50000.0
