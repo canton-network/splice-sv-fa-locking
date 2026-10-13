@@ -1326,11 +1326,6 @@ createGovernanceLockTransfer : GovernanceLockTransferArgs -> Update (ContractId 
 createGovernanceLockTransfer
   GovernanceLockTransferArgs{transfer, source, extraArgs} = do
   validateLockTransfer transfer source.dso source.owner
-
-  -- Initial lock transfer implementation supports only owner controlled locks
-  requireMatchExpected ("source lock specification", source.specification)
-    $ ownerControlledSpecification transfer.sender source.specification.kind
-
   expiresAt <- lockTransferExpiresAt transfer extraArgs
   create GovernanceLockTransfer with
     transfer
@@ -1348,12 +1343,6 @@ createVestingLockTransfer : VestingLockTransferArgs -> Update (ContractId Vestin
 createVestingLockTransfer
   VestingLockTransferArgs{transfer, source, extraArgs} = do
   validateLockTransfer transfer source.dso source.owner
-
-  -- Initial lock transfer implementation supports only owner controlled locks
-  requireMatchExpected ("source lock specification", source.specification)
-    $ VestingLockSpecification with
-        kind = source.specification.kind
-        vestingControllers = ownerControlled transfer.sender
 
   -- Otherwise the proposal would be created already expired.
   assertWithinDeadline "source lock endTime" source.endTime

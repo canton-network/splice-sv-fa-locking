@@ -70,10 +70,11 @@ validLockTransfer env sender receiver amount = do
     amount
     requestedAt = now
 
--- | Creates an owner-controlled SV governance lock of `amount` for `owner`, funded by the faucet.
+-- | Creates an SV governance lock of `amount` for `owner`, funded by the
+-- faucet.
 svLock : TestEnv -> Party -> Decimal -> Script (ContractId GovernanceLock, GovernanceLock)
 svLock env owner amount = lockWithSpec env owner amount $
-  ownerControlledSpecification owner (GLK_SuperValidatorRightsOwner "TestSV")
+  GovernanceLockSpecification with kind = GLK_SuperValidatorRightsOwner "TestSV"
 
 lockWithSpec
   : TestEnv -> Party -> Decimal -> GovernanceLockSpecification
@@ -85,7 +86,7 @@ lockWithSpec env owner amount specification = do
   Some lock <- queryContractId owner lockCid
   pure (lockCid, lock)
 
--- | Creates an owner-controlled SV vesting lock of `amount` for `owner`, by
+-- | Creates an SV vesting lock of `amount` for `owner`, by
 -- fully unlocking a governance lock. It vests over the default SV vesting
 -- duration of a year, so it ends after `lockTransferTTL`.
 svVestingLock
@@ -94,14 +95,14 @@ svVestingLock env owner amount = do
   (lockCid, _) <- svLock env owner amount
   vestingLockFor env owner lockCid amount
 
--- | Creates an owner-controlled FA vesting lock of `amount` for `owner`, by
+-- | Creates an FA vesting lock of `amount` for `owner`, by
 -- fully unlocking a governance lock. It vests over the default FA vesting
 -- duration of 60 days, so it ends before `lockTransferTTL`.
 faVestingLock
   : TestEnv -> Party -> Decimal -> Script (ContractId VestingLock, VestingLock)
 faVestingLock env owner amount = do
   (lockCid, _) <- lockWithSpec env owner amount $
-    ownerControlledSpecification owner (GLK_FeaturedApp env.provider1)
+    GovernanceLockSpecification with kind = GLK_FeaturedApp env.provider1
   vestingLockFor env owner lockCid amount
 
 -- | Fully unlocks a governance lock of `amount`, with vesting starting in an
@@ -229,8 +230,8 @@ testLockTransferRaw_keyWithoutLock = do
   let governanceKey = GovernanceLockKey with
         dso = instrId.admin
         owner = alice
-        specification = ownerControlledSpecification alice
-          (GLK_SuperValidatorRightsOwner "NoSuchSV")
+        specification = GovernanceLockSpecification with
+          kind = GLK_SuperValidatorRightsOwner "NoSuchSV"
       vestingKey = VestingLockKey with
         dso = instrId.admin
         owner = alice
