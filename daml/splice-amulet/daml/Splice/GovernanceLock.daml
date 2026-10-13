@@ -1242,6 +1242,162 @@ createSubstitution CreateSubstitutionArgs {..} = do
       substitution <- fetchChecked forOwner substitutionCid
       pure (toInterfaceContractId @i substitutionCid, toInterface @i substitution, changeHolding)
 
+-- Transfer
+-- ========
+
+-- | The terms of a lock transfer: how much of the sender's locks moves to the
+-- receiver. Stored as the `transfer` field of both lock transfer proposal
+-- templates.
+data LockTransfer = LockTransfer with
+    dso : Party
+    sender : Party
+      -- ^ Current owner of the source locks, who proposes the transfer.
+    receiver : Party
+      -- ^ New owner, who accepts the transfer.
+    amount : Decimal
+      -- ^ Amount moved out of the source locks.
+    requestedAt : Time
+      -- ^ When the sender requested the transfer.
+  deriving (Eq, Show, Serializable)
+
+-- | Arguments of `createGovernanceLockTransfer`.
+data GovernanceLockTransferArgs = GovernanceLockTransferArgs with
+    transfer : LockTransfer
+    source : GovernanceLockKey
+      -- ^ Source locks, to be resolved by key on accept.
+    extraArgs : ExtraArgs
+  deriving (Eq, Show, Serializable)
+
+-- | Arguments of `createVestingLockTransfer`.
+data VestingLockTransferArgs = VestingLockTransferArgs with
+    transfer : LockTransfer
+    source : VestingLockKey
+      -- ^ Source locks, to be resolved by key on accept.
+    extraArgs : ExtraArgs
+  deriving (Eq, Show, Serializable)
+
+-- | A proposal by the owner of `GovernanceLock`s to transfer all or part of
+-- them to a new owner. The proposal holds no funds: on accept, the locks
+-- matching `source` are resolved by key, merged and split.
+template GovernanceLockTransfer with
+    transfer : LockTransfer
+      -- ^ The transfer's terms.
+    source : GovernanceLockKey
+      -- ^ Source locks, to be resolved by key on accept.
+    expiresAt : Time
+      -- ^ Set by `createGovernanceLockTransfer`: `requestedAt` plus the
+      -- `tokenStandardMaxTTL` config.
+  where
+    signatory transfer.dso, transfer.sender
+    observer transfer.receiver
+    ensure isValidLockTransfer transfer source.dso source.owner
+
+    -- TODO(canton-network/splice-sv-fa-locking#105): implement `V1.TransferInstruction` to accept, reject and withdraw.
+    -- TODO(canton-network/splice-sv-fa-locking#109): add the DSO-controlled expiry choice.
+
+-- | A proposal by the owner of `VestingLock`s to transfer all or part of them
+-- to a new owner. The proposal holds no funds: on accept, the locks matching
+-- `source` are resolved by key, merged and split.
+template VestingLockTransfer with
+    transfer : LockTransfer
+      -- ^ The transfer's terms.
+    source : VestingLockKey
+      -- ^ Source locks, to be resolved by key on accept.
+    expiresAt : Time
+      -- ^ Set by `createVestingLockTransfer`: `requestedAt` plus the
+      -- `tokenStandardMaxTTL` config, capped at `source.endTime`.
+  where
+    signatory transfer.dso, transfer.sender
+    observer transfer.receiver
+    ensure isValidLockTransfer transfer source.dso source.owner
+      && expiresAt <= source.endTime
+
+    -- TODO(canton-network/splice-sv-fa-locking#105): implement `V1.TransferInstruction` to accept, reject and withdraw.
+    -- TODO(canton-network/splice-sv-fa-locking#109): add the DSO-controlled expiry choice.
+
+-- | Creates a proposal to transfer `amount` of the governance locks with key
+-- `source` from `sender` to `receiver`. Requires the authority of `dso` and
+-- `sender`. The proposal expires `tokenStandardMaxTTL` after `requestedAt`.
+--
+-- The source locks are not looked up: they will be resolved by key when the
+-- receiver accepts. So no funds move, and a proposal for a key that matches no
+-- lock is still created.
+createGovernanceLockTransfer : GovernanceLockTransferArgs -> Update (ContractId GovernanceLockTransfer)
+createGovernanceLockTransfer
+  GovernanceLockTransferArgs{transfer, source, extraArgs} = do
+  validateLockTransfer transfer source.dso source.owner
+
+  -- Initial lock transfer implementation supports only owner controlled locks
+  requireMatchExpected ("source lock specification", source.specification)
+    $ ownerControlledSpecification transfer.sender source.specification.kind
+
+  expiresAt <- lockTransferExpiresAt transfer extraArgs
+  create GovernanceLockTransfer with
+    transfer
+    source
+    expiresAt
+
+-- | Creates a proposal to transfer `amount` of the vesting locks with key
+-- `source` from `sender` to `receiver`. Requires the authority of `dso` and
+-- `sender`. The proposal expires `tokenStandardMaxTTL` after `requestedAt`.
+--
+-- The source locks are not looked up: they will be resolved by key when the
+-- receiver accepts. So no funds move, and a proposal for a key that matches no
+-- lock is still created.
+createVestingLockTransfer : VestingLockTransferArgs -> Update (ContractId VestingLockTransfer)
+createVestingLockTransfer
+  VestingLockTransferArgs{transfer, source, extraArgs} = do
+  validateLockTransfer transfer source.dso source.owner
+
+  -- Initial lock transfer implementation supports only owner controlled locks
+  requireMatchExpected ("source lock specification", source.specification)
+    $ VestingLockSpecification with
+        kind = source.specification.kind
+        vestingControllers = ownerControlled transfer.sender
+
+  -- Otherwise the proposal would be created already expired.
+  assertWithinDeadline "source lock endTime" source.endTime
+  maxExpiresAt <- lockTransferExpiresAt transfer extraArgs
+  create VestingLockTransfer with
+    transfer
+    source
+    expiresAt = min maxExpiresAt source.endTime
+
+-- | Checks shared by `createGovernanceLockTransfer` and
+-- `createVestingLockTransfer`.
+validateLockTransfer : LockTransfer -> Party -> Party -> Update ()
+validateLockTransfer transfer sourceDso sourceOwner = do
+  assertDeadlineExceeded "requestedAt" transfer.requestedAt
+  assertWithinDeadline "requestedAt + 1 day" $ transfer.requestedAt `addRelTime` days 1
+  require' ("receiver", transfer.receiver) (notR isEqualR) ("sender", transfer.sender)
+  require' ("receiver", transfer.receiver) (notR isEqualR) ("lock manager party", lockManagerParty)
+  -- Not checked against the minimum lock amount: CIP-0127 exempts actions that
+  -- archive the existing locks and produce a single new lock, so only partial
+  -- transfers must meet it, and whether a transfer is partial will be known
+  -- only when the source locks are resolved on accept.
+  require' ("amount", transfer.amount) isGreaterR ("zero", 0.0)
+  requireMatchExpected ("source lock dso", sourceDso) transfer.dso
+  requireMatchExpected ("source lock owner", sourceOwner) transfer.sender
+
+-- | Invariants of both lock transfer proposals.
+-- To be used in `*LockTransfer` templates to `ensure` basic invariants on
+-- direct create. `createGovernanceLockTransfer` checks all of this with clearer
+-- messages.
+isValidLockTransfer : LockTransfer -> Party -> Party -> Bool
+isValidLockTransfer transfer sourceDso sourceOwner =
+  transfer.amount > 0.0
+    && transfer.receiver /= transfer.sender
+    && sourceDso == transfer.dso
+    && sourceOwner == transfer.sender
+
+-- | When a lock transfer proposal expires
+lockTransferExpiresAt : LockTransfer -> ExtraArgs -> Update Time
+lockTransferExpiresAt transfer extraArgs = do
+  (_, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext
+    transfer.dso extraArgs.context
+  pure $ transfer.requestedAt `addRelTime`
+    getTokenStandardMaxTTL state.transferConfig
+
 -- Helpers for handling LockedAmulet
 -- =================================
 
