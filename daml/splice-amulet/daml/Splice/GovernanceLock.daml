@@ -1369,10 +1369,9 @@ validateLockTransfer transfer = do
   assertWithinDeadline "requestedAt + 1 day" $ transfer.requestedAt `addRelTime` days 1
   require' ("receiver", transfer.receiver)
     (notR isEqualR) ("sender", lockKeyOwner transfer)
-  -- Not checked against the minimum lock amount: CIP-0127 exempts actions that
-  -- archive the existing locks and produce a single new lock, so only partial
-  -- transfers must meet it, and whether a transfer is partial will be known
-  -- only when the source locks are resolved on accept.
+  -- TODO(canton-network/splice-sv-fa-locking#128): Validate that lock transfer
+  --   amount doesn't exceed the total amount of of locks refered by
+  --   the `transfer.source` key.
   require' ("amount", transfer.amount) isGreaterR ("zero", 0.0)
 
 -- | Invariants of both lock transfer proposals.
