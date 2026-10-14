@@ -1254,7 +1254,8 @@ createSubstitution CreateSubstitutionArgs {..} = do
 data LockTransfer lockKey = LockTransfer with
     source : lockKey
       -- ^ Source locks to be transferred. Locks are resolved by key.
-      -- `lockKey` provides `dso` and `owner` via `LockKeyForOwner` type class.
+      -- `lockKey` provides the DSO party and `owner` via the
+      -- `LockKeyForOwner` type class.
     receiver : Party
       -- ^ New owner, who accepts the transfer.
     amount : Decimal
@@ -1302,7 +1303,8 @@ template GovernanceLockTransfer with
     ensure isValidLockTransfer transfer
 
     -- TODO(canton-network/splice-sv-fa-locking#105): implement `V1.TransferInstruction` to accept, reject and withdraw.
-    -- TODO(canton-network/splice-sv-fa-locking#109): add the DSO-controlled expiry choice.
+    -- TODO(canton-network/splice-sv-fa-locking#109): add an expiry choice
+    -- controlled by the DSO party.
 
 -- | A proposal by the owner of `VestingLock`s to transfer all or part of them
 -- to a new owner. The proposal holds no funds: on accept, the locks matching
@@ -1320,12 +1322,13 @@ template VestingLockTransfer with
       && expiresAt <= transfer.source.endTime
 
     -- TODO(canton-network/splice-sv-fa-locking#105): implement `V1.TransferInstruction` to accept, reject and withdraw.
-    -- TODO(canton-network/splice-sv-fa-locking#109): add the DSO-controlled expiry choice.
+    -- TODO(canton-network/splice-sv-fa-locking#109): add an expiry choice
+    -- controlled by the DSO party.
 
 -- | Creates a proposal to transfer `amount` of the governance locks with key
 -- `source` from their owner to `receiver`. Requires the authority of the
--- source's `dso` and `owner`. The proposal expires `tokenStandardMaxTTL`
--- after `requestedAt`.
+-- source's DSO party and `owner`. The proposal expires
+-- `tokenStandardMaxTTL` after `requestedAt`.
 --
 -- The source locks are not looked up: they will be resolved by key when the
 -- receiver accepts. So no funds move, and a proposal for a key that matches no
@@ -1342,8 +1345,8 @@ createGovernanceLockTransfer LockTransferArgs{transfer, extraArgs} = do
 
 -- | Creates a proposal to transfer `amount` of the vesting locks with key
 -- `source` from their owner to `receiver`. Requires the authority of the
--- source's `dso` and `owner`. The proposal expires `tokenStandardMaxTTL`
--- after `requestedAt`.
+-- source's DSO party and `owner`. The proposal expires
+-- `tokenStandardMaxTTL` after `requestedAt`.
 --
 -- The source locks are not looked up: they will be resolved by key when the
 -- receiver accepts. So no funds move, and a proposal for a key that matches no

@@ -177,8 +177,7 @@ template ExternalPartyAmuletRules
           proposal
           changeHolding
 
-    nonconsuming choice ExternalPartyAmuletRules_ProposeGovernanceLockTransfer
-      : ExternalPartyAmuletRules_ProposeGovernanceLockTransferResult
+    nonconsuming choice ExternalPartyAmuletRules_ProposeGovernanceLockTransfer : ExternalPartyAmuletRules_ProposeGovernanceLockTransferResult
       with
         args : LockTransferArgs GovernanceLockKey
       controller lockKeyOwner args.transfer
@@ -187,8 +186,7 @@ template ExternalPartyAmuletRules
         pure ExternalPartyAmuletRules_ProposeGovernanceLockTransferResult with
           proposal
 
-    nonconsuming choice ExternalPartyAmuletRules_ProposeVestingLockTransfer
-      : ExternalPartyAmuletRules_ProposeVestingLockTransferResult
+    nonconsuming choice ExternalPartyAmuletRules_ProposeVestingLockTransfer : ExternalPartyAmuletRules_ProposeVestingLockTransferResult
       with
         args : LockTransferArgs VestingLockKey
       controller lockKeyOwner args.transfer
