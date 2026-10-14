@@ -1333,10 +1333,10 @@ transfer_transferInstructionView TransferTransferInstructionViewArgs{..} =
         [(transfer.receiver, "accept transfer; reject transfer"), (lockKeyOwner transfer, "withdraw transfer")]
     meta = emptyMetadata
 
-transferTransferResult_completed : ContractId LockedAmulet -> V1.TransferInstructionResult
-transferTransferResult_completed lockedAmulet = V1.TransferInstructionResult with
+transferTransferResult_completed : V1.TransferInstructionResult
+transferTransferResult_completed = V1.TransferInstructionResult with
   output = V1.TransferInstructionResult_Completed with
-    receiverHoldingCids = [toInterfaceContractId lockedAmulet]
+    receiverHoldingCids = []
   senderChangeCids = []
   meta = emptyMetadata
 
@@ -1389,8 +1389,8 @@ template GovernanceLockTransfer with
         expiresAt
 
       transferInstruction_acceptImpl self V1.TransferInstruction_Accept{..} = do
-        result <- governanceLockTransfer_acceptImpl (fromInterfaceContractId self) this [transfer.receiver] extraArgs
-        pure $ transferTransferResult_completed result.lockedAmulet
+        governanceLockTransfer_acceptImpl (fromInterfaceContractId self) this [transfer.receiver] extraArgs
+        pure $ transferTransferResult_completed
 
       transferInstruction_rejectImpl _self _arg = do
         governanceLockTransfer_rejectImpl this [transfer.receiver]
@@ -1448,8 +1448,8 @@ template VestingLockTransfer with
         expiresAt
 
       transferInstruction_acceptImpl self V1.TransferInstruction_Accept{..} = do
-        result <- vestingLockTransfer_acceptImpl (fromInterfaceContractId self) this [transfer.receiver] extraArgs
-        pure $ transferTransferResult_completed result.lockedAmulet
+        vestingLockTransfer_acceptImpl (fromInterfaceContractId self) this [transfer.receiver] extraArgs
+        pure $ transferTransferResult_completed
 
       transferInstruction_rejectImpl _self _arg = do
         vestingLockTransfer_rejectImpl this [transfer.receiver]

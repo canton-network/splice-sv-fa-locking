@@ -554,10 +554,9 @@ testLockTransferV1_acceptGovernanceLock = do
 
   result <- expectSuccess $ acceptTransferV1 env disclosures (asTransferInstruction transferCid) bob
   result.senderChangeCids === []
-  [receiverHolding] <- expectTransferCompleted result
+  [] <- expectTransferCompleted result
 
   [(newLockCid, newLock)] <- filter (\(_, l) -> l.owner == bob) <$> query @GovernanceLock bob
-  receiverHolding === toInterfaceContractId newLock.lockedAmulet
   newLock.amount === 40000.0
   newLock.specification === lock.specification
   checkLockedHolding bob newLockCid 40000.0
@@ -571,10 +570,9 @@ testLockTransferV1_acceptVestingLock = do
 
   result <- expectSuccess $ acceptTransferV1 env disclosures (asTransferInstruction transferCid) bob
   result.senderChangeCids === []
-  [receiverHolding] <- expectTransferCompleted result
+  [] <- expectTransferCompleted result
 
   [(newLockCid, newLock)] <- filter (\(_, l) -> l.owner == bob) <$> query @VestingLock bob
-  receiverHolding === toInterfaceContractId newLock.lockedAmulet
   newLock.vestingAmount === 30000.0
   newLock.vestingPeriod === lock.vestingPeriod
   newLock.endTime === lock.endTime
