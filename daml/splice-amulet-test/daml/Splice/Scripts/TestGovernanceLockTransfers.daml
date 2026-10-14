@@ -24,7 +24,7 @@ import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
-import Splice.TokenStandard.Utils.Internal.Conversions (toAnyContractId)
+import Splice.TokenStandard.Utils (toAnyContractId)
 
 -- | Proposes, as `proposer`, a transfer of governance locks through
 -- `ExternalPartyAmuletRules_ProposeGovernanceLockTransfer`.
@@ -529,7 +529,7 @@ testLockTransferRaw_acceptFailures = do
 
 testLockTransferV1_view : Script ()
 testLockTransferV1_view = do
-  (TestEnv{..}, _, _, transferCid) <- setupGovernanceLockTransfer 40000.0
+  (TestEnv{..}, _, lock, transferCid) <- setupGovernanceLockTransfer 40000.0
   Some proposal <- queryContractId bob transferCid
   Some view <- queryInterfaceContractId bob (asTransferInstruction transferCid)
   view === V1.TransferInstructionView with
@@ -542,7 +542,7 @@ testLockTransferV1_view = do
       requestedAt = proposal.transfer.requestedAt
       executeBefore = proposal.expiresAt
       inputHoldingCids = []
-      meta = emptyMetadata
+      meta = transferGovernanceLockMetadata lock.specification
     status = V1.TransferPendingInternalWorkflow with
       pendingActions = Map.fromList [(bob, "accept transfer; reject transfer"), (alice, "withdraw transfer")]
     meta = emptyMetadata
