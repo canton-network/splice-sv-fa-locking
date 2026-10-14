@@ -201,7 +201,7 @@ template GovernanceLock
         extraArgs : ExtraArgs
       controller dso
       do
-        governanceLock_transferImpl self this transferredAmount extraArgs
+        governanceLock_dsoTransferImpl self this transferredAmount extraArgs
 
     interface instance V1.TransferInstruction for GovernanceLock where
       view = V1.TransferInstructionView with
@@ -1551,8 +1551,8 @@ createVestingLockTransfer LockTransferArgs{transfer, extraArgs} = do
     transfer
     expiresAt = min maxExpiresAt transfer.source.endTime
 
-governanceLock_transferImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> ExtraArgs -> Update GovernanceLock_DsoTransferResult
-governanceLock_transferImpl self this@GovernanceLock{..} transferredAmount extraArgs = do
+governanceLock_dsoTransferImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> ExtraArgs -> Update GovernanceLock_DsoTransferResult
+governanceLock_dsoTransferImpl self this@GovernanceLock{..} transferredAmount extraArgs = do
   let forOwner = ForOwner with dso; owner
   case transferredAmount `compare` amount of
     LT -> do
