@@ -389,12 +389,12 @@ testLockTransferRaw_acceptPartialGovernanceLock = do
   checkLockedHolding bob result.lockCid 40000.0
 
   -- alice keeps the rest
-  Some remainderCid <- pure result.remainderCid
-  Some remainder <- queryContractId alice remainderCid
+  Some remainingLockCid <- pure result.remainingLockCid
+  Some remainder <- queryContractId alice remainingLockCid
   remainder.owner === alice
   remainder.amount === 60000.0
   remainder.specification === lock.specification
-  checkLockedHolding alice remainderCid 60000.0
+  checkLockedHolding alice remainingLockCid 60000.0
 
   -- the funds moved from alice to bob, and they stay locked
   checkBalances env alice (1000.0, 60000.0)
@@ -411,7 +411,7 @@ testLockTransferRaw_acceptFullGovernanceLock = do
 
   result <- expectSuccess $ acceptGovernanceLockTransferRaw env disclosures transferCid [bob]
 
-  result.remainderCid === None
+  result.remainingLockCid === None
   checkLockedHolding bob result.lockCid 100000.0
   aliceLocks <- filter (\(_, l) -> l.owner == alice) <$> query @GovernanceLock alice
   aliceLocks === []
@@ -438,11 +438,11 @@ testLockTransferRaw_acceptPartialVestingLock = do
   Some lockedAmulet <- queryContractId bob result.lockedAmulet
   lockedAmulet.lock.expiresAt === lock.endTime
 
-  Some remainderCid <- pure result.remainderCid
-  Some remainder <- queryContractId alice remainderCid
+  Some remainingLockCid <- pure result.remainingLockCid
+  Some remainder <- queryContractId alice remainingLockCid
   remainder.vestingAmount === 70000.0
   remainder.endTime === lock.endTime
-  checkLockedHolding alice remainderCid 70000.0
+  checkLockedHolding alice remainingLockCid 70000.0
 
   checkBalances env alice (1000.0, 70000.0)
   checkBalances env bob (0.0, 30000.0)
@@ -510,9 +510,9 @@ testLockTransferRaw_acceptFailures = do
 
   -- the remainder of 5000.0 is below the minimum lock amount of 10000.0
   smallRemainder <- validLockTransfer (key lock) bob 95000.0
-  smallRemainderCid <- expectSuccess $ createGovernanceLockTransferRaw env alice smallRemainder
+  smallRemainderLockCid <- expectSuccess $ createGovernanceLockTransferRaw env alice smallRemainder
   expectFailureContaining "minimum governance lock amount" =<<
-    acceptGovernanceLockTransferRaw env disclosures smallRemainderCid [bob]
+    acceptGovernanceLockTransferRaw env disclosures smallRemainderLockCid [bob]
 
   -- no lock matches the source key
   let noLockKey = (key lock) with specification = GovernanceLockSpecification with kind = GLK_SuperValidatorRightsOwner "NoSuchSV"

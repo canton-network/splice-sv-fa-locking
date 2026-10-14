@@ -800,7 +800,7 @@ testSelfSubstitution_partial = do
   WalletClientV2.checkBalance alice instrId 50000.0
 
   disclosures <- targetDisclosures alice targetCid
-  GovernanceLockSubstitution_AcceptResult newLockCid (Some remainderCid) unlockedAmulet <-
+  GovernanceLockSubstitution_AcceptResult newLockCid (Some remainingLockCid) unlockedAmulet <-
     expectSuccess $ acceptGovernanceSubstitutionRaw env disclosures (fromInterfaceContractId result.proposal) [alice]
   unlockedAmulet === None
 
@@ -809,10 +809,10 @@ testSelfSubstitution_partial = do
   newLock.amount === 20000.0
   newLock.specification === targetSpec
   checkLockedHolding alice newLockCid 20000.0
-  Some remainder <- queryContractId alice remainderCid
+  Some remainder <- queryContractId alice remainingLockCid
   remainder.amount === 30000.0
   remainder.specification === targetSpec
-  checkLockedHolding alice remainderCid 30000.0
+  checkLockedHolding alice remainingLockCid 30000.0
   WalletClientV2.checkUnlockedBalance alice instrId 0.0
   WalletClientV2.checkBalance alice instrId 50000.0
 
@@ -896,7 +896,7 @@ testSelfSubstitution_vesting = do
   Some proposal <- queryContractId alice (fromInterfaceContractId @VestingLockSubstitution result.proposal)
   proposal.lockedAmulet === None
 
-  VestingLockSubstitution_AcceptResult newLockCid (Some remainderCid) unlockedAmulet <-
+  VestingLockSubstitution_AcceptResult newLockCid (Some remainingLockCid) unlockedAmulet <-
     expectSuccess $ acceptVestingSubstitutionRaw env mempty (fromInterfaceContractId result.proposal) [alice]
   unlockedAmulet === None
 
@@ -907,10 +907,10 @@ testSelfSubstitution_vesting = do
   newLock.endTime === vestingLock.endTime
   newLock.specification === vestingLock.specification
   checkLockedHolding alice newLockCid 20000.0
-  Some remainder <- queryContractId alice remainderCid
+  Some remainder <- queryContractId alice remainingLockCid
   remainder.vestingAmount === 30000.0
   remainder.specification === vestingLock.specification
-  checkLockedHolding alice remainderCid 30000.0
+  checkLockedHolding alice remainingLockCid 30000.0
   WalletClientV2.checkUnlockedBalance alice instrId 0.0
 
 -- | A proposal by the owner of the target lock fails on acceptance if the target lock has too little funds,

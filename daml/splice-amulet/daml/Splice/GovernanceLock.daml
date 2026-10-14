@@ -801,7 +801,7 @@ template VestingLockSubstitution with
 data GovernanceLockSubstitution_AcceptResult
   = GovernanceLockSubstitution_AcceptResult with
       lockCid : ContractId GovernanceLock
-      remainderCid : Optional (ContractId GovernanceLock)
+      remainingLockCid : Optional (ContractId GovernanceLock)
       unlockedAmulet : Optional (ContractId Amulet)
         -- ^ The substituted funds, returned to the owner of the target lock.
         -- `None` if the proposer is the owner of the target lock, as no funds are then returned.
@@ -825,7 +825,7 @@ data GovernanceLockSubstitution_DsoExpireResult = GovernanceLockSubstitution_Dso
 data VestingLockSubstitution_AcceptResult
   = VestingLockSubstitution_AcceptResult with
     lockCid : ContractId VestingLock
-    remainderCid : Optional (ContractId VestingLock)
+    remainingLockCid : Optional (ContractId VestingLock)
     unlockedAmulet : Optional (ContractId Amulet)
       -- ^ The substituted funds, returned to the owner of the target lock.
       -- `None` if the proposer is the owner of the target lock, as no funds are then returned.
@@ -847,14 +847,14 @@ data VestingLockSubstitution_DsoExpireResult = VestingLockSubstitution_DsoExpire
   deriving (Serializable)
 
 data GovernanceLock_DsoSubstituteResult = GovernanceLock_DsoSubstituteResult with
-    remainderCid : Optional (ContractId GovernanceLock)
+    remainingLockCid : Optional (ContractId GovernanceLock)
       -- ^ The lock that keeps the funds that were not substituted, if any.
     unlockedAmulet : ContractId Amulet
       -- ^ The substituted funds, returned to the owner.
   deriving (Eq, Show, Serializable)
 
 data VestingLock_DsoSubstituteResult = VestingLock_DsoSubstituteResult with
-    remainderCid : Optional (ContractId VestingLock)
+    remainingLockCid : Optional (ContractId VestingLock)
       -- ^ The lock that keeps the funds that were not substituted, if any.
     unlockedAmulet : ContractId Amulet
       -- ^ The substituted funds, returned to the owner.
@@ -869,17 +869,17 @@ governanceLock_substituteImpl self this@GovernanceLock{..} substitutedAmount ext
       (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet substitutedAmount context
       requireMinimumLock state remainingAmount
       requireMinimumLock state substitutedAmount
-      remainderCid <- create this with
+      remainingLockCid <- create this with
         amount = remainingAmount
         lockedAmulet = newLockedAmulet
         originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
       pure GovernanceLock_DsoSubstituteResult with
-        remainderCid = Some remainderCid
+        remainingLockCid = Some remainingLockCid
         unlockedAmulet
     EQ -> do
       (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
       pure GovernanceLock_DsoSubstituteResult with
-        remainderCid = None
+        remainingLockCid = None
         unlockedAmulet
     GT ->
       fail $ "substituted lock has less funds (" <> show amount <> ") than the amount proposed to be substituted (" <> show substitutedAmount <> ")"
@@ -893,30 +893,30 @@ vestingLock_substituteImpl self this@VestingLock{..} substitutedAmount extraArgs
       (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet substitutedAmount context
       requireMinimumLock state remainingAmount
       requireMinimumLock state substitutedAmount
-      remainderCid <- create this with
+      remainingLockCid <- create this with
         vestingAmount = remainingAmount
         lockedAmulet = newLockedAmulet
         originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
       pure VestingLock_DsoSubstituteResult with
-        remainderCid = Some remainderCid
+        remainingLockCid = Some remainingLockCid
         unlockedAmulet
     EQ -> do
       (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
       pure VestingLock_DsoSubstituteResult with
-        remainderCid = None
+        remainingLockCid = None
         unlockedAmulet
     GT ->
       fail $ "substituted lock has less funds (" <> show vestingAmount <> ") than the amount proposed to be substituted (" <> show substitutedAmount <> ")"
 
 data GovernanceLock_DsoSplitForSubstitutionResult = GovernanceLock_DsoSplitForSubstitutionResult with
-    remainderCid : Optional (ContractId GovernanceLock)
+    remainingLockCid : Optional (ContractId GovernanceLock)
       -- ^ The lock that keeps the funds that were not split off, if any.
     splitAmulet : ContractId LockedAmulet
       -- ^ The funds that were split off, locked for the new lock.
   deriving (Eq, Show, Serializable)
 
 data VestingLock_DsoSplitForSubstitutionResult = VestingLock_DsoSplitForSubstitutionResult with
-    remainderCid : Optional (ContractId VestingLock)
+    remainingLockCid : Optional (ContractId VestingLock)
       -- ^ The lock that keeps the funds that were not split off, if any.
     splitAmulet : ContractId LockedAmulet
       -- ^ The funds that were split off, locked for the new lock.
@@ -934,17 +934,17 @@ governanceLock_splitForSubstitutionImpl self this@GovernanceLock{..} splitAmount
       (Some (newLockedAmulet, remainingAmount), (splitAmulet, _)) <- splitLockedAmulet forOwner lockedAmulet (splitAmount, splitLockProperties) context
       requireMinimumLock state remainingAmount
       requireMinimumLock state splitAmount
-      remainderCid <- create this with
+      remainingLockCid <- create this with
         amount = remainingAmount
         lockedAmulet = newLockedAmulet
         originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
       pure GovernanceLock_DsoSplitForSubstitutionResult with
-        remainderCid = Some remainderCid
+        remainingLockCid = Some remainingLockCid
         splitAmulet
     EQ -> do
       splitAmulet <- relockAmulet forOwner lockedAmulet splitLockProperties context
       pure GovernanceLock_DsoSplitForSubstitutionResult with
-        remainderCid = None
+        remainingLockCid = None
         splitAmulet
     GT ->
       fail $ "substituted lock has less funds (" <> show amount <> ") than the amount proposed to be substituted (" <> show splitAmount <> ")"
@@ -961,17 +961,17 @@ vestingLock_splitForSubstitutionImpl self this@VestingLock{..} splitAmount newSp
       (Some (newLockedAmulet, remainingAmount), (splitAmulet, _)) <- splitLockedAmulet forOwner lockedAmulet (splitAmount, splitLockProperties) context
       requireMinimumLock state remainingAmount
       requireMinimumLock state splitAmount
-      remainderCid <- create this with
+      remainingLockCid <- create this with
         vestingAmount = remainingAmount
         lockedAmulet = newLockedAmulet
         originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
       pure VestingLock_DsoSplitForSubstitutionResult with
-        remainderCid = Some remainderCid
+        remainingLockCid = Some remainingLockCid
         splitAmulet
     EQ -> do
       splitAmulet <- relockAmulet forOwner lockedAmulet splitLockProperties context
       pure VestingLock_DsoSplitForSubstitutionResult with
-        remainderCid = None
+        remainingLockCid = None
         splitAmulet
     GT ->
       fail $ "substituted lock has less funds (" <> show vestingAmount <> ") than the amount proposed to be substituted (" <> show splitAmount <> ")"
@@ -980,19 +980,19 @@ governanceLockSubstitution_acceptImpl : ContractId GovernanceLockSubstitution ->
 governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors extraArgs = do
   checkActors actors [[target.owner]]
   (lockCid, _lock) <- fetchByKey @GovernanceLock target
-  (newLockedAmulet, remainderCid, unlockedAmulet) <- case lockedAmulet of
+  (newLockedAmulet, remainingLockCid, unlockedAmulet) <- case lockedAmulet of
     Some proposalLockedAmulet -> do
       substituteResult <- exercise lockCid GovernanceLock_DsoSubstitute with
         substitutedAmount = amount
         extraArgs
-      pure (proposalLockedAmulet, substituteResult.remainderCid, Some substituteResult.unlockedAmulet)
+      pure (proposalLockedAmulet, substituteResult.remainingLockCid, Some substituteResult.unlockedAmulet)
     None -> do
       -- The proposer is the owner of the target lock, so the target lock funds the new lock
       splitResult <- exercise lockCid GovernanceLock_DsoSplitForSubstitution with
         splitAmount = amount
         newSpecification = target.specification
         extraArgs
-      pure (splitResult.splitAmulet, splitResult.remainderCid, None)
+      pure (splitResult.splitAmulet, splitResult.remainingLockCid, None)
   newLockCid <- create GovernanceLock with
     dso = target.dso
     owner
@@ -1003,26 +1003,26 @@ governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors
     requestedAt = requestedAt
   pure GovernanceLockSubstitution_AcceptResult with
     lockCid = newLockCid
-    remainderCid
+    remainingLockCid
     unlockedAmulet
 
 vestingLockSubstitution_acceptImpl : ContractId VestingLockSubstitution -> VestingLockSubstitution -> [Party] -> ExtraArgs -> Update VestingLockSubstitution_AcceptResult
 vestingLockSubstitution_acceptImpl self VestingLockSubstitution{..} actors extraArgs = do
   checkActors actors [[target.owner]]
   (lockCid, lock) <- fetchByKey @VestingLock target
-  (newLockedAmulet, remainderCid, unlockedAmulet) <- case lockedAmulet of
+  (newLockedAmulet, remainingLockCid, unlockedAmulet) <- case lockedAmulet of
     Some proposalLockedAmulet -> do
       substituteResult <- exercise lockCid VestingLock_DsoSubstitute with
         substitutedAmount = amount
         extraArgs
-      pure (proposalLockedAmulet, substituteResult.remainderCid, Some substituteResult.unlockedAmulet)
+      pure (proposalLockedAmulet, substituteResult.remainingLockCid, Some substituteResult.unlockedAmulet)
     None -> do
       -- The proposer is the owner of the target lock, so the target lock funds the new lock
       splitResult <- exercise lockCid VestingLock_DsoSplitForSubstitution with
         splitAmount = amount
         newSpecification = target.specification
         extraArgs
-      pure (splitResult.splitAmulet, splitResult.remainderCid, None)
+      pure (splitResult.splitAmulet, splitResult.remainingLockCid, None)
   newLockCid <- create VestingLock with
     dso = target.dso
     owner
@@ -1034,7 +1034,7 @@ vestingLockSubstitution_acceptImpl self VestingLockSubstitution{..} actors extra
     originalLockCid = Some $ toAnyContractId self
   pure VestingLockSubstitution_AcceptResult with
     lockCid = newLockCid
-    remainderCid
+    remainingLockCid
     unlockedAmulet
 
 -- | Unlocks the funds of a substitution proposal, which returns them to the proposer.
@@ -1468,7 +1468,7 @@ data GovernanceLockTransfer_AcceptResult
   = GovernanceLockTransfer_AcceptResult with
     lockCid : ContractId GovernanceLock
       -- ^ The new lock of the receiver, which holds the transferred funds.
-    remainderCid : Optional (ContractId GovernanceLock)
+    remainingLockCid : Optional (ContractId GovernanceLock)
       -- ^ The lock of the sender that keeps the funds that were not transferred, if any.
     lockedAmulet : ContractId LockedAmulet
       -- ^ The transferred funds, now locked for the owner of the new lock.
@@ -1482,7 +1482,7 @@ data GovernanceLockTransfer_RejectResult = GovernanceLockTransfer_RejectResult
 
 data GovernanceLock_DsoTransferResult
   = GovernanceLock_DsoTransferResult with
-    remainderCid : Optional (ContractId GovernanceLock)
+    remainingLockCid : Optional (ContractId GovernanceLock)
       -- ^ The lock that keeps the funds that were not transferred, if any.
     unlockedAmulet : ContractId Amulet
       -- ^ The transferred funds, returned to the owner of the source lock.
@@ -1492,7 +1492,7 @@ data VestingLockTransfer_AcceptResult
   = VestingLockTransfer_AcceptResult with
     lockCid : ContractId VestingLock
       -- ^ The new lock of the receiver, which holds the transferred funds.
-    remainderCid : Optional (ContractId VestingLock)
+    remainingLockCid : Optional (ContractId VestingLock)
       -- ^ The lock of the sender that keeps the funds that were not transferred, if any.
     lockedAmulet : ContractId LockedAmulet
       -- ^ The transferred funds, now locked for the owner of the new lock.
@@ -1506,7 +1506,7 @@ data VestingLockTransfer_RejectResult = VestingLockTransfer_RejectResult
 
 data VestingLock_DsoTransferResult
   = VestingLock_DsoTransferResult with
-    remainderCid : Optional (ContractId VestingLock)
+    remainingLockCid : Optional (ContractId VestingLock)
       -- ^ The lock that keeps the funds that were not transferred, if any.
     unlockedAmulet : ContractId Amulet
       -- ^ The transferred funds, returned to the owner of the source lock.
@@ -1560,17 +1560,17 @@ governanceLock_transferImpl self this@GovernanceLock{..} transferredAmount extra
       (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet transferredAmount context
       requireMinimumLock state remainingAmount
       requireMinimumLock state transferredAmount
-      remainderCid <- create this with
+      remainingLockCid <- create this with
         amount = remainingAmount
         lockedAmulet = newLockedAmulet
         originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
       pure GovernanceLock_DsoTransferResult with
-        remainderCid = Some remainderCid
+        remainingLockCid = Some remainingLockCid
         unlockedAmulet
     EQ -> do
       (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
       pure GovernanceLock_DsoTransferResult with
-        remainderCid = None
+        remainingLockCid = None
         unlockedAmulet
     GT ->
       fail $ "transferred lock has less funds (" <> show amount <> ") than the amount proposed to be transferred (" <> show transferredAmount <> ")"
@@ -1607,7 +1607,7 @@ governanceLockTransfer_acceptImpl self GovernanceLockTransfer{..} actors extraAr
     requestedAt = transfer.requestedAt
   pure GovernanceLockTransfer_AcceptResult with
     lockCid = newLockCid
-    remainderCid = result.remainderCid
+    remainingLockCid = result.remainingLockCid
     lockedAmulet = newLockedAmulet
 
 governanceLockTransfer_withdrawImpl : GovernanceLockTransfer -> [Party] -> Update GovernanceLockTransfer_WithdrawResult
@@ -1629,17 +1629,17 @@ vestingLock_transferImpl self this@VestingLock{..} transferredAmount extraArgs =
       (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet transferredAmount context
       requireMinimumLock state remainingAmount
       requireMinimumLock state transferredAmount
-      remainderCid <- create this with
+      remainingLockCid <- create this with
         vestingAmount = remainingAmount
         lockedAmulet = newLockedAmulet
         originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
       pure VestingLock_DsoTransferResult with
-        remainderCid = Some remainderCid
+        remainingLockCid = Some remainingLockCid
         unlockedAmulet
     EQ -> do
       (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
       pure VestingLock_DsoTransferResult with
-        remainderCid = None
+        remainingLockCid = None
         unlockedAmulet
     GT ->
       fail $ "transferred lock has less funds (" <> show vestingAmount <> ") than the amount proposed to be transferred (" <> show transferredAmount <> ")"
@@ -1677,7 +1677,7 @@ vestingLockTransfer_acceptImpl self VestingLockTransfer{..} actors extraArgs = d
     originalLockCid = Some $ toAnyContractId self
   pure VestingLockTransfer_AcceptResult with
     lockCid = newLockCid
-    remainderCid = result.remainderCid
+    remainingLockCid = result.remainingLockCid
     lockedAmulet = newLockedAmulet
 
 vestingLockTransfer_withdrawImpl : VestingLockTransfer -> [Party] -> Update VestingLockTransfer_WithdrawResult
