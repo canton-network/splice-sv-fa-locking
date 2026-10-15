@@ -24,8 +24,12 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Fees (relTimeToDays, relTimeToSeconds)
 import Splice.Lock
+import Splice.Lock.TSv1MemoParser
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
-import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
+import Splice.TokenStandard.Utils.Internal.Conversions
+  ( encodeRelTime
+  , encodeTime
+  )
 import Splice.Types
 import Splice.Util
 
@@ -197,6 +201,9 @@ describeVestingLockKind (VLK_SuperValidatorRightsOwner with svName) =
 
 describeVestingSpecification : VestingLockSpecification -> Text
 describeVestingSpecification lock = "Unlocking from supporting " <> describeVestingLockKind lock.kind
+
+-- Substitution
+-- ============
 
 data VestingLockKey = VestingLockKey with
     dso : Party
@@ -409,6 +416,9 @@ vestingLockSubstitution_rejectImpl _self this actors = do
 substitutionVestingLockMetadata : VestingLockSpecification -> RelTime -> Time -> Metadata
 substitutionVestingLockMetadata = encodeVestingLockMetadataWithRequest governanceLockRequestAcceptToSubstituteLock
 
+-- Transfer
+-- ========
+
 instance LockKeyForOwner VestingLockKey where
   lockKeyDso = (.dso)
   lockKeyOwner = (.owner)
@@ -599,6 +609,9 @@ vestingLockTransfer_rejectImpl VestingLockTransfer{..} actors = do
   checkActors actors [[transfer.receiver]]
   pure VestingLockTransfer_RejectResult
 
+-- Metadata
+-- ========
+
 encodeVestingLockSpecMetadata : VestingLockSpecification -> RelTime -> Time -> Metadata
 encodeVestingLockSpecMetadata spec vestingPeriod endTime =
   let (tag, subject) = vestingLockKindToTagAndSubject spec.kind
@@ -628,11 +641,42 @@ encodeVestingLockMetadataWithRequest request spec vestingPeriod endTime =
       memo = encodeLockCompatMemo  meta
   in reasonToMeta memo meta
 
-vestingLockKindToTagAndSubject : VestingLockKind -> (GovernanceLockTag, Text)
+vestingLockKindToTagAndSubject : VestingLockKind -> (LockKindTag, Text)
 vestingLockKindToTagAndSubject (VLK_FeaturedApp provider) =
-  (GLT_FeaturedApp, partyToText provider)
+  (LKT_FeaturedApp, partyToText provider)
 vestingLockKindToTagAndSubject (VLK_SuperValidatorRightsOwner svName) =
-  (GLT_SuperValidator, svName)
+  (LKT_SuperValidator, svName)
+
+-- TSv1 support
+-- ============
+
+vestingLock_transferFactoryV1_withdrawImpl
+  :  Party
+  -> V1.TransferFactory_Transfer
+  -> VestingLockSpecification
+  -> Time
+  -> RelTime
+  -> Time
+  -> Update V1.TransferInstructionResult
+vestingLock_transferFactoryV1_withdrawImpl dso V1.TransferFactory_Transfer{..} specification vestedUntilTime vestingPeriod endTime = do
+  (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+  (lockCid, lock) <- fetchByKey @VestingLock $ VestingLockKey with
+    dso
+    owner = transfer.sender
+    specification
+    vestingPeriod
+    endTime
+  potentiallyUnsafeArchive lockCid
+  result <- vestingLock_withdrawImpl lockCid lock vestedUntilTime [transfer.sender] context
+  pure V1.TransferInstructionResult with
+    output = case result.vestingLock of
+      Some vestingLock -> V1.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId vestingLock
+      None -> V1.TransferInstructionResult_Completed with receiverHoldingCids = []
+    senderChangeCids = [result.vested]
+    meta = emptyMetadata
+
+-- Instances
+------------
 
 instance HasCheckedFetch VestingLock ForOwner where
   contractGroupId VestingLock{..} = ForOwner with dso; owner = owner

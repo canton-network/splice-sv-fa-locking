@@ -19,6 +19,7 @@ import Splice.Amulet.TokenApiUtils (reasonMetaKey)
 import Splice.Api.Token.MetadataV1
 import Splice.GovernanceLock
 import Splice.Lock
+import Splice.Lock.TSv1MemoParser
 import Splice.VestingLock
 
 -- Test parties and helpers
@@ -89,34 +90,34 @@ test_assertParsed = do
 -- Lock kind parser
 -------------------
 
-test_governanceLockTagParser : Script ()
-test_governanceLockTagParser = do
-  -- `GovernanceLockTag` has no `Show` instance, so compare the tags by their text
-  let run t = runParser (governanceLockTagParser' t) ()
-      expectTag tag = expectSuccess (governanceLockTagToText tag) . fmap governanceLockTagToText
+test_lockKindTagParser : Script ()
+test_lockKindTagParser = do
+  -- `LockKindTag` has no `Show` instance, so compare the tags by their text
+  let run t = runParser (lockKindTagParser' t) ()
+      expectTag tag = expectSuccess (lockKindTagToText tag) . fmap lockKindTagToText
 
-  expectTag GLT_FeaturedApp $ run "fa-lock"
-  expectTag GLT_ProvisionalFeaturedApp $ run "provisional-fa-lock"
-  expectTag GLT_SuperValidator $ run "sv-lock"
+  expectTag LKT_FeaturedApp $ run "fa-lock"
+  expectTag LKT_ProvisionalFeaturedApp $ run "provisional-fa-lock"
+  expectTag LKT_SuperValidator $ run "sv-lock"
 
   -- The tag must be known, and the TSv1 receiver party format is not accepted
-  expectErrors ["Invalid lock kind: 'unknown-lock'"] $ governanceLockTagToText <$> run "unknown-lock"
-  expectErrors ["Invalid lock kind: 'cip-127_sv-lock'"] $ governanceLockTagToText <$> run "cip-127_sv-lock"
+  expectErrors ["Invalid lock kind: 'unknown-lock'"] $ lockKindTagToText <$> run "unknown-lock"
+  expectErrors ["Invalid lock kind: 'cip-127_sv-lock'"] $ lockKindTagToText <$> run "cip-127_sv-lock"
 
 test_governanceLockKindParser : Script ()
 test_governanceLockKindParser = do
   let run entries = runParser governanceLockKindParser (mkMeta entries)
       kind' k = (lockKindMetaKey, k)
-      kind k = kind' $ governanceLockTagToText k
+      kind k = kind' $ lockKindTagToText k
       subject s = (lockSubjectMetaKey, s)
 
-  expectSuccess (GLK_FeaturedApp testProvider) $ run [kind GLT_FeaturedApp, subject "provider"]
-  expectSuccess (GLK_ProvisionalFeaturedApp testProvider) $ run [kind GLT_ProvisionalFeaturedApp, subject "provider"]
-  expectSuccess (GLK_SuperValidatorRightsOwner "someSv") $ run [kind GLT_SuperValidator, subject "someSv"]
+  expectSuccess (GLK_FeaturedApp testProvider) $ run [kind LKT_FeaturedApp, subject "provider"]
+  expectSuccess (GLK_ProvisionalFeaturedApp testProvider) $ run [kind LKT_ProvisionalFeaturedApp, subject "provider"]
+  expectSuccess (GLK_SuperValidatorRightsOwner "someSv") $ run [kind LKT_SuperValidator, subject "someSv"]
 
   -- Kind and subject are required; a missing kind is reported before the subject is checked
-  expectErrors ["Missing metadata field '" <> lockSubjectMetaKey <> "'"] $ run [kind GLT_FeaturedApp]
-  expectErrors ["Missing metadata field '" <> lockSubjectMetaKey <> "'"] $ run [kind GLT_SuperValidator]
+  expectErrors ["Missing metadata field '" <> lockSubjectMetaKey <> "'"] $ run [kind LKT_FeaturedApp]
+  expectErrors ["Missing metadata field '" <> lockSubjectMetaKey <> "'"] $ run [kind LKT_SuperValidator]
   expectErrors ["Missing metadata field '" <> lockKindMetaKey <> "'"] $ run [subject "provider"]
   expectErrors ["Missing metadata field '" <> lockKindMetaKey <> "'"] $ run []
 
@@ -125,17 +126,17 @@ test_governanceLockKindParser = do
 
   -- The subject of a featured app lock must be a party
   expectErrors ["Invalid provider for fa-lock: " <> invalidParty] $
-    run [kind GLT_FeaturedApp, subject invalidParty]
+    run [kind LKT_FeaturedApp, subject invalidParty]
   expectErrors ["Invalid provider for provisional-fa-lock: " <> invalidParty] $
-    run [kind GLT_ProvisionalFeaturedApp, subject invalidParty]
+    run [kind LKT_ProvisionalFeaturedApp, subject invalidParty]
 
   -- The subject of an SV lock must only contain alphanumeric characters or hyphens
   expectErrors ["Invalid SV name for sv-lock: " <> invalidSVName] $
-    run [kind GLT_SuperValidator, subject invalidSVName]
+    run [kind LKT_SuperValidator, subject invalidSVName]
 
   -- `governanceLockKindParser'` takes the tag as an argument and ignores the kind field
   expectSuccess (GLK_SuperValidatorRightsOwner "someSv") $
-    runParser (governanceLockKindParser' GLT_SuperValidator) (mkMeta [kind GLT_FeaturedApp, subject "someSv"])
+    runParser (governanceLockKindParser' LKT_SuperValidator) (mkMeta [kind LKT_FeaturedApp, subject "someSv"])
 
 -- Metadata parser
 ------------------
@@ -203,14 +204,14 @@ test_governanceLockSpecificationParser' run = do
   let fullSpecification = GovernanceLockSpecification with
         kind = GLK_FeaturedApp testProvider
   expectSuccess fullSpecification $
-    run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMetaKey, "provider")]
+    run (lockKindTagToText LKT_FeaturedApp) [(lockSubjectMetaKey, "provider")]
 
   expectSuccess (GovernanceLockSpecification with kind = GLK_SuperValidatorRightsOwner "someSv") $
-    run (governanceLockTagToText GLT_SuperValidator) [(lockSubjectMetaKey, "someSv")]
+    run (lockKindTagToText LKT_SuperValidator) [(lockSubjectMetaKey, "someSv")]
 
   -- Invalid field
   expectErrors ["Invalid provider for fa-lock: " <> invalidParty] $
-    run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMetaKey, invalidParty)]
+    run (lockKindTagToText LKT_FeaturedApp) [(lockSubjectMetaKey, invalidParty)]
 
 -- | The lock kind is read from the `lockKindMetaKey` field.
 test_governanceLockSpecificationParser : Script ()
@@ -237,7 +238,7 @@ test_governanceLockRequestTSv1Parser : Script ()
 test_governanceLockRequestTSv1Parser = do
   let run receiver entries = runParser (governanceLockRequestTSv1Parser testAdmin receiver) (mkMeta entries)
       request r = (requestMetaKey, r)
-      faLock = [(lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp), (lockSubjectMetaKey, "provider")]
+      faLock = [(lockKindMetaKey, lockKindTagToText LKT_FeaturedApp), (lockSubjectMetaKey, "provider")]
       faSpecification = GovernanceLockSpecification with kind = GLK_FeaturedApp testProvider
       invalidReceiverError p = "Invalid receiver: '" <> show p <> "'"
 
@@ -354,7 +355,7 @@ test_governanceLockRequestTSv1Parser = do
     ]
     $ run alice
         [ request "unlock-and-start-vesting"
-        , (lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp)
+        , (lockKindMetaKey, lockKindTagToText LKT_FeaturedApp)
         , (lockSubjectMetaKey, invalidParty)
         , (unlockAmountMetaKey, "not-a-decimal")
         ]
@@ -443,7 +444,7 @@ test_substitutionTSv1Parser_examples = do
 test_substitutionTSv1Parser_failures : Script ()
 test_substitutionTSv1Parser_failures = do
   let run' entries = runParser (substitutionTSv1Parser testAdmin) (mkMeta $ substitutionRequest :: entries)
-      run entries = run' $ (lockKindMetaKey, governanceLockTagToText GLT_SuperValidator) :: entries
+      run entries = run' $ (lockKindMetaKey, lockKindTagToText LKT_SuperValidator) :: entries
       subject = (lockSubjectMetaKey, "someSv")
       targetOwner = (targetLockOwnerMetaKey, "alice")
 

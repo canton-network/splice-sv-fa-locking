@@ -4,7 +4,7 @@
 {-# LANGUAGE ApplicativeDo #-}
 
 -- | Lock mechanics on locked amulets, and the parts of lock transfers,
--- substitutions and TSv1 support that governance and vesting locks share.
+-- substitutions and TSv1 support that do not depend on the lock type.
 module Splice.Lock where
 
 import Prelude hiding (forA)
@@ -12,24 +12,30 @@ import DA.Assert
 import DA.List.Total (head)
 import DA.Map qualified as Map
 import DA.Optional
-import DA.Text qualified as Text
-import DA.TextMap qualified as TextMap
 import DA.Time
 import DA.Traversable (forA)
 
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
-import Splice.AmuletConfig (getTokenStandardMaxTTL, governanceLockMinimumLockAmount)
+import Splice.AmuletConfig
+  ( getTokenStandardMaxTTL
+  , governanceLockMinimumLockAmount
+  )
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Expiry hiding (maxTime)
 import Splice.ExternalPartyConfigState
+import Splice.Lock.TSv1MemoParser
+import Splice.Round
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.Types
 import Splice.Util
+
+-- Checks and choice context
+-- =========================
 
 requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
 requireMinimumLock context amount = do
@@ -42,6 +48,15 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
           externalPartyConfigState = configStateCid
           featuredAppRight = None
        , configState )
+
+getMiningRoundsFromChoiceContext : ChoiceContext -> Update ([ContractId IssuingMiningRound], ContractId OpenMiningRound)
+getMiningRoundsFromChoiceContext choiceContext = do
+  issuingMiningRoundCids <- getFromContextU @([ContractId IssuingMiningRound]) choiceContext issuingMiningRoundContextKey
+  openMiningRoundCid <- getFromContextU @(ContractId OpenMiningRound) choiceContext openMiningRoundContextKey
+  pure (issuingMiningRoundCids, openMiningRoundCid)
+
+-- Substitution
+-- ============
 
 -- | Unlocks the funds of a substitution proposal, which returns them to the proposer.
 -- Returns `None` if the proposal did not lock any funds.
@@ -101,6 +116,7 @@ substitutionTransferResult_failed unlockedAmulet = V1.TransferInstructionResult 
 
 -- Transfer
 -- ========
+
 -- | The terms of a lock transfer: how much of the owner's locks moves to the
 -- receiver.
 --
@@ -210,7 +226,9 @@ lockTransferExpiresAt transfer extraArgs = do
 
 -- Helpers for handling LockedAmulet
 -- =================================
+
 -- Invariant: _none_ of these functions move amounts to new parties or modify total amounts of amulet (except when minting from reward coupons).
+
 type LockSpecification = (Decimal, LockProperties)
 data LockProperties = LockProperties with
   context : Text
@@ -277,82 +295,9 @@ lockAmuletFor forOwner@ForOwner {..} receiver specs holdingInputs context reason
     , result.senderChangeAmulet
     )
 
--- Metadata
--- ========
--- Update this to the implementation CIP once that has a number assigned.
-cipPrefix = "cip-127"
-
--- | Prefix of the metadata keys used to pass extra choice parameters.
-cipMetaPrefix = cipPrefix <> "/"
-
--- | Remove `cipMetaPrefix` from a metadata key.
-removeMetaKeyPrefix : Text -> Text
-removeMetaKeyPrefix = Text.dropPrefix cipMetaPrefix
-
--- | Prefix of the memo tag used to specify lock attributes.
-cipMemoPrefix = cipMetaPrefix <> "memo:"
-
--- | Metadata key that specifies the requested lock operation.
-requestMetaKey = cipMetaPrefix <> "request"
-
--- | Metadata key of a `GovernanceLock` kind.
-lockKindMetaKey = cipMetaPrefix <> "lock-kind"
-
--- | Metadata key of a `GovernanceLock` subject.
-lockSubjectMetaKey = cipMetaPrefix <> "lock-subject"
-
--- | Metadata key that specifies the status of a lock.
-lockStatusMetaKey = cipMetaPrefix <> "lock-status"
-
--- | Metadata key that specifies the duration of a `VestingLock`.
-lockVestingDurationMetaKey = cipMetaPrefix <> "lock-vesting-duration-micros"
-
--- | Metadata key that specifies the end time of a `VestingLock`.
-lockVestingEndTimeMetaKey = cipMetaPrefix <> "lock-vesting-end-time-micros"
-
--- | Metadata key that encodes a human-readable description of a `VestingLock` duration and end time.
-lockVestingInfoMetaKey = cipMetaPrefix <> "lock-vesting-info"
-
-encodeRequestMetadata : Text -> Metadata
-encodeRequestMetadata request = Metadata $ TextMap.singleton requestMetaKey request
-
-encodeCommonLockMetadata : GovernanceLockTag -> Text -> LockState -> Metadata -> Metadata
-encodeCommonLockMetadata tag subject state meta =
-  meta <> (Metadata $ TextMap.fromList
-    [ (lockKindMetaKey, governanceLockTagToText tag)
-    , (lockSubjectMetaKey, subject)
-    , (lockStatusMetaKey, lockStateToText state)
-    ])
-
-encodeLockCompatMemo : Metadata -> Text
-encodeLockCompatMemo meta =
-  let encodeKeyValue (k, v) = removeMetaKeyPrefix k <> "=" <> v
-      keyValues = fmap encodeKeyValue $ TextMap.toList $ meta.values
-  in cipMemoPrefix <> Text.intercalate "&" keyValues
-
 -- TSv1 support
 -- ============
+
 -- | Special party used to identify lock transfers.
 lockManagerParty : Party
 lockManagerParty = fromSome $ partyFromText $ cipPrefix <> "_lock-manager::1220000000000000000000000000000000000000000000000000000000000000abcd"
-
-data GovernanceLockTag
-  = GLT_FeaturedApp
-  | GLT_ProvisionalFeaturedApp
-  | GLT_SuperValidator
-  deriving (Eq)
-
-governanceLockTagToText : GovernanceLockTag -> Text
-governanceLockTagToText GLT_FeaturedApp = "fa-lock"
-governanceLockTagToText GLT_ProvisionalFeaturedApp = "provisional-fa-lock"
-governanceLockTagToText GLT_SuperValidator = "sv-lock"
-
-data LockState = LS_Locked | LS_Vesting
-  deriving (Eq, Show)
-
-lockStateToText : LockState -> Text
-lockStateToText LS_Locked = "locked"
-lockStateToText LS_Vesting = "vesting"
-
-governanceLockRequestAcceptToSubstituteLock = "accept-to-substitute-lock"
-governanceLockRequestAcceptToTransferLock = "accept-to-transfer-lock"

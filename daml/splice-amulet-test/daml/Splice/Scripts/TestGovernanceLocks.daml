@@ -19,6 +19,7 @@ import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyAmuletRules
 import Splice.GovernanceLock
 import Splice.Lock
+import Splice.Lock.TSv1MemoParser
 import Splice.VestingLock
 import Splice.Round
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
@@ -899,11 +900,11 @@ tsv1RequestMemo : Text -> GovernanceLockKind -> Text
 tsv1RequestMemo request kind = tsv1RequestMemo' request (governanceLockKindToTagAndSubject kind) []
 
 -- | The TSv1 memo of a lock request, with extra metadata entries.
-tsv1RequestMemo' : Text -> (GovernanceLockTag, Text) -> [(Text, Text)] -> Text
+tsv1RequestMemo' : Text -> (LockKindTag, Text) -> [(Text, Text)] -> Text
 tsv1RequestMemo' request (tag, subject) extraEntries =
   encodeLockCompatMemo $ Metadata $ TM.fromList $
        [ (requestMetaKey, request)
-       , (lockKindMetaKey, governanceLockTagToText tag)
+       , (lockKindMetaKey, lockKindTagToText tag)
        , (lockSubjectMetaKey, subject)
        ] <> extraEntries
 
