@@ -266,14 +266,25 @@ validGovernanceLockConfig GovernanceLockConfig
     , superValidatorWeightSchedule
     }
   =
-    optional True validSuperValidatorWeightSchedule superValidatorWeightSchedule
+    optional True (> 0.0) minimumLockAmount
+    && optional True (> days 0) searchTimeGranularity
+    && optional True
+        (\_ -> isSome superValidatorUnderlockTemporaryGracePeriod
+           && isSome superValidatorUnderlockPermanentGracePeriod
+           && validGracePeriodTimes superValidatorUnderlockTemporaryGracePeriod superValidatorUnderlockPermanentGracePeriod
+        )
+        superValidatorUnderlockEnforcementActivatesAt
+    && optional True validSuperValidatorWeightSchedule superValidatorWeightSchedule
     && optional True (> days 0) superValidatorUnderlockTemporaryGracePeriod
     && optional True (> days 0) superValidatorUnderlockPermanentGracePeriod
-    && validGracePeriodTimes superValidatorUnderlockTemporaryGracePeriod superValidatorUnderlockPermanentGracePeriod
+    && optional True (> days 0) superValidatorLockVestingDuration
+    && optional True (> days 0) featuredAppLockVestingDuration
+    && optional True (> days 0) featuredAppUnderlockGracePeriod
+    && optional True (> 0.0) featuredAppLockThreshold
     where
       -- Assume first is temp
       validGracePeriodTimes (Some tempPeriod) (Some permanentPeriod) = tempPeriod <= permanentPeriod
-      validGracePeriodTimes _ _ = True
+      validGracePeriodTimes _ _ = False
 
 
 validSuperValidatorWeightSchedule : Schedule RelTime [SvLockingTier] -> Bool
