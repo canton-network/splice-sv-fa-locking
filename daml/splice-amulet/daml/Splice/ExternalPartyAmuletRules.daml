@@ -153,6 +153,7 @@ template ExternalPartyAmuletRules
            description
          pure (ExternalPartyAmuletRules_CreateTransferCommandResult cmd)
 
+    -- REVIEW(SM): remove all of these choices in favor of the TSv1 codepaths
     nonconsuming choice ExternalPartyAmuletRules_LockForGovernance : ExternalPartyAmuletRules_LockForGovernanceResult
       with
         amount : Decimal

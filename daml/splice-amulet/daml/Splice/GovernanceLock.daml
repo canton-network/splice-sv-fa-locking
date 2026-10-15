@@ -4,6 +4,7 @@
 {-# LANGUAGE ApplicativeDo #-}
 
 module Splice.GovernanceLock where
+-- REIVEW(SM): add an explicit export list to have damlc warn on superfluous functions
 
 import Prelude hiding (forA)
 import DA.Action (unless)
@@ -49,14 +50,15 @@ data GovernanceLockKind
       svName : Text  -- ^ Name of the SV rights owner for whom the funds are locked.
   deriving (Eq, Show, Serializable)
 
+-- REVEWEW (SM): move to this spec and only keep `template GovernanceLock` and its associated types; drop all vesting lock specific templates and choices
 data GovernanceLockSpecification
-  = GovernanceLockSpecification with
+  = FullLockSpecification with
       kind : GovernanceLockKind
-  deriving (Eq, Show, Serializable)
-
-data VestingLockSpecification
-  = VestingLockSpecification with
+  | VestingLockSpecification with
       kind : GovernanceLockKind
+      vestingPeriod : RelTime  -- ^ Duration over which the amount vests in a linear fashion.
+      endTime : Time  -- ^ Time at which vesting completes.
+      -- REIVEW(SM): note that the custom controllers will also become part of the spec here (and above for governance locks), which will have exactly the right semantics wrt key lookup and all
   deriving (Eq, Show, Serializable)
 
 template GovernanceLock
@@ -86,6 +88,7 @@ template GovernanceLock
         (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
         governanceLock_unlockImpl self this unlockAmount unlockAt actors context state
 
+    -- REIVEW(SM): remove in favor of auto-merging
     choice GovernanceLock_MergeAndTopUp : GovernanceLock_MergeAndTopUpResult
       with
         topUpAmount : Decimal
@@ -274,7 +277,8 @@ data GovernanceLock_UnlockResult
       vestingLock : Optional (ContractId VestingLock)
       governanceLock : Optional (ContractId GovernanceLock)
       unlockedAmulet : Optional (ContractId Amulet)
-  deriving (Eq, Show, Serializable)
+  deriving (Eq, Show)
+  -- REVIEW(SM): as part of removing the custom choices also remove 'Serializable' from the result types in case they are still used
 
 data GovernanceLock_MergeAndTopUpResult
   = GovernanceLock_MergeAndTopUpResult with
