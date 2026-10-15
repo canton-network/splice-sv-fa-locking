@@ -248,7 +248,7 @@ abstract class ScanStoreTest
         _ <- dummyDomain.create(wanted)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(unwanted)(store.multiDomainAcsStore)
         result <- store.multiDomainAcsStore.listContracts(
-          splice.governancelock.VestingLock.COMPANION
+          splice.vestinglock.VestingLock.COMPANION
         )
       } yield {
         result.map(_.contractId) should contain theSameElementsAs Seq(wanted.contractId)

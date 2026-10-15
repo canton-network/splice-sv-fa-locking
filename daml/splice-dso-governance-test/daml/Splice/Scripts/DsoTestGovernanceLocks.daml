@@ -13,6 +13,8 @@ import Splice.Amulet (Amulet, FeaturedAppRight(..), LockedAmulet, LockedAmulet_O
 import Splice.DsoRules (DsoRules, DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(..), DsoRules_GovernanceLockSubstitution_WithdrawExpired(..), DsoRules_GovernanceLockTransfer_Expire(..), DsoRules_VestingLock_ExpireVestingLock(..), DsoRules_VestingLockSubstitution_WithdrawExpired(..), DsoRules_VestingLockTransfer_Expire(..))
 import Splice.ExternalPartyAmuletRules
 import Splice.GovernanceLock
+import Splice.Lock
+import Splice.VestingLock
 import Splice.Scripts.DsoTestUtils (initDevNet)
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.Util
@@ -87,7 +89,7 @@ setupVestingLock = do
         vestingPeriod = testVestingPeriod
         endTime = unlockAt `addRelTime` testVestingPeriod
         vestingAmount = testVestingAmount
-        specification = VestingLockSpecification with kind = testLockKind
+        specification = VestingLockSpecification with kind = VLK_SuperValidatorRightsOwner "TestSV"
         originalLockCid = Some (coerceContractId governanceLockCid)
 
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid

@@ -756,11 +756,11 @@ trait SvDsoStore
   def listExpiredVestingLocks(
       unavailablePartiesStore: Option[UnavailablePartiesStore]
   ): ListExpiredContracts[
-    splice.governancelock.VestingLock.ContractId,
-    splice.governancelock.VestingLock,
+    splice.vestinglock.VestingLock.ContractId,
+    splice.vestinglock.VestingLock,
   ] =
     multiDomainAcsStore.listExpiredFromPayloadExpiry(
-      splice.governancelock.VestingLock.COMPANION,
+      splice.vestinglock.VestingLock.COMPANION,
       unavailablePartiesStore,
       // TODO(canton-network/splice-sv-fa-locking#76): Make sure custom
       // controllers parties are listed here as well when they are implemented
@@ -1687,7 +1687,7 @@ object SvDsoStore {
           contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.expiresAt)),
         )
       },
-      mkFilter(splice.governancelock.VestingLock.COMPANION)(
+      mkFilter(splice.vestinglock.VestingLock.COMPANION)(
         co => co.payload.dso == dso,
         versionGuard = { case (pkgVersionSupport, now) =>
           (tc) => pkgVersionSupport.supportsGovernanceLock(Seq(dsoParty), now)(tc)

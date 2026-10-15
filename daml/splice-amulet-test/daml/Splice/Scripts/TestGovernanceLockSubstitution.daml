@@ -20,6 +20,8 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyAmuletRules
 import Splice.GovernanceLock
+import Splice.Lock
+import Splice.VestingLock
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Scripts.UnitTests.GovernanceLockParsers (substitutionTSv1Parser)
@@ -144,7 +146,7 @@ testSubstitutionMeta_vestingTargetRoundTrip = do
   now <- getTime
   admin <- allocateParty "admin"
   alice <- allocateParty "alice"
-  let kind = GLK_SuperValidatorRightsOwner "TestSV"
+  let kind = VLK_SuperValidatorRightsOwner "TestSV"
       targetKey = VestingLockKey with
         dso = admin
         owner = alice
@@ -467,7 +469,7 @@ testSubstitutionV1_vestingTarget = do
   unlockAt <- (`addRelTime` hours 1) <$> getTime
   (Some vestingCid, None, None) <- governanceUnlockRawChoice registry lockCid 50000.0 unlockAt [alice]
   Some vestingLock <- queryContractId alice vestingCid
-  let newSpec = VestingLockSpecification with kind
+  let newSpec = VestingLockSpecification with kind = VLK_SuperValidatorRightsOwner "TestSV"
 
   result <- expectSuccess $ createSubstitutionRaw env bob
     (AS_Vesting with

@@ -497,7 +497,7 @@ object ScanStore {
             contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.expiresAt)),
           )
         ),
-        mkFilter(splice.governancelock.VestingLock.COMPANION)(
+        mkFilter(splice.vestinglock.VestingLock.COMPANION)(
           co => co.payload.dso == dso,
           versionGuard = { case (pkgVersionSupport, now) =>
             (tc) => pkgVersionSupport.supportsGovernanceLock(Seq(key.dsoParty), now)(tc)
@@ -508,7 +508,7 @@ object ScanStore {
             contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.endTime)),
           )
         },
-        mkFilter(splice.governancelock.VestingLockSubstitution.COMPANION)(
+        mkFilter(splice.vestinglock.VestingLockSubstitution.COMPANION)(
           co => co.payload.target.dso == dso,
           versionGuard = { case (pkgVersionSupport, now) =>
             (tc) => pkgVersionSupport.supportsGovernanceLock(Seq(key.dsoParty), now)(tc)

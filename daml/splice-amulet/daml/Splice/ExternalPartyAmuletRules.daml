@@ -31,6 +31,12 @@ import Splice.AmuletAllocationV2 as AmuletAllocationV2
 import Splice.AmuletTransferInstruction
 import Splice.AmuletRules
 import Splice.GovernanceLock
+import Splice.Lock (LockKeyForOwner(..), LockTransferArgs, lockManagerParty)
+import Splice.VestingLock
+  ( VestingLockKey
+  , VestingLockTransfer
+  , createVestingLockTransfer
+  )
 import Splice.Types
 import Splice.Util
 
