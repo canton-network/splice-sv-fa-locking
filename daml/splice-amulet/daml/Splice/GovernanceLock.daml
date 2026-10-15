@@ -260,8 +260,7 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount vestingStart
     = do
         fullSpec <- requireFullLock specification
         checkActors actors [[owner]]
-        assertWithinDeadline "vestingStartTime" vestingStartTime
-        assertDeadlineExceeded "vestingStartTime - 1 day" (vestingStartTime `addRelTime` days (-1))
+        assertInNext24Hours "vestingStartTime" vestingStartTime
         require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", amount)
         let isFullUnlock = unlockAmount == amount
         require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
@@ -384,7 +383,7 @@ governanceLock_lockForGovernance_impl
  -> Update (GovernanceLock, ContractId GovernanceLock, Optional (ContractId Amulet))
 governanceLock_lockForGovernance_impl dso amount inputs fullSpecification extraArgs owner requestedAt = do
   let specification = GLS_FullLock fullSpecification
-  assertWithinDeadline "requestedAt + 1 day" $ requestedAt `addRelTime` days 1
+  assertInPast24Hours "requestedAt" requestedAt
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
   requireMinimumLock state amount
   let lockProperties = LockProperties with
@@ -431,6 +430,16 @@ vestingDurationFor (GLK_SuperValidatorRightsOwner _) state = governanceLockSuper
 requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
 requireMinimumLock context amount = do
   require' ("locked amount", amount) isGreaterOrEqualR ("minimum governance lock amount", governanceLockMinimumLockAmount context.governanceLockConfig)
+
+assertInPast24Hours : Text -> Time -> Update ()
+assertInPast24Hours desc time = do
+  assertDeadlineExceeded desc time
+  assertWithinDeadline (desc <> " + 1 day") (time `addRelTime` days 1)
+
+assertInNext24Hours : Text -> Time -> Update ()
+assertInNext24Hours desc time = do
+  assertWithinDeadline desc time
+  assertDeadlineExceeded (desc <> " - 1 day") (time `addRelTime` days (-1))
 
 unfeaturedPaymentContextAndConfigFromChoiceContext : Party -> ChoiceContext -> Update (ExternalPartyTransferContext, ExternalPartyConfigState)
 unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
@@ -936,8 +945,7 @@ governanceLockTransfer_rejectImpl GovernanceLockTransfer{..} actors = do
 -- | Checks to validate lock transfers
 validateLockTransfer : Time -> LockTransfer -> Update ()
 validateLockTransfer expiresAt transfer = do
-  assertDeadlineExceeded "requestedAt" transfer.requestedAt
-  assertWithinDeadline "requestedAt + 1 day" $ transfer.requestedAt `addRelTime` days 1
+  assertInPast24Hours "requestedAt" transfer.requestedAt
   require' ("receiver", transfer.receiver) (notR isEqualR) ("sender", transfer.source.owner)
   -- TODO(canton-network/splice-sv-fa-locking#128): Validate that lock transfer
   --   amount doesn't exceed the total amount of of locks refered by
