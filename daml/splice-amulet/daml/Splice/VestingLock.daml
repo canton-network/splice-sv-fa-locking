@@ -29,7 +29,7 @@ import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTim
 import Splice.Types
 import Splice.Util
 
--- | Kind of a `VestingLock`: the `GovernanceLockKind`s that vest.
+-- | Kind of a `VestingLock`: the kinds of `GovernanceLockKind` that vest.
 data VestingLockKind
   = VLK_FeaturedApp with
       provider : Party -- ^ Featured app provider party.

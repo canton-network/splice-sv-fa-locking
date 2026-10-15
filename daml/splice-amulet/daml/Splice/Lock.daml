@@ -3,7 +3,7 @@
 
 {-# LANGUAGE ApplicativeDo #-}
 
--- | Lock mechanics on `LockedAmulet`s, and the parts of lock transfers,
+-- | Lock mechanics on locked amulets, and the parts of lock transfers,
 -- substitutions and TSv1 support that governance and vesting locks share.
 module Splice.Lock where
 
