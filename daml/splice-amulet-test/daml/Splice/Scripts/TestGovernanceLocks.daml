@@ -177,7 +177,7 @@ testGovernanceLockMinimumAmountsScenario ops = do
   [(remainingLockCid, _)] <- queryFilter @GovernanceLock alice isFullLock
 
   -- Unlock of full amount should succeed.
-  expectSuccess $ ops.governanceUnlock env remainingLockCid alice (unlockMeta 10000.0 unlockAt)
+  expectSuccess $ ops.governanceUnlock env remainingLockCid alice (unlockMeta 10000.0 (unlockAt `addRelTime` minutes 1))
   remainingLocks <- queryFilter @GovernanceLock alice isFullLock
   remainingLocks === []
 
@@ -218,6 +218,80 @@ testGovernanceLockProvisionalUnlockScenario ops = do
   WalletClientV2.checkHoldingWithAmountExists alice instrId 20000.0
   remainingLocks <- query @GovernanceLock alice
   remainingLocks === []
+
+testGovernanceLockMergeOnLockTSv1 : Script ()
+testGovernanceLockMergeOnLockTSv1 = do
+  TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      someSvKind = GLK_SuperValidatorRightsOwner "TestSV"
+
+  AmuletRegistryV2.tapFaucet registry alice 30000.0
+  firstLockCid <- lockForGovernance registries registry alice 20000.0 someSvKind
+  mergedLockCid <- lockForGovernance registries registry alice 5000.0 someSvKind
+
+  [(lockCid, lock)] <- query @GovernanceLock alice
+  lockCid === mergedLockCid
+  lock.amount === 25000.0
+  lock.originalLockCid === Some (toAnyContractId firstLockCid)
+  checkLockedHolding alice lockCid 25000.0
+  archivedLock <- queryContractId alice firstLockCid
+  archivedLock === None
+  WalletClientV2.checkUnlockedBalance alice instrId 6000.0
+
+testGovernanceLockMergeOnUnlockTSv1 : Script ()
+testGovernanceLockMergeOnUnlockTSv1 = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      someSvKind = GLK_SuperValidatorRightsOwner "TestSV"
+
+  AmuletRegistryV2.tapFaucet registry alice 20000.0
+  aliceLock <- lockForGovernance registries registry alice 20000.0 someSvKind
+  transferredGovernanceLock env bob alice 10000.0 someSvKind
+  locks <- query @GovernanceLock alice
+  length locks === 2
+
+  unlockAt <- (`addRelTime` minutes 5) <$> getTime
+  (Some vestingCid, None, None) <- unlockGovernanceLock registries registry aliceLock 30000.0 unlockAt
+  checkLockedHolding alice vestingCid 30000.0
+  remainingLocks <- queryFilter @GovernanceLock alice isFullLock
+  remainingLocks === []
+
+-- | A withdrawal merges the vesting locks with the same key while they vest, and uses a single lock once they have ended.
+testGovernanceLockMergeOnWithdrawTSv1 : Script ()
+testGovernanceLockMergeOnWithdrawTSv1 = do
+  TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      someSvKind = GLK_SuperValidatorRightsOwner "TestSV"
+      withdraw lockCid vestedUntilTime =
+        pendingLockCid @GovernanceLock <$> expectSuccess (withdrawVestingLockRequest registries registry lockCid alice (withdrawMeta vestedUntilTime))
+
+  AmuletRegistryV2.tapFaucet registry alice 40000.0
+  aliceLock <- lockForGovernance registries registry alice 40000.0 someSvKind
+  now <- getTime
+  let firstVestingStart = now `addRelTime` minutes 5
+      secondVestingStart = now `addRelTime` minutes 10
+  (Some firstVestingCid, Some lock2, None) <- unlockGovernanceLock registries registry aliceLock 10000.0 firstVestingStart
+  (Some secondVestingCid, Some lock3, None) <- unlockGovernanceLock registries registry lock2 10000.0 firstVestingStart
+  (Some thirdVestingCid, Some lock4, None) <- unlockGovernanceLock registries registry lock3 10000.0 secondVestingStart
+  (Some _, None, None) <- unlockGovernanceLock registries registry lock4 10000.0 secondVestingStart
+  Some firstVesting <- queryContractId alice firstVestingCid
+  firstSpec <- requireVestingLock firstVesting.specification
+  Some thirdVesting <- queryContractId alice thirdVestingCid
+
+  passTime (days 180)
+  now <- getTime
+  Some mergedVestingCid <- withdraw firstVestingCid now
+  Some mergedVesting <- queryContractId alice mergedVestingCid
+  Some mergedVesting.amount === calculateUnvestedAmount now 20000.0 firstSpec
+  checkLockedHolding alice mergedVestingCid mergedVesting.amount
+  archivedLocks <- mapA (queryContractId alice) [firstVestingCid, secondVestingCid]
+  archivedLocks === [None, None]
+
+  passTime (days 200)
+  now <- getTime
+  None <- withdraw thirdVestingCid now
+  [(_, remainingVesting)] <- queryFilter @GovernanceLock alice (\l -> l.specification == thirdVesting.specification)
+  remainingVesting.amount === 10000.0
 
 testTopUpWithAmuletHappyPath : Script ()
 testTopUpWithAmuletHappyPath = do
@@ -261,8 +335,8 @@ testTopUpWithMergingLocks = do
   aliceLock <- lockForGovernance registries registry alice 50000.0 someSvKind
   checkLockedHolding alice aliceLock 50000.0
 
-  aliceLock2 <- lockForGovernance registries registry alice 10000.0 someSvKind
-  aliceLock3 <- lockForGovernance registries registry alice 10000.0 someSvKind
+  aliceLock2 <- transferredGovernanceLock env bob alice 10000.0 someSvKind
+  aliceLock3 <- transferredGovernanceLock env bob alice 10000.0 someSvKind
 
   -- We want to intentionally pass in no holdingInputs, test MergingLocks only
   (aliceLock', aliceLockChange) <- governanceLockTopUpRawChoice env aliceLock [aliceLock2, aliceLock3] (Some []) 0.0 [] 0.0 alice mempty None
@@ -270,8 +344,8 @@ testTopUpWithMergingLocks = do
   when (isSome aliceLockChange) $ fail "None is expected when no topUpAmount and only locks are provided for 'GovernanceLock_MergeAndTopUp'"
 
   -- Now let's test with topUpAmount in addition to Merging Locks
-  aliceLock4 <- lockForGovernance registries registry alice 25000.0 someSvKind
-  aliceLock5 <- lockForGovernance registries registry alice 25000.0 someSvKind
+  aliceLock4 <- transferredGovernanceLock env bob alice 25000.0 someSvKind
+  aliceLock5 <- transferredGovernanceLock env bob alice 25000.0 someSvKind
 
   (aliceLock'', aliceLockChange') <- governanceLockTopUpRawChoice env aliceLock' [aliceLock4, aliceLock5] None 30000.0 [] 0.0 alice mempty None
   checkLockedHolding alice aliceLock'' 150000.0
@@ -298,8 +372,8 @@ testTopUpWithSvRewardCouponsHappyPath = do
   WalletClientV2.checkUnlockedBalance alice env.instrId aliceBalance
 
   aliceLock <- lockForGovernance registries registry alice aliceLockAmount someSvKind
-  aliceLock2 <- lockForGovernance registries registry alice aliceLockAmount someSvKind
-  aliceLock3 <- lockForGovernance registries registry alice aliceLockAmount someSvKind
+  aliceLock2 <- transferredGovernanceLock env bob alice aliceLockAmount someSvKind
+  aliceLock3 <- transferredGovernanceLock env bob alice aliceLockAmount someSvKind
   checkLockedHolding alice aliceLock aliceLockAmount
 
   svRewardAlice1 <- createSvRewardCoupon provider1 alice aliceWeight
@@ -322,7 +396,7 @@ testTopUpWithSvRewardCouponsHappyPath = do
   let context = openApiChoiceContext.choiceContext
       extraArgs = getExtraArgsForRounds context issuingMiningRoundCid openRoundCid
 
-  let aliceBalanceWithoutInitialLocks = aliceBalance - (aliceLockAmount * 3.0)
+  let aliceBalanceWithoutInitialLocks = aliceBalance - aliceLockAmount
   -- Top up with 1 SvRewardCoupon
   let svRewardCouponPercentage = 1.0
       (expectedAmount, _) = calculateSvRewardCouponAmounts aliceLockAmount [aliceWeight] issuingMiningRound svRewardCouponPercentage
@@ -395,7 +469,7 @@ testTopUpNegativePath = do
   let aliceWeight = 10 * 100
       aliceLockAmount = 10000.0
   aliceLock <- lockForGovernance registries registry alice aliceLockAmount someSvKind
-  checkLockedHolding alice aliceLock aliceLockAmount
+  checkLockedHolding alice aliceLock (2.0 * aliceLockAmount)
   svRewardAlice1 <- submit (actAs dso) $ createCmd SvRewardCoupon with
         dso
         sv = provider1
@@ -672,6 +746,27 @@ unlockGovernanceLockRequest registries registry lockCid actor meta = do
   request <- lockRequest registry lock.owner 0.0
     (tsv1RequestMemo governanceLockRequestUnlockAndStartVesting (governanceLockKind lock.specification)) meta
   submitLockRequest' registries actor request
+
+transferredGovernanceLock : TestEnv -> Party -> Party -> Decimal -> GovernanceLockKind -> Script (ContractId GovernanceLock)
+transferredGovernanceLock env sender receiver amount kind = do
+  let registry = env.registriesEnv.amuletV2
+      receiverLocks = map fst <$> queryFilter @GovernanceLock receiver (\l -> l.owner == receiver)
+  AmuletRegistryV2.tapFaucet registry sender amount
+  lockForGovernance env.registries registry sender amount kind
+  requestedAt <- getTime
+  transferCid <- expectSuccess $ proposeGovernanceLockTransfer' env.registries registry sender LockTransfer with
+    source = GovernanceLockKey with
+      dso = env.instrId.admin
+      owner = sender
+      specification = fullLockSpecification kind
+    receiver
+    amount
+    requestedAt
+  locksBefore <- receiverLocks
+  expectSuccess $ acceptInstructionV1 env (coerceContractId transferCid) receiver
+  locksAfter <- receiverLocks
+  [newLockCid] <- pure $ filter (`notElem` locksBefore) locksAfter
+  pure newLockCid
 
 -- | Unlocks `unlockAmount` of a governance lock, with vesting starting at `vestingStartTime`.
 -- Returns the new vesting lock, the lock with the remaining funds and the unlocked funds, where they exist.

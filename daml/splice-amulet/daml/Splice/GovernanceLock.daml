@@ -6,8 +6,9 @@
 module Splice.GovernanceLock where
 
 import Prelude hiding (forA)
-import DA.Action (unless)
+import DA.Action (foldrA, unless)
 import DA.Assert
+import DA.ContractKeys (lookupNByKey)
 import DA.Foldable (forA_, toList)
 import DA.Functor (($>))
 import DA.List.Total (head)
@@ -255,6 +256,94 @@ template GovernanceLock
       transferInstruction_withdrawImpl _ _ = assertFail "Transfers representing governance locks cannot be withdrawn"
       transferInstruction_updateImpl _ _ = assertFail "Transfers representing governance locks cannot be updated"
 
+data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
+  lockCid : ContractId GovernanceLock
+  lock : GovernanceLock
+  changeHolding : Optional (ContractId Amulet)
+
+fetchAndMergeGovernanceLocks'
+  :  Optional (Decimal, [ContractId Holding], Time)
+  -> GovernanceLockKey
+  -> ExternalPartyTransferContext
+  -> ExternalPartyConfigState
+  -> Update FetchAndMergeLocksResult
+fetchAndMergeGovernanceLocks' newFunds key context state =
+  let
+    defaultNumberToMerge = 20
+
+    merge : Time -> [(ContractId GovernanceLock, GovernanceLock)] -> Update FetchAndMergeLocksResult
+    merge requestedAt locks = do
+      -- The merged lock continues the lineage of the first existing lock
+      -- The lineage of the other merged locks ends here, as a lock can only have one original lock
+      let originalLockCid = (\(cid, lock) -> fromOptional (toAnyContractId cid) lock.originalLockCid) <$> head locks
+          forOwner = ForOwner with dso = key.dso; owner = key.owner
+          (initialAmount, initialInputs) = optional (0.0, []) (\(amount, inputs, _) -> (amount, inputs)) newFunds
+
+      (mergedAmount, inputHoldings) <- foldrA
+        (\(lockCid, lock) (accAmount, accHoldings) -> do
+          potentiallyUnsafeArchive lockCid
+          (amuletCid, (unlockedAmount, _)) <- unlockAmulet forOwner lock.lockedAmulet
+          pure (accAmount + unlockedAmount, toInterfaceContractId amuletCid :: accHoldings))
+        (initialAmount, initialInputs)
+        locks
+
+      -- Presence of `newFunds` means we're creating a lock, so require the minimum amount
+      case newFunds of
+        Some _ -> requireMinimumLock state mergedAmount
+        None -> pure ()
+
+      -- The unlocked holdings sum up to exactly their locked amounts, so any change comes from the new inputs
+      ([newLockedAmulet], changeHolding) <- lockAmulet
+        forOwner
+        [(mergedAmount, governanceLockProperties key.specification)]
+        inputHoldings
+        context
+        ""
+
+      let newLock = GovernanceLock with
+            dso = key.dso
+            owner = key.owner
+            amount = mergedAmount
+            lockedAmulet = newLockedAmulet
+            specification = key.specification
+            originalLockCid
+            requestedAt
+      newLockCid <- create newLock
+      pure FetchAndMergeLocksResult with
+        lockCid = newLockCid
+        lock = newLock
+        changeHolding
+
+    attemptMerge : Int -> Update FetchAndMergeLocksResult
+    attemptMerge numberToMerge = do
+      locks <- lookupNByKey @GovernanceLock numberToMerge key
+      case (newFunds, locks) of
+        (None, []) -> assertFail $ "No locks found with key: " <> show key
+        (None, [(lockCid, lock)]) -> pure FetchAndMergeLocksResult with
+          lockCid
+          lock
+          changeHolding = None
+        (None, (_, lock) :: _) -> merge lock.requestedAt locks
+        (Some (_, _, requestedAt), _) -> merge requestedAt locks
+
+  in case (key.specification, newFunds) of
+    (spec@(GLS_VestingLock _), Some funds) ->
+      assertFail $ "Refusing to lock new funds for vesting lock: " <> show spec <> ", funds: " <> show funds
+
+    (GLS_VestingLock spec, None) -> do
+      -- Vesting locks with `endTime` in the past must not be merged
+      -- Doing so would set `expiresAt = endTime` on the resulting transfer, causing an error in `AmuletRules`
+      stillVesting <- isLedgerTimeLT spec.endTime
+      attemptMerge $ if stillVesting then defaultNumberToMerge else 1
+
+    _ -> attemptMerge defaultNumberToMerge
+
+fetchAndMergeGovernanceLocks : GovernanceLockKey -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update FetchAndMergeLocksResult
+fetchAndMergeGovernanceLocks key context state = do
+  -- `changeHolding` should always be `None` since no new funds are passed
+  result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state
+  pure result
+
 governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_UnlockResult
 governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount vestingStartTime actors context state
     = do
@@ -298,7 +387,7 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount vestingStart
           lockedAmulet
           amount
           specification
-          originalLockCid = guard isFullUnlock $> coerceContractId self
+          originalLockCid = guard isFullUnlock $> fromOptional (toAnyContractId self) originalLockCid
           requestedAt = endTime `addRelTime` (- vestingPeriod))
 
         pure GovernanceLock_UnlockResult with
@@ -385,21 +474,12 @@ governanceLock_lockForGovernance_impl dso amount inputs fullSpecification extraA
   let specification = GLS_FullLock fullSpecification
   assertInPast24Hours "requestedAt" requestedAt
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  requireMinimumLock state amount
-  let lockProperties = LockProperties with
-        context = describeGovernanceLock specification
-        expiresAt = maxBound
-  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] inputs context ""
-  let governanceLock = GovernanceLock with
-        dso
-        owner
-        amount
-        lockedAmulet
-        specification
-        requestedAt
-        originalLockCid = None
-  governanceLockCid <- create governanceLock
-  pure (governanceLock, governanceLockCid, changeHolding)
+  FetchAndMergeLocksResult{lock, lockCid, changeHolding} <- fetchAndMergeGovernanceLocks'
+    (Some (amount, inputs, requestedAt))
+    (GovernanceLockKey with dso; owner; specification)
+    context
+    state
+  pure (lock, lockCid, changeHolding)
 
 governanceLockKind : GovernanceLockSpecification -> GovernanceLockKind
 governanceLockKind = foldGovernanceLockSpecification (.kind) (.kind)
@@ -594,7 +674,8 @@ governanceLock_splitForSubstitutionImpl self this@GovernanceLock{..} splitAmount
 governanceLockSubstitution_acceptImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> ExtraArgs -> Update GovernanceLockSubstitution_AcceptResult
 governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors extraArgs = do
   checkActors actors [[target.owner]]
-  (lockCid, _lock) <- fetchByKey @GovernanceLock target
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext target.dso extraArgs.context
+  FetchAndMergeLocksResult{lockCid} <- fetchAndMergeGovernanceLocks target context state
   (newLockedAmulet, remainingLockCid, unlockedAmulet) <- case lockedAmulet of
     Some proposalLockedAmulet -> do
       substituteResult <- exercise lockCid GovernanceLock_DsoSubstitute with
@@ -904,20 +985,17 @@ governanceLockTransfer_acceptImpl : ContractId GovernanceLockTransfer -> Governa
 governanceLockTransfer_acceptImpl self GovernanceLockTransfer{..} actors extraArgs = do
   checkActors actors [[transfer.receiver]]
   let dso = transfer.source.dso
-  (lockCid, _lock) <- fetchByKey @GovernanceLock transfer.source
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+  FetchAndMergeLocksResult{lockCid} <- fetchAndMergeGovernanceLocks transfer.source context state
   result <- exercise lockCid GovernanceLock_DsoTransfer with
     transferredAmount = transfer.amount
     extraArgs
   -- Lock the unlocked funds of the sender again, now for the receiver.
   -- This needs the authority of the receiver.
-  (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  let lockProperties = LockProperties with
-        context = describeGovernanceLock transfer.source.specification
-        expiresAt = governanceLockExpiresAt transfer.source.specification
   ([newLockedAmulet], None) <- lockAmuletFor
     (ForOwner with dso; owner = transfer.source.owner)
     transfer.receiver
-    [(transfer.amount, lockProperties)]
+    [(transfer.amount, governanceLockProperties transfer.source.specification)]
     [toInterfaceContractId result.unlockedAmulet]
     context
     ""
@@ -980,6 +1058,11 @@ type LockSpecification = (Decimal, LockProperties)
 data LockProperties = LockProperties with
   context : Text
   expiresAt : Time
+
+governanceLockProperties : GovernanceLockSpecification -> LockProperties
+governanceLockProperties spec = LockProperties with
+  context = describeGovernanceLock spec
+  expiresAt = governanceLockExpiresAt spec
 
 splitLockedAmulet : ForOwner -> ContractId LockedAmulet -> LockSpecification -> ExternalPartyTransferContext -> Update (Optional (ContractId LockedAmulet, Decimal), (ContractId LockedAmulet, Decimal))
 splitLockedAmulet forOwner lockedAmuletCid spec@(unlockAmount, _) context = do
@@ -1228,6 +1311,7 @@ governanceLock_transferFactoryV1_lockImpl dso V1.TransferFactory_Transfer{transf
 
   let lockTransfer = (view $ toInterface @V1.TransferInstruction lock).transfer
   requireMatchExpected ("lock transfer", lockTransfer) transfer with
+    amount = lockTransfer.amount
     executeBefore = lockTransfer.executeBefore
     inputHoldingCids = lockTransfer.inputHoldingCids
     meta = lockTransfer.meta
@@ -1247,10 +1331,11 @@ governanceLock_transferFactoryV1_unlockImpl
   -> Update V1.TransferInstructionResult
 governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{transfer, extraArgs} specification unlockAmount vestingStartTime = do
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  (lockCid, lock) <- fetchByKey @GovernanceLock $ GovernanceLockKey with
-    dso
-    owner = transfer.sender
-    specification = GLS_FullLock specification
+  let key = GovernanceLockKey with
+        dso
+        owner = transfer.sender
+        specification = GLS_FullLock specification
+  FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks key context state
   potentiallyUnsafeArchive lockCid
   result <- governanceLock_unlockImpl lockCid lock unlockAmount vestingStartTime [transfer.sender] context state
   pure V1.TransferInstructionResult with
@@ -1298,11 +1383,12 @@ governanceLock_transferFactoryV1_withdrawImpl
   -> Time
   -> Update V1.TransferInstructionResult
 governanceLock_transferFactoryV1_withdrawImpl dso V1.TransferFactory_Transfer{..} specification vestedUntilTime = do
-  (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  (lockCid, lock) <- fetchByKey @GovernanceLock GovernanceLockKey with
-    dso
-    owner = transfer.sender
-    specification = GLS_VestingLock specification
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+  let key = GovernanceLockKey with
+        dso
+        owner = transfer.sender
+        specification = GLS_VestingLock specification
+  FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks key context state
   potentiallyUnsafeArchive lockCid
   result <- vestingLock_withdrawImpl lockCid lock vestedUntilTime [transfer.sender] context
   pure V1.TransferInstructionResult with
