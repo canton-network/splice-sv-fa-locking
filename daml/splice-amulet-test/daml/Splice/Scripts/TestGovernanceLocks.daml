@@ -50,7 +50,7 @@ testGovernanceLockHappyPathScenario ops = do
   now <- getTime
 
   -- Check that negative allocations are impossible
-  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum lock amount'") $
     ops.governanceLock registry bob (-10000.0) someSvKind
 
   -- Check that we can't unlock with a time in the past
@@ -234,7 +234,7 @@ testGovernanceLockCompatPartialUnlockFromMetaScenario ops = do
     ops.governanceUnlock env aliceLock alice (unlockAmountMeta "not-a-decimal")
 
   -- Both the unlocked and the remaining amount must meet the minimum lock amount
-  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum lock amount'") $
     ops.governanceUnlock env aliceLock alice (unlockAmountMeta "25000.0")
 
   -- Unlock 10k of the 30k, which starts vesting 10k and keeps 20k locked
@@ -284,15 +284,15 @@ testGovernanceLockMinimumLocksLockUnlockWithdrawScenario ops = do
   AmuletRegistryV2.tapFaucet registry alice 180000.0
   AmuletRegistryV2.tapFaucet registry bob 10000.0
 
-  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $ ops.governanceLock registry alice 8000.0 someSvKind
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum lock amount'") $ ops.governanceLock registry alice 8000.0 someSvKind
 
   successfulLockCid <- governanceLockRawChoice registry alice 20000.0 someSvKind
 
   unlockAt <- (`addRelTime` minutes 5) <$> getTime
 
-  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $ ops.governanceUnlock registry successfulLockCid 5000.0 unlockAt [alice]
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum lock amount'") $ ops.governanceUnlock registry successfulLockCid 5000.0 unlockAt [alice]
 
-  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $ ops.governanceUnlock registry successfulLockCid 15000.0 unlockAt [alice]
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum lock amount'") $ ops.governanceUnlock registry successfulLockCid 15000.0 unlockAt [alice]
 
   -- Exact amount should succeed.
   (Some firstWithdrawnCid, Some remainingLockCid, None) <- expectSuccess $ ops.governanceUnlock registry successfulLockCid 10000.0 unlockAt [alice]

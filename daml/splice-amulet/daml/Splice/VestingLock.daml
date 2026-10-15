@@ -18,6 +18,7 @@ import DA.Traversable (forA)
 
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
+import Splice.AmuletConfig (governanceLockMinimumLockAmount)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
@@ -320,8 +321,8 @@ vestingLock_substituteImpl self this@VestingLock{..} substitutedAmount extraArgs
     LT -> do
       (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
       (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet substitutedAmount context
-      requireMinimumLock state remainingAmount
-      requireMinimumLock state substitutedAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) remainingAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) substitutedAmount
       remainingLockCid <- create this with
         vestingAmount = remainingAmount
         lockedAmulet = newLockedAmulet
@@ -354,8 +355,8 @@ vestingLock_splitForSubstitutionImpl self this@VestingLock{..} splitAmount newSp
   case splitAmount `compare` vestingAmount of
     LT -> do
       (Some (newLockedAmulet, remainingAmount), (splitAmulet, _)) <- splitLockedAmulet forOwner lockedAmulet (splitAmount, splitLockProperties) context
-      requireMinimumLock state remainingAmount
-      requireMinimumLock state splitAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) remainingAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) splitAmount
       remainingLockCid <- create this with
         vestingAmount = remainingAmount
         lockedAmulet = newLockedAmulet
@@ -546,8 +547,8 @@ vestingLock_transferImpl self this@VestingLock{..} transferredAmount extraArgs =
     LT -> do
       (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
       (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet transferredAmount context
-      requireMinimumLock state remainingAmount
-      requireMinimumLock state transferredAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) remainingAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) transferredAmount
       remainingLockCid <- create this with
         vestingAmount = remainingAmount
         lockedAmulet = newLockedAmulet

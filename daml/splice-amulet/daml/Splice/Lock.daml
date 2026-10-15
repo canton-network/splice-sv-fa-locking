@@ -8,6 +8,7 @@
 module Splice.Lock where
 
 import Prelude hiding (forA)
+import DA.Action (unless)
 import DA.Assert
 import DA.List.Total (head)
 import DA.Map qualified as Map
@@ -20,7 +21,6 @@ import Splice.Amulet.TokenApiUtils
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
 import Splice.AmuletConfig
   ( getTokenStandardMaxTTL
-  , governanceLockMinimumLockAmount
   )
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
@@ -37,9 +37,9 @@ import Splice.Util
 -- Checks and choice context
 -- =========================
 
-requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
-requireMinimumLock context amount = do
-  require' ("locked amount", amount) isGreaterOrEqualR ("minimum governance lock amount", governanceLockMinimumLockAmount context.governanceLockConfig)
+requireMinimumLock : Decimal -> Decimal -> Update ()
+requireMinimumLock minimumLockAmount amount = do
+  require' ("locked amount", amount) isGreaterOrEqualR ("minimum lock amount", minimumLockAmount)
 
 unfeaturedPaymentContextAndConfigFromChoiceContext : Party -> ChoiceContext -> Update (ExternalPartyTransferContext, ExternalPartyConfigState)
 unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
@@ -54,6 +54,104 @@ getMiningRoundsFromChoiceContext choiceContext = do
   issuingMiningRoundCids <- getFromContextU @([ContractId IssuingMiningRound]) choiceContext issuingMiningRoundContextKey
   openMiningRoundCid <- getFromContextU @(ContractId OpenMiningRound) choiceContext openMiningRoundContextKey
   pure (issuingMiningRoundCids, openMiningRoundCid)
+
+-- Lock and unlock
+-- ===============
+
+-- | Funds of `owner` held in a `LockedAmulet` by a lock contract.
+data Lock = Lock with
+    dso : Party
+    owner : Party  -- ^ Lock owner
+    amount : Decimal  -- ^ Locked amount
+    lockedAmulet : ContractId LockedAmulet
+    originalLockCid : Optional AnyContractId
+    requestedAt : Time  -- ^ Time of the request to create this lock.
+  deriving (Eq, Show)
+
+-- | Arguments of `lock_impl`.
+data LockArgs = LockArgs with
+    dso : Party
+    owner : Party
+    amount : Decimal
+    minimumLockAmount : Decimal
+      -- ^ Smallest amount allowed in a lock of this type.
+    inputHoldingCids : [ContractId Holding]
+    lockProperties : LockProperties
+      -- ^ Context and expiry of the created `LockedAmulet`.
+    requestedAt : Time
+    context : ExternalPartyTransferContext
+
+-- | Locks `amount` of the owner's holdings. Returns the new lock and the
+-- change.
+lock_impl : LockArgs -> Update (Lock, Optional (ContractId Amulet))
+lock_impl LockArgs{..} = do
+  assertWithinDeadline "requestedAt + 1 day" $ requestedAt `addRelTime` days 1
+  requireMinimumLock minimumLockAmount amount
+  require' ("amount", amount) isGreaterR ("zero", 0.0)
+  ([lockedAmulet], changeHolding) <- lockAmulet
+    (ForOwner with dso; owner)
+    [(amount, lockProperties)]
+    inputHoldingCids
+    context
+    ""
+  let lock = Lock with
+        dso
+        owner
+        amount
+        lockedAmulet
+        originalLockCid = None
+        requestedAt
+  pure (lock, changeHolding)
+
+-- | Arguments of `unlock_impl` and `split_impl`.
+data UnlockArgs = UnlockArgs with
+    lock : Lock
+    unlockAmount : Decimal
+    minimumLockAmount : Decimal
+      -- ^ Smallest amount allowed on either side of a partial unlock.
+    context : ExternalPartyTransferContext
+
+-- | Unlocks `unlockAmount` of `lock` as an `Amulet` of its owner. Returns
+-- the lock over the remaining funds, if any, and the `Amulet`.
+unlock_impl : UnlockArgs -> Update (Optional Lock, ContractId Amulet)
+unlock_impl args@UnlockArgs{..} = do
+  requireValidUnlock args
+  let forOwner = ForOwner with dso = lock.dso; owner = lock.owner
+  (optStillLocked, amulet) <-
+    partialUnlock forOwner lock.lockedAmulet unlockAmount context
+  pure (remainingLock lock optStillLocked, amulet)
+
+-- | Splits `unlockAmount` of `lock` off into a `LockedAmulet` with
+-- `lockProperties`. Returns the lock over the remaining funds, if any, and
+-- the split-off `LockedAmulet`.
+split_impl
+  :  UnlockArgs
+  -> LockProperties
+  -> Update (Optional Lock, ContractId LockedAmulet)
+split_impl args@UnlockArgs{..} lockProperties = do
+  requireValidUnlock args
+  let forOwner = ForOwner with dso = lock.dso; owner = lock.owner
+  (optStillLocked, (splitAmulet, _)) <- splitLockedAmulet
+    forOwner lock.lockedAmulet (unlockAmount, lockProperties) context
+  pure (remainingLock lock optStillLocked, splitAmulet)
+
+-- | Checks of `unlock_impl` and `split_impl`: `unlockAmount` is positive and
+-- at most the locked amount, and a partial unlock leaves at least the
+-- minimum on both sides.
+requireValidUnlock : UnlockArgs -> Update ()
+requireValidUnlock UnlockArgs{..} = do
+  require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", lock.amount)
+  require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
+  unless (unlockAmount == lock.amount) $ do
+    requireMinimumLock minimumLockAmount unlockAmount
+    requireMinimumLock minimumLockAmount (lock.amount - unlockAmount)
+
+-- | `lock` over the funds that stayed locked, if any.
+remainingLock
+  : Lock -> Optional (ContractId LockedAmulet, Decimal) -> Optional Lock
+remainingLock lock optStillLocked = case optStillLocked of
+  None -> None
+  Some (lockedAmulet, amount) -> Some lock with lockedAmulet; amount
 
 -- Substitution
 -- ============

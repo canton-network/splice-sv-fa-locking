@@ -651,7 +651,7 @@ testSelfSubstitution_failures = do
 
   -- the remainder of 5000.0 is below the minimum lock amount of 10000.0
   smallRemainder <- proposeSelfSubstitution env targetSpec 45000.0
-  expectFailureContaining "minimum governance lock amount" =<<
+  expectFailureContaining "minimum lock amount" =<<
     acceptGovernanceSubstitutionRaw env mempty (fromInterfaceContractId smallRemainder.proposal) [alice]
 
 -- | Rejecting a proposal by the owner of the target lock returns no funds and leaves the target lock unchanged.

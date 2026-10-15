@@ -24,6 +24,7 @@ import Splice.Amulet.TokenApiUtils
 import Splice.AmuletConfig
   ( getTokenStandardMaxTTL
   , governanceLockFeaturedAppLockVestingDuration
+  , governanceLockMinimumLockAmount
   , governanceLockSuperValidatorLockVestingDuration
   )
 import Splice.AmuletRules
@@ -221,33 +222,31 @@ governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount vestingSt
         checkActors actors [[owner]]
         assertWithinDeadline "vestingStartTime" vestingStartTime
         assertDeadlineExceeded "vestingStartTime - 1 day" (vestingStartTime `addRelTime` days (-1))
-        require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", amount)
         let isFullUnlock = unlockAmount == amount
-        require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
-        unless isFullUnlock $ do
-          requireMinimumLock state unlockAmount
-          requireMinimumLock state (amount - unlockAmount)
 
         let vestingPeriod = vestingDurationFor specification.kind state
         let endTime = vestingStartTime `addRelTime` vestingPeriod
         let optSpecification = if vestingPeriod == days 0 then None else governanceToVestingSpecification this.specification
-        let forOwner = ForOwner with dso; owner
         let vestingLockProperties specification = LockProperties with
               context = describeVestingSpecification specification
               expiresAt = endTime
 
-        (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- case optSpecification of
-          None -> do
-            (optStillLocked, unlockedAmulet) <- partialUnlock forOwner lockedAmulet unlockAmount context
-            pure (None, optStillLocked, Some unlockedAmulet)
-          Some specification -> do
-            (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (unlockAmount, vestingLockProperties specification) context
-            pure (Some (vestingLockedAmulet, specification), optStillLocked, None)
+        let unlockArgs = UnlockArgs with
+              lock = governanceLock_toLock this
+              unlockAmount
+              minimumLockAmount = governanceLockMinimumLockAmount state.governanceLockConfig
+              context
 
-        governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
-          this with
-            lockedAmulet
-            amount = stillLockedAmount)
+        (optVestingLockedAmulet, optRemainingLock, unlockedAmulet) <- case optSpecification of
+          None -> do
+            (optRemainingLock, unlockedAmulet) <- unlock_impl unlockArgs
+            pure (None, optRemainingLock, Some unlockedAmulet)
+          Some specification -> do
+            (optRemainingLock, vestingLockedAmulet) <- split_impl unlockArgs (vestingLockProperties specification)
+            pure (Some ((vestingLockedAmulet, unlockAmount), specification), optRemainingLock, None)
+
+        governanceLock <- forA optRemainingLock (\remainingLock -> create
+          (governanceLockFromLock specification remainingLock))
 
         vestingLock <- forA optVestingLockedAmulet (\((lockedAmulet, vestingAmount), specification) -> create VestingLock with
           dso
@@ -292,23 +291,45 @@ governanceLock_lockForGovernance_impl
  -> Time
  -> Update (GovernanceLock, ContractId GovernanceLock, Optional (ContractId Amulet))
 governanceLock_lockForGovernance_impl dso amount inputs specification extraArgs owner requestedAt = do
-  assertWithinDeadline "requestedAt + 1 day" $ requestedAt `addRelTime` days 1
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  requireMinimumLock state amount
-  let lockProperties = LockProperties with
-        context = describeGovernanceSpecification specification
-        expiresAt = maxBound
-  ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] inputs context ""
-  let governanceLock = GovernanceLock with
-        dso
-        owner
-        amount
-        lockedAmulet
-        specification
-        requestedAt
-        originalLockCid = None
+  (lock, changeHolding) <- lock_impl LockArgs with
+    dso
+    owner
+    amount
+    minimumLockAmount = governanceLockMinimumLockAmount state.governanceLockConfig
+    inputHoldingCids = inputs
+    lockProperties = governanceLockProperties specification
+    requestedAt
+    context
+  let governanceLock = governanceLockFromLock specification lock
   governanceLockCid <- create governanceLock
   pure (governanceLock, governanceLockCid, changeHolding)
+
+-- | The `LockProperties` of a governance lock with this specification.
+governanceLockProperties : GovernanceLockSpecification -> LockProperties
+governanceLockProperties specification = LockProperties with
+  context = describeGovernanceSpecification specification
+  expiresAt = maxBound
+
+governanceLock_toLock : GovernanceLock -> Lock
+governanceLock_toLock governanceLock = Lock with
+  dso = governanceLock.dso
+  owner = governanceLock.owner
+  amount = governanceLock.amount
+  lockedAmulet = governanceLock.lockedAmulet
+  originalLockCid = governanceLock.originalLockCid
+  requestedAt = governanceLock.requestedAt
+
+-- | The governance lock with this specification over `lock`.
+governanceLockFromLock : GovernanceLockSpecification -> Lock -> GovernanceLock
+governanceLockFromLock specification lock = GovernanceLock with
+  dso = lock.dso
+  owner = lock.owner
+  amount = lock.amount
+  lockedAmulet = lock.lockedAmulet
+  specification
+  originalLockCid = lock.originalLockCid
+  requestedAt = lock.requestedAt
 
 governanceLockKindObservers : GovernanceLockKind -> [Party]
 governanceLockKindObservers (GLK_FeaturedApp party) = [party]
@@ -458,8 +479,8 @@ governanceLock_substituteImpl self this@GovernanceLock{..} substitutedAmount ext
     LT -> do
       (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
       (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet substitutedAmount context
-      requireMinimumLock state remainingAmount
-      requireMinimumLock state substitutedAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) remainingAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) substitutedAmount
       remainingLockCid <- create this with
         amount = remainingAmount
         lockedAmulet = newLockedAmulet
@@ -492,8 +513,8 @@ governanceLock_splitForSubstitutionImpl self this@GovernanceLock{..} splitAmount
   case splitAmount `compare` amount of
     LT -> do
       (Some (newLockedAmulet, remainingAmount), (splitAmulet, _)) <- splitLockedAmulet forOwner lockedAmulet (splitAmount, splitLockProperties) context
-      requireMinimumLock state remainingAmount
-      requireMinimumLock state splitAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) remainingAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) splitAmount
       remainingLockCid <- create this with
         amount = remainingAmount
         lockedAmulet = newLockedAmulet
@@ -576,7 +597,7 @@ createSubstitution : CreateSubstitutionArgs -> Update (ContractId V1.TransferIns
 createSubstitution CreateSubstitutionArgs {..} = do
   assertDeadlineExceeded "requestedAt" requestedAt
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  requireMinimumLock state amount
+  requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) amount
   let isSelfSubstitution = case substitution of
         AS_Governance{governanceLockKey} -> governanceLockKey.owner == owner
         AS_Vesting{vestingLockKey} -> vestingLockKey.owner == owner
@@ -743,8 +764,8 @@ governanceLock_dsoTransferImpl self this@GovernanceLock{..} transferredAmount ex
     LT -> do
       (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
       (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet transferredAmount context
-      requireMinimumLock state remainingAmount
-      requireMinimumLock state transferredAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) remainingAmount
+      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) transferredAmount
       remainingLockCid <- create this with
         amount = remainingAmount
         lockedAmulet = newLockedAmulet
