@@ -5,6 +5,7 @@ import com.digitalasset.canton.topology.PartyId
 import org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.transferinstructionv1
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock
+import org.lfdecentralizedtrust.splice.codegen.java.splice.vestinglock
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.console.ParticipantClientReference
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.SpliceTestConsoleEnvironment
@@ -217,7 +218,7 @@ trait GovernanceLockTest extends TokenStandardTest {
       owner: RichPartyId,
       lockKind: LockKind,
       lockSubject: String,
-      vestingLock: governancelock.VestingLock,
+      vestingLock: vestinglock.VestingLock,
       vestedUntilTime: CantonTimestamp,
   )(implicit env: SpliceTestConsoleEnvironment): Unit =
     executeTransferViaTokenStandard(
@@ -280,7 +281,7 @@ trait GovernanceLockTest extends TokenStandardTest {
     new SubstituteLockTSv1((Locked, PartyId.tryFromProtoPrimitive(lock.owner), None, None))
 
   /** Propose a substitution of a VestingLock */
-  def substituteVestingLockTSv1(lock: governancelock.VestingLock) =
+  def substituteVestingLockTSv1(lock: vestinglock.VestingLock) =
     new SubstituteLockTSv1(
       (
         Vesting,

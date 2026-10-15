@@ -35,6 +35,7 @@ import org.lfdecentralizedtrust.splice.codegen.java.splice.{
   round as roundCodegen,
   schedule as scheduleCodegen,
   validatorlicense as validatorLicenseCodegen,
+  vestinglock as vestinglockCodegen,
 }
 import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet.{
   cryptohash as cryptoHashCodegen,
@@ -571,19 +572,19 @@ abstract class StoreTestBase
       dso: PartyId = dsoParty,
       svName: String = "sv1",
       contractId: String = nextCid(),
-  ): Contract[governancelockCodegen.VestingLock.ContractId, governancelockCodegen.VestingLock] =
+  ): Contract[vestinglockCodegen.VestingLock.ContractId, vestinglockCodegen.VestingLock] =
     contract(
-      identifier = governancelockCodegen.VestingLock.TEMPLATE_ID_WITH_PACKAGE_ID,
-      contractId = new governancelockCodegen.VestingLock.ContractId(contractId),
-      payload = new governancelockCodegen.VestingLock(
+      identifier = vestinglockCodegen.VestingLock.TEMPLATE_ID_WITH_PACKAGE_ID,
+      contractId = new vestinglockCodegen.VestingLock.ContractId(contractId),
+      payload = new vestinglockCodegen.VestingLock(
         dso.toProtoPrimitive,
         owner.toProtoPrimitive,
         new LockedAmulet.ContractId(nextCid()),
         new RelTime(1_000_000),
         endTime,
         vestingAmount.bigDecimal,
-        new governancelockCodegen.VestingLockSpecification(
-          new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner(svName)
+        new vestinglockCodegen.VestingLockSpecification(
+          new vestinglockCodegen.vestinglockkind.VLK_SuperValidatorRightsOwner(svName)
         ),
         Optional.empty(),
       ),

@@ -18,6 +18,8 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyAmuletRules
 import Splice.GovernanceLock
+import Splice.Lock
+import Splice.VestingLock
 import Splice.Round
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
@@ -239,7 +241,7 @@ testGovernanceLockCompatPartialUnlockFromMetaScenario ops = do
 
   Some vestingLock <- queryContractId alice aliceVesting
   vestingLock.vestingAmount === 10000.0
-  vestingLock.specification.kind === someFaKind
+  Some vestingLock.specification.kind === toVestingLockKind someFaKind
   checkLockedHolding alice aliceVesting 10000.0
 
   -- The original lock is replaced by a lock with the remaining 20k
@@ -894,13 +896,12 @@ iso8601TimeToMeta key t meta = Metadata $ TM.insert key (show t) meta.values
 
 -- | The TSv1 memo of a lock request. A wallet sets it as the transfer reason.
 tsv1RequestMemo : Text -> GovernanceLockKind -> Text
-tsv1RequestMemo request kind = tsv1RequestMemo' request kind []
+tsv1RequestMemo request kind = tsv1RequestMemo' request (governanceLockKindToTagAndSubject kind) []
 
 -- | The TSv1 memo of a lock request, with extra metadata entries.
-tsv1RequestMemo' : Text -> GovernanceLockKind -> [(Text, Text)] -> Text
-tsv1RequestMemo' request kind extraEntries =
-  let (tag, subject) = governanceLockKindToTagAndSubject kind
-  in encodeLockCompatMemo $ Metadata $ TM.fromList $
+tsv1RequestMemo' : Text -> (GovernanceLockTag, Text) -> [(Text, Text)] -> Text
+tsv1RequestMemo' request (tag, subject) extraEntries =
+  encodeLockCompatMemo $ Metadata $ TM.fromList $
        [ (requestMetaKey, request)
        , (lockKindMetaKey, governanceLockTagToText tag)
        , (lockSubjectMetaKey, subject)
@@ -983,7 +984,7 @@ vestingWithdrawV1
   -> Metadata
   -> Script (Either SubmitError (Optional (ContractId VestingLock)))
 vestingWithdrawV1 = subsequentTransferV1 @VestingLock @VestingLock \lock ->
-  tsv1RequestMemo' governanceLockRequestWithdrawVestedFunds lock.specification.kind
+  tsv1RequestMemo' governanceLockRequestWithdrawVestedFunds (vestingLockKindToTagAndSubject lock.specification.kind)
     [ (lockVestingDurationMetaKey, encodeRelTime lock.vestingPeriod)
     , (lockVestingEndTimeMetaKey, encodeTime lock.endTime)
     ]

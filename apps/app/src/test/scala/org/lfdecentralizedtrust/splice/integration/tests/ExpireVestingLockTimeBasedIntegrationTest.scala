@@ -5,7 +5,7 @@ package org.lfdecentralizedtrust.splice.integration.tests
 
 import com.digitalasset.canton.HasExecutionContext
 import com.digitalasset.canton.config.NonNegativeFiniteDuration
-import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock.VestingLock
+import org.lfdecentralizedtrust.splice.codegen.java.splice.vestinglock.VestingLock
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms.{
   ConfigurableApp,

@@ -35,7 +35,7 @@ class ExpireVestingLockTrigger(
       svTaskContext.dsoStore.multiDomainAcsStore,
       svConfig.delegatelessAutomationExpiredVestingLockBatchSize,
       svTaskContext.dsoStore.listExpiredVestingLocks(Some(unavailablePartiesStore)),
-      splice.governancelock.VestingLock.COMPANION,
+      splice.vestinglock.VestingLock.COMPANION,
       svTaskContext.vettingLookupService,
       PackageIdResolver.Package.SpliceAmulet,
       getStakeholders,
@@ -86,17 +86,17 @@ class ExpireVestingLockTrigger(
   }
 }
 
-object ExpireVestingLockTrigger extends ContractStakeholders[splice.governancelock.VestingLock] {
-  private type LockCid = splice.governancelock.VestingLock.ContractId
-  private type Lock = splice.governancelock.VestingLock
+object ExpireVestingLockTrigger extends ContractStakeholders[splice.vestinglock.VestingLock] {
+  private type LockCid = splice.vestinglock.VestingLock.ContractId
+  private type Lock = splice.vestinglock.VestingLock
 
   type Task =
     ScheduledTaskTrigger.ReadyTask[
       BatchedMultiDomainExpiredContractTrigger.Batch[LockCid, Lock]
     ]
 
-  override def informees(payload: splice.governancelock.VestingLock): Seq[String] =
+  override def informees(payload: splice.vestinglock.VestingLock): Seq[String] =
     Seq(payload.owner)
 
-  override def dso(payload: splice.governancelock.VestingLock): String = payload.dso
+  override def dso(payload: splice.vestinglock.VestingLock): String = payload.dso
 }

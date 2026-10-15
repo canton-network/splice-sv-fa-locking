@@ -374,7 +374,7 @@ object GovernanceLockSubstitutionExercise {
       splice.governancelock.GovernanceLockSubstitution.COMPANION.getTemplateIdWithPackageId
     ),
     QualifiedName(
-      splice.governancelock.VestingLockSubstitution.COMPANION.getTemplateIdWithPackageId
+      splice.vestinglock.VestingLockSubstitution.COMPANION.getTemplateIdWithPackageId
     ),
   )
 

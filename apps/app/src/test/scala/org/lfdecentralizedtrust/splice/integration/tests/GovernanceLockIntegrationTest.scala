@@ -6,6 +6,7 @@ package org.lfdecentralizedtrust.splice.integration.tests
 import com.digitalasset.canton.topology.PartyId
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.transferinstructionv1
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock
+import org.lfdecentralizedtrust.splice.codegen.java.splice.vestinglock
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.console.ParticipantClientReference
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
@@ -45,7 +46,7 @@ class GovernanceLockIntegrationTest
 
   private def vestingLocksFor(participant: ParticipantClientReference, owner: PartyId) =
     participant.ledger_api_extensions.acs
-      .filterJava(governancelock.VestingLock.COMPANION)(
+      .filterJava(vestinglock.VestingLock.COMPANION)(
         owner,
         predicate = _.data.owner == owner.toProtoPrimitive,
       )

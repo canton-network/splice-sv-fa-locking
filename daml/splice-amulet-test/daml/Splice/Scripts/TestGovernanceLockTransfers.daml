@@ -7,6 +7,7 @@ module Splice.Scripts.TestGovernanceLockTransfers where
 import DA.Assert ((===))
 import DA.Foldable (forA_)
 import DA.Map qualified as Map
+import DA.Optional (fromSome)
 import DA.Time
 
 import Daml.Script
@@ -17,6 +18,8 @@ import Splice.Api.Token.MetadataV1 (emptyMetadata)
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyAmuletRules
 import Splice.GovernanceLock
+import Splice.Lock
+import Splice.VestingLock
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.TestGovernanceLockSubstitution (expectFailureContaining)
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
@@ -238,7 +241,7 @@ testLockTransferRaw_keyWithoutLock = do
       vestingKey = VestingLockKey with
         dso = instrId.admin
         owner = alice
-        specification = governanceToVestingSpecification governanceKey.specification
+        specification = fromSome $ governanceToVestingSpecification governanceKey.specification
         vestingPeriod = days 365
         endTime = now `addRelTime` days 100
   governanceTransfer <- validLockTransfer governanceKey bob 40000.0

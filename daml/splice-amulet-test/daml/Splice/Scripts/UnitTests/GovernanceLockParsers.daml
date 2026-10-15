@@ -18,6 +18,8 @@ import Daml.Script
 import Splice.Amulet.TokenApiUtils (reasonMetaKey)
 import Splice.Api.Token.MetadataV1
 import Splice.GovernanceLock
+import Splice.Lock
+import Splice.VestingLock
 
 -- Test parties and helpers
 ---------------------------
@@ -295,7 +297,7 @@ test_governanceLockRequestTSv1Parser = do
     \case
       GLR_WithdrawVestingLock{vestingSpecification, vestedUntilTime, vestingPeriod, vestingEndTime} -> do
         vestingSpecification === VestingLockSpecification with
-          kind = GLK_FeaturedApp testProvider
+          kind = VLK_FeaturedApp testProvider
         vestedUntilTime === time (date 2025 Dec 1) 0 0 0
         vestingPeriod === days 60
         vestingEndTime === time (date 2026 Jan 1) 0 0 0
@@ -425,7 +427,7 @@ test_substitutionTSv1Parser_examples = do
         dso = testAdmin
         owner = alice
         specification = VestingLockSpecification with
-          kind = GLK_SuperValidatorRightsOwner "someSv"
+          kind = VLK_SuperValidatorRightsOwner "someSv"
         vestingPeriod = days 60
         endTime = time (date 2026 Jan 1) 0 0 0)
     $ run

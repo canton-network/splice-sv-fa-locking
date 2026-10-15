@@ -5,6 +5,7 @@ package org.lfdecentralizedtrust.splice.integration.tests
 
 import com.digitalasset.canton.config.NonNegativeFiniteDuration
 import org.lfdecentralizedtrust.splice.codegen.java.splice.{amulet as amuletCodegen, governancelock}
+import org.lfdecentralizedtrust.splice.codegen.java.splice.vestinglock
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
@@ -42,6 +43,12 @@ class GovernanceLockTimeBasedIntegrationTest
     kind match {
       case _: governancelock.governancelockkind.GLK_SuperValidatorRightsOwner =>
       case other => fail(s"Expected GLK_SuperValidatorRightsOwner kind, found: $other")
+    }
+
+  private def matchVestingSVKind(kind: vestinglock.VestingLockKind): Unit =
+    kind match {
+      case _: vestinglock.vestinglockkind.VLK_SuperValidatorRightsOwner =>
+      case other => fail(s"Expected VLK_SuperValidatorRightsOwner kind, found: $other")
     }
 
   "SV GovernanceLock created via TSv1 compatibility interface can be unlocked into a VestingLock" in {
@@ -114,7 +121,7 @@ class GovernanceLockTimeBasedIntegrationTest
       ).value
       val vestingLock =
         aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-          .filterJava(governancelock.VestingLock.COMPANION)(
+          .filterJava(vestinglock.VestingLock.COMPANION)(
             ownerParty,
             predicate = _.id.contractId == vestingLockCid.contractId,
           )
@@ -123,7 +130,7 @@ class GovernanceLockTimeBasedIntegrationTest
       vestingLockCid.contractId should not be governanceLockCid.contractId
       vestingLockView.transfer.sender shouldBe ownerParty.toProtoPrimitive
       vestingLockView.transfer.receiver shouldBe lockManagerParty.toProtoPrimitive
-      matchSVKind(vestingLock.specification.kind)
+      matchVestingSVKind(vestingLock.specification.kind)
       vestingLock.endTime
         .minus(vestingLock.vestingPeriod.microseconds, ChronoUnit.MICROS) shouldBe
         vestingStartTime.toInstant
@@ -161,7 +168,7 @@ class GovernanceLockTimeBasedIntegrationTest
           ).loneElement
           val remainingVestingLock =
             aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-              .filterJava(governancelock.VestingLock.COMPANION)(
+              .filterJava(vestinglock.VestingLock.COMPANION)(
                 ownerParty,
                 predicate = _.id.contractId == cid.contractId,
               )
@@ -170,7 +177,7 @@ class GovernanceLockTimeBasedIntegrationTest
           cid.contractId should not be vestingLockCid.contractId
           view.transfer.sender shouldBe ownerParty.toProtoPrimitive
           view.transfer.receiver shouldBe lockManagerParty.toProtoPrimitive
-          matchSVKind(remainingVestingLock.specification.kind)
+          matchVestingSVKind(remainingVestingLock.specification.kind)
           val remainingVestingAmount = BigDecimal(remainingVestingLock.vestingAmount)
           // The explicit withdraw time vests exactly 1/4 of the total lock amount
           val expectedLockAmount = lockAmount / 4 * 3
@@ -204,7 +211,7 @@ class GovernanceLockTimeBasedIntegrationTest
             ownerParty,
           ) shouldBe empty
           aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-            .filterJava(governancelock.VestingLock.COMPANION)(ownerParty, _ => true) shouldBe empty
+            .filterJava(vestinglock.VestingLock.COMPANION)(ownerParty, _ => true) shouldBe empty
         },
       )
 

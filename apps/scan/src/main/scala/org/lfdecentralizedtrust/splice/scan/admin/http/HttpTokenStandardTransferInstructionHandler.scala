@@ -443,7 +443,7 @@ class HttpTokenStandardTransferInstructionHandler(
               )
             case governanceLock: splice.governancelock.GovernanceLock =>
               getGovernanceLockContext("GovernanceLock", Some(governanceLock.lockedAmulet), true)
-            case vestingLock: splice.governancelock.VestingLock =>
+            case vestingLock: splice.vestinglock.VestingLock =>
               // A partial withdrawal (< endTime) unlocks the LockedAmulet, so it is required.
               // A full withdrawal (>= endTime) returns the holding directly, so doesn't need it.
               val requireLockedAmulet = clock.now.toInstant.isBefore(vestingLock.endTime)
@@ -460,7 +460,7 @@ class HttpTokenStandardTransferInstructionHandler(
                 substitution.lockedAmulet.toScala,
                 substitution.lockedAmulet.isPresent,
               )
-            case substitution: splice.governancelock.VestingLockSubstitution =>
+            case substitution: splice.vestinglock.VestingLockSubstitution =>
               getGovernanceLockContext(
                 "VestingLockSubstitution",
                 substitution.lockedAmulet.toScala,
