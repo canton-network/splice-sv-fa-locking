@@ -43,11 +43,11 @@ expectParseError needle (Errors es) =
   unless (any (needle `Text.isInfixOf`) (NonEmpty.toList es)) $
     fail $ "Expected a parse error containing '" <> needle <> "', got " <> show es
 
--- | Proposes a substitution through `ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution`,
+-- | Proposes a substitution through `ExternalPartyAmuletRules`,
 -- funded with all unlocked holdings of the proposer.
 createSubstitutionRaw
   :  TestEnv -> Party -> AnySubstitution -> Decimal
-  -> Script (Either SubmitError ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult)
+  -> Script (Either SubmitError ProposeSubstitutionResult)
 createSubstitutionRaw env proposer substitution amount = do
   now <- getTime
   proposeSubstitutionRawChoice' env.registriesEnv.amuletV2 proposer substitution amount now
@@ -214,19 +214,18 @@ testSubstitution_governanceLock = do
   let createSubstitution amount = do
         inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
         result <- submitWithTransferContext registry (actAs [bob] <> discloseMany' disc) $ \context ->
-          exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
-            args = CreateSubstitutionArgs with
-              dso
-              substitution = AS_Governance with
-                governanceLockKey = GovernanceLockKey with
+          exerciseCmd rulesCid ExternalPartyAmuletRules_ProposeGovernanceLockSubstitution with
+            args = LockSubstitutionArgs with
+              substitution = LockSubstitution with
+                target = GovernanceLockKey with
                   dso
                   owner = alice
                   specification = GovernanceLockSpecification with kind = someSvKind
-              owner = bob
-              amount
+                proposer = bob
+                amount
+                requestedAt = now
               inputHoldingCids = map downcast inputHoldingCids
               extraArgs = emptyExtraArgs with context
-              requestedAt = now
         errorIfLeft result
         pure ()
 
@@ -253,19 +252,18 @@ testSubstitution_governanceLock = do
   (rulesCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
   inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
   result <- submitWithTransferContext registry (actAs [bob] <> discloseMany' disc) $ \context ->
-    exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
-      args = CreateSubstitutionArgs with
-        dso
-        substitution = AS_Governance with
-                governanceLockKey = GovernanceLockKey with
+    exerciseCmd rulesCid ExternalPartyAmuletRules_ProposeGovernanceLockSubstitution with
+      args = LockSubstitutionArgs with
+        substitution = LockSubstitution with
+                target = GovernanceLockKey with
                   dso
                   owner = alice
                   specification = GovernanceLockSpecification with kind = someSvKind
-        owner = bob
-        amount = testLockAmount - testSubstAmount
+                proposer = bob
+                amount = testLockAmount - testSubstAmount
+                requestedAt = now
         inputHoldingCids = map downcast inputHoldingCids
         extraArgs = emptyExtraArgs with context
-        requestedAt = now
   _ <- errorIfLeft result
 
   checkBalances (testSubstAmount, testLockAmount - testSubstAmount) (0.0, testLockAmount)
@@ -301,7 +299,7 @@ testSubstitutionRaw_failures = do
     60000.0
   [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob
 
-  expectFailureContaining "substituted lock has less funds " =<<
+  expectFailureContaining "'unlockAmount' is greater than 'amount'" =<<
     acceptGovernanceSubstitutionRaw env mempty substitutionCid [alice]
 
 -- | Negative: `expiresAt` is derived from `requestedAt`, so dating a proposal into
@@ -508,7 +506,7 @@ setupSelfSubstitution targetSpec = do
 -- | alice proposes to move `amount` of her lock with `targetSpec` to a lock with `newSpec`.
 proposeSelfSubstitution
   :  TestEnv -> GovernanceLockSpecification -> Decimal
-  -> Script ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult
+  -> Script ProposeSubstitutionResult
 proposeSelfSubstitution env targetSpec amount =
   expectSuccess $ createSubstitutionRaw env env.alice
     (AS_Governance with
@@ -646,7 +644,7 @@ testSelfSubstitution_failures = do
 
   -- more than the target lock holds
   tooLarge <- proposeSelfSubstitution env targetSpec 60000.0
-  expectFailureContaining "substituted lock has less funds" =<<
+  expectFailureContaining "'unlockAmount' is greater than 'amount'" =<<
     acceptGovernanceSubstitutionRaw env mempty (fromInterfaceContractId tooLarge.proposal) [alice]
 
   -- the remainder of 5000.0 is below the minimum lock amount of 10000.0

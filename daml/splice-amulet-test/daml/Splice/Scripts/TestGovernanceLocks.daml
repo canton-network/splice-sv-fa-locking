@@ -718,28 +718,58 @@ governanceLockWithSpecRawChoice' registry owner amount specification = do
       requestedAt = now
   pure $ (.governanceLock) <$> result
 
+-- | The target locks of a substitution proposal, of either lock type.
+data AnySubstitution
+  = AS_Governance with
+      governanceLockKey : GovernanceLockKey
+  | AS_Vesting with
+      vestingLockKey : VestingLockKey
+  deriving (Eq, Show)
+
+-- | A substitution proposal of either lock type, as a TSv1 transfer
+-- instruction, and the proposer's change.
+data ProposeSubstitutionResult = ProposeSubstitutionResult with
+    proposal : ContractId V1.TransferInstruction
+    changeHolding : Optional (ContractId Amulet)
+  deriving (Eq, Show)
+
 proposeSubstitutionRawChoice
   :  AmuletRegistryV2.AmuletRegistry -> Party -> AnySubstitution -> Decimal -> Time
-  -> Script ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult
+  -> Script ProposeSubstitutionResult
 proposeSubstitutionRawChoice registry proposer substitution amount requestedAt =
   errorIfLeft =<< proposeSubstitutionRawChoice' registry proposer substitution amount requestedAt
 
 proposeSubstitutionRawChoice'
   :  AmuletRegistryV2.AmuletRegistry -> Party -> AnySubstitution -> Decimal -> Time
-  -> Script (Either SubmitError ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult)
+  -> Script (Either SubmitError ProposeSubstitutionResult)
 proposeSubstitutionRawChoice' registry proposer substitution amount requestedAt = do
   (eparCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
   inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount proposer) proposer registry.instrumentId
-  submitWithTransferContext registry (actAs [proposer] <> discloseMany' disc)
-    \context -> exerciseCmd eparCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
-      args = CreateSubstitutionArgs with
-        dso = registry.instrumentId.admin
-        substitution
-        owner = proposer
-        amount
+  let mkArgs : ChoiceContext -> lockKey -> LockSubstitutionArgs lockKey
+      mkArgs context target = LockSubstitutionArgs with
+        substitution = LockSubstitution with
+          target
+          proposer
+          amount
+          requestedAt
         inputHoldingCids = map downcast inputHoldingCids
         extraArgs = emptyExtraArgs with context
-        requestedAt
+  submitWithTransferContext registry (actAs [proposer] <> discloseMany' disc)
+    \context -> case substitution of
+      AS_Governance{governanceLockKey} ->
+        fmap
+          (\r -> ProposeSubstitutionResult with
+            proposal = toInterfaceContractId r.proposal
+            changeHolding = r.changeHolding)
+          (exerciseCmd eparCid ExternalPartyAmuletRules_ProposeGovernanceLockSubstitution with
+            args = mkArgs context governanceLockKey)
+      AS_Vesting{vestingLockKey} ->
+        fmap
+          (\r -> ProposeSubstitutionResult with
+            proposal = toInterfaceContractId r.proposal
+            changeHolding = r.changeHolding)
+          (exerciseCmd eparCid ExternalPartyAmuletRules_ProposeVestingLockSubstitution with
+            args = mkArgs context vestingLockKey)
 
 governanceUnlockRawChoice
   :  AmuletRegistryV2.AmuletRegistry

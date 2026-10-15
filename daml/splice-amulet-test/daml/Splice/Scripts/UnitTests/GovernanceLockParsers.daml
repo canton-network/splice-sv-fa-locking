@@ -20,6 +20,7 @@ import Splice.Api.Token.MetadataV1
 import Splice.GovernanceLock
 import Splice.Lock
 import Splice.Lock.TSv1MemoParser
+import Splice.Scripts.TestGovernanceLocks (AnySubstitution(..))
 import Splice.VestingLock
 
 -- Test parties and helpers
@@ -371,8 +372,9 @@ testAdmin = testParty "registry-admin"
 -- Arguments: registry admin. Input: metadata to be converted to a compat mode memo.
 substitutionTSv1Parser : Party -> Parser Metadata AnySubstitution
 substitutionTSv1Parser admin = governanceLockRequestTSv1Parser admin lockManagerParty >>= \case
-  GLR_SubstituteLock{substitution} -> pure substitution
-  result -> assertFail $ "Expected GLR_SubstituteLock but got: " <> show result
+  GLR_SubstituteGovernanceLock{governanceLockKey} -> pure AS_Governance with governanceLockKey
+  GLR_SubstituteVestingLock{vestingLockKey} -> pure AS_Vesting with vestingLockKey
+  result -> assertFail $ "Expected a substitution request but got: " <> show result
 
 -- | The metadata entry that requests a substitution.
 substitutionRequest : (Text, Text)

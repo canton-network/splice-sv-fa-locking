@@ -172,7 +172,8 @@ template GovernanceLock
         extraArgs : ExtraArgs
       controller dso
       do
-        governanceLock_substituteImpl self this substitutedAmount extraArgs
+        (remainingLockCid, unlockedAmulet) <- release_impl self this substitutedAmount extraArgs
+        pure GovernanceLock_DsoSubstituteResult with remainingLockCid; unlockedAmulet
 
     choice GovernanceLock_DsoSplitForSubstitution : GovernanceLock_DsoSplitForSubstitutionResult
       -- ^ Split `splitAmount` of the locked funds off into a `LockedAmulet` for a new lock with
@@ -184,7 +185,8 @@ template GovernanceLock
         extraArgs : ExtraArgs
       controller dso
       do
-        governanceLock_splitForSubstitutionImpl self this splitAmount newSpecification extraArgs
+        (remainingLockCid, splitAmulet) <- releaseLocked_impl self this splitAmount (governanceLockProperties newSpecification) extraArgs
+        pure GovernanceLock_DsoSplitForSubstitutionResult with remainingLockCid; splitAmulet
 
     choice GovernanceLock_DsoTransfer : GovernanceLock_DsoTransferResult
       -- ^ Release `transferredAmount` of the locked funds as part of an approved transfer.
@@ -195,7 +197,8 @@ template GovernanceLock
         extraArgs : ExtraArgs
       controller dso
       do
-        governanceLock_dsoTransferImpl self this transferredAmount extraArgs
+        (remainingLockCid, unlockedAmulet) <- release_impl self this transferredAmount extraArgs
+        pure GovernanceLock_DsoTransferResult with remainingLockCid; unlockedAmulet
 
     interface instance V1.TransferInstruction for GovernanceLock where
       view = V1.TransferInstructionView with
@@ -232,7 +235,7 @@ governanceLock_unlockImpl self this@(GovernanceLock {..}) unlockAmount vestingSt
               expiresAt = endTime
 
         let unlockArgs = UnlockArgs with
-              lock = governanceLock_toLock this
+              lock = toLock this
               unlockAmount
               minimumLockAmount = governanceLockMinimumLockAmount state.governanceLockConfig
               context
@@ -310,15 +313,6 @@ governanceLockProperties : GovernanceLockSpecification -> LockProperties
 governanceLockProperties specification = LockProperties with
   context = describeGovernanceSpecification specification
   expiresAt = maxBound
-
-governanceLock_toLock : GovernanceLock -> Lock
-governanceLock_toLock governanceLock = Lock with
-  dso = governanceLock.dso
-  owner = governanceLock.owner
-  amount = governanceLock.amount
-  lockedAmulet = governanceLock.lockedAmulet
-  originalLockCid = governanceLock.originalLockCid
-  requestedAt = governanceLock.requestedAt
 
 -- | The governance lock with this specification over `lock`.
 governanceLockFromLock : GovernanceLockSpecification -> Lock -> GovernanceLock
@@ -472,63 +466,12 @@ data GovernanceLock_DsoSubstituteResult = GovernanceLock_DsoSubstituteResult wit
       -- ^ The substituted funds, returned to the owner.
   deriving (Eq, Show, Serializable)
 
-governanceLock_substituteImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> ExtraArgs -> Update GovernanceLock_DsoSubstituteResult
-governanceLock_substituteImpl self this@GovernanceLock{..} substitutedAmount extraArgs = do
-  let forOwner = ForOwner with dso; owner
-  case substitutedAmount `compare` amount of
-    LT -> do
-      (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-      (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet substitutedAmount context
-      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) remainingAmount
-      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) substitutedAmount
-      remainingLockCid <- create this with
-        amount = remainingAmount
-        lockedAmulet = newLockedAmulet
-        originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
-      pure GovernanceLock_DsoSubstituteResult with
-        remainingLockCid = Some remainingLockCid
-        unlockedAmulet
-    EQ -> do
-      (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
-      pure GovernanceLock_DsoSubstituteResult with
-        remainingLockCid = None
-        unlockedAmulet
-    GT ->
-      fail $ "substituted lock has less funds (" <> show amount <> ") than the amount proposed to be substituted (" <> show substitutedAmount <> ")"
-
 data GovernanceLock_DsoSplitForSubstitutionResult = GovernanceLock_DsoSplitForSubstitutionResult with
     remainingLockCid : Optional (ContractId GovernanceLock)
       -- ^ The lock that keeps the funds that were not split off, if any.
     splitAmulet : ContractId LockedAmulet
       -- ^ The funds that were split off, locked for the new lock.
   deriving (Eq, Show, Serializable)
-
-governanceLock_splitForSubstitutionImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> GovernanceLockSpecification -> ExtraArgs -> Update GovernanceLock_DsoSplitForSubstitutionResult
-governanceLock_splitForSubstitutionImpl self this@GovernanceLock{..} splitAmount newSpecification extraArgs = do
-  let forOwner = ForOwner with dso; owner
-      splitLockProperties = LockProperties with
-        context = describeGovernanceSpecification newSpecification
-        expiresAt = maxBound
-  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  case splitAmount `compare` amount of
-    LT -> do
-      (Some (newLockedAmulet, remainingAmount), (splitAmulet, _)) <- splitLockedAmulet forOwner lockedAmulet (splitAmount, splitLockProperties) context
-      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) remainingAmount
-      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) splitAmount
-      remainingLockCid <- create this with
-        amount = remainingAmount
-        lockedAmulet = newLockedAmulet
-        originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
-      pure GovernanceLock_DsoSplitForSubstitutionResult with
-        remainingLockCid = Some remainingLockCid
-        splitAmulet
-    EQ -> do
-      splitAmulet <- relockAmulet forOwner lockedAmulet splitLockProperties context
-      pure GovernanceLock_DsoSplitForSubstitutionResult with
-        remainingLockCid = None
-        splitAmulet
-    GT ->
-      fail $ "substituted lock has less funds (" <> show amount <> ") than the amount proposed to be substituted (" <> show splitAmount <> ")"
 
 governanceLockSubstitution_acceptImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> ExtraArgs -> Update GovernanceLockSubstitution_AcceptResult
 governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors extraArgs = do
@@ -574,70 +517,33 @@ governanceLockSubstitution_rejectImpl _self this actors = do
 substitutionGovernanceLockMetadata : GovernanceLockSpecification -> Metadata
 substitutionGovernanceLockMetadata = encodeGovernanceLockMetadataWithRequest governanceLockRequestAcceptToSubstituteLock
 
-data AnySubstitution
-  = AS_Governance with
-      governanceLockKey : GovernanceLockKey
-  | AS_Vesting with
-      vestingLockKey : VestingLockKey
-  deriving (Eq, Show, Serializable)
-
--- | Type to simplify passing in all the arguments required to create a substitution proposal.
---
-data CreateSubstitutionArgs = CreateSubstitutionArgs with
-    dso : Party
-    substitution : AnySubstitution
-    owner : Party -- ^ Party that proposed the substitution
-    amount : Decimal -- ^ Amount being substituted
-    inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
-    extraArgs : ExtraArgs
-    requestedAt : Time -- ^ Time of the request to create the proposal
-  deriving (Eq, Show, Serializable)
-
-createSubstitution : CreateSubstitutionArgs -> Update (ContractId V1.TransferInstruction, V1.TransferInstruction, Optional (ContractId Amulet))
-createSubstitution CreateSubstitutionArgs {..} = do
-  assertDeadlineExceeded "requestedAt" requestedAt
-  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) amount
-  let isSelfSubstitution = case substitution of
-        AS_Governance{governanceLockKey} -> governanceLockKey.owner == owner
-        AS_Vesting{vestingLockKey} -> vestingLockKey.owner == owner
-  let lockProperties = LockProperties with
-        -- TODO(canton-network/splice-sv-fa-locking#118): context decscription reads a bit strangely
-        -- TODO(canton-network/splice-sv-fa-locking#118): actually format this at all.
-        context = "" -- "Substitution proposal for " <> describeGovernanceLockKind target.specification
-        expiresAt = maxBound
-  -- A substitution proposed by the owner of the target lock is funded by the target lock on acceptance,
-  -- so it locks no funds and ignores `inputHoldingCids`
-  (lockedAmulet, changeHolding) <- if isSelfSubstitution
-    then pure (None, None)
-    else do
-      ([lockedAmulet], changeHolding) <- lockAmulet (ForOwner with dso; owner) [(amount, lockProperties)] inputHoldingCids context ""
-      pure (Some lockedAmulet, changeHolding)
-  let forOwner = ForOwner with dso; owner
-  let expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
-  case substitution of
-    (AS_Governance with ..) -> do
-      substitutionCid <- create GovernanceLockSubstitution with
-        target = governanceLockKey
-        owner
-        amount
-        lockedAmulet
-        requestedAt
-        expiresAt
-        originalSubstitutionCid = None
-      substitution <- fetchChecked forOwner substitutionCid
-      pure (toInterfaceContractId substitutionCid, toInterface substitution, changeHolding)
-    (AS_Vesting with ..) -> do
-      substitutionCid <- create VestingLockSubstitution with
-        target = vestingLockKey
-        owner
-        amount
-        lockedAmulet
-        requestedAt
-        expiresAt
-        originalSubstitutionCid = None
-      substitution <- fetchChecked forOwner substitutionCid
-      pure (toInterfaceContractId substitutionCid, toInterface substitution, changeHolding)
+-- | Creates a proposal to substitute `amount` of the governance locks with
+-- key `target`. Requires the authority of the DSO party and the proposer.
+createGovernanceLockSubstitution
+  :  LockSubstitutionArgs GovernanceLockKey
+  -> Update
+       (ContractId GovernanceLockSubstitution, Optional (ContractId Amulet))
+createGovernanceLockSubstitution LockSubstitutionArgs{..} = do
+  let target = lockSubstitutionTarget substitution
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext
+    target.dso extraArgs.context
+  funding <- lockSubstitution_createImpl LockSubstitutionCreateArgs with
+    substitution
+    inputHoldingCids
+    minimumLockAmount =
+      governanceLockMinimumLockAmount state.governanceLockConfig
+    newLockProperties = governanceLockProperties target.specification
+    context
+  proposalCid <- create GovernanceLockSubstitution with
+    target
+    owner = substitution.proposer
+    amount = substitution.amount
+    lockedAmulet = funding.optLockedAmulet
+    requestedAt = substitution.requestedAt
+    expiresAt = substitution.requestedAt `addRelTime`
+      getTokenStandardMaxTTL state.transferConfig
+    originalSubstitutionCid = None
+  pure (proposalCid, funding.optChangeHolding)
 
 -- Transfer
 -- ========
@@ -757,30 +663,6 @@ createGovernanceLockTransfer LockTransferArgs{transfer, extraArgs} = do
     transfer
     expiresAt
 
-governanceLock_dsoTransferImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> ExtraArgs -> Update GovernanceLock_DsoTransferResult
-governanceLock_dsoTransferImpl self this@GovernanceLock{..} transferredAmount extraArgs = do
-  let forOwner = ForOwner with dso; owner
-  case transferredAmount `compare` amount of
-    LT -> do
-      (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-      (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet transferredAmount context
-      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) remainingAmount
-      requireMinimumLock (governanceLockMinimumLockAmount state.governanceLockConfig) transferredAmount
-      remainingLockCid <- create this with
-        amount = remainingAmount
-        lockedAmulet = newLockedAmulet
-        originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
-      pure GovernanceLock_DsoTransferResult with
-        remainingLockCid = Some remainingLockCid
-        unlockedAmulet
-    EQ -> do
-      (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
-      pure GovernanceLock_DsoTransferResult with
-        remainingLockCid = None
-        unlockedAmulet
-    GT ->
-      fail $ "transferred lock has less funds (" <> show amount <> ") than the amount proposed to be transferred (" <> show transferredAmount <> ")"
-
 governanceLockTransfer_acceptImpl : ContractId GovernanceLockTransfer -> GovernanceLockTransfer -> [Party] -> ExtraArgs -> Update GovernanceLockTransfer_AcceptResult
 governanceLockTransfer_acceptImpl self GovernanceLockTransfer{..} actors extraArgs = do
   checkActors actors [[transfer.receiver]]
@@ -793,28 +675,21 @@ governanceLockTransfer_acceptImpl self GovernanceLockTransfer{..} actors extraAr
   -- Lock the unlocked funds of the sender again, now for the receiver.
   -- This needs the authority of the receiver, which is the controller of this choice.
   (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  let lockProperties = LockProperties with
-        context = describeGovernanceSpecification source.specification
-        expiresAt = maxBound
-  ([newLockedAmulet], None) <- lockAmuletFor
-    (ForOwner with dso; owner = lockKeyOwner transfer)
-    transfer.receiver
-    [(transfer.amount, lockProperties)]
-    [toInterfaceContractId result.unlockedAmulet]
-    context
-    ""
-  newLockCid <- create GovernanceLock with
+  newLock <- lockTransfer_lockForReceiver LockForReceiverArgs with
     dso
-    owner = transfer.receiver
+    sender = lockKeyOwner transfer
+    receiver = transfer.receiver
     amount = transfer.amount
-    lockedAmulet = newLockedAmulet
-    specification = source.specification
-    originalLockCid = Some $ toAnyContractId self
+    amulet = result.unlockedAmulet
+    lockProperties = governanceLockProperties source.specification
+    transferCid = toAnyContractId self
     requestedAt = transfer.requestedAt
+    context
+  newLockCid <- create (governanceLockFromLock source.specification newLock)
   pure GovernanceLockTransfer_AcceptResult with
     lockCid = newLockCid
     remainingLockCid = result.remainingLockCid
-    lockedAmulet = newLockedAmulet
+    lockedAmulet = newLock.lockedAmulet
 
 governanceLockTransfer_withdrawImpl : GovernanceLockTransfer -> [Party] -> Update GovernanceLockTransfer_WithdrawResult
 governanceLockTransfer_withdrawImpl GovernanceLockTransfer{..} actors = do
@@ -879,8 +754,10 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
       governanceLock_transferFactoryV1_transferLockImpl dso arg governanceSpecification  newOwner transferAmount
     GLR_WithdrawVestingLock{vestingSpecification, vestedUntilTime, vestingPeriod, vestingEndTime} ->
       vestingLock_transferFactoryV1_withdrawImpl dso arg vestingSpecification vestedUntilTime vestingPeriod vestingEndTime
-    GLR_SubstituteLock{substitution} ->
-      governanceLock_transferFactoryV1_substituteImpl dso arg substitution
+    GLR_SubstituteGovernanceLock{governanceLockKey} ->
+      governanceLock_transferFactoryV1_substituteImpl dso arg governanceLockKey
+    GLR_SubstituteVestingLock{vestingLockKey} ->
+      vestingLock_transferFactoryV1_substituteImpl dso arg vestingLockKey
 
 governanceLock_transferFactoryV1_lockImpl
   :  Party
@@ -940,31 +817,12 @@ governanceLock_transferFactoryV1_transferLockImpl _dso V1.TransferFactory_Transf
 governanceLock_transferFactoryV1_substituteImpl
   :  Party
   -> V1.TransferFactory_Transfer
-  -> AnySubstitution
+  -> GovernanceLockKey
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{..} substitution = do
-  (substitutionCid, substitution, changeCid) <- createSubstitution CreateSubstitutionArgs with
-    dso
-    substitution
-    owner = transfer.sender
-    amount = transfer.amount
-    inputHoldingCids = transfer.inputHoldingCids
-    extraArgs
-    requestedAt = transfer.requestedAt
-
-  let substitutionTransfer = (view substitution).transfer
-  requireMatchExpected ("substitution transfer", substitutionTransfer) transfer with
-    -- The receiver of the substitution is the owner of the target lock, not `lockManagerParty`
-    receiver = substitutionTransfer.receiver
-    executeBefore = substitutionTransfer.executeBefore
-    inputHoldingCids = substitutionTransfer.inputHoldingCids
-    meta = substitutionTransfer.meta
-
-  pure V1.TransferInstructionResult with
-    output = V1.TransferInstructionResult_Pending with
-      transferInstructionCid = substitutionCid
-    senderChangeCids = optionalToList $ toInterfaceContractId <$> changeCid
-    meta = emptyMetadata
+governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{..} target = do
+  (proposalCid, changeCid) <- createGovernanceLockSubstitution
+    (substitution_transferFactoryArgs transfer extraArgs target)
+  substitution_transferFactoryResult dso transfer proposalCid changeCid
 
 -- Parsers
 ----------
@@ -1000,8 +858,10 @@ data GovernanceLockRequest
       vestedUntilTime : Time
       vestingPeriod : RelTime
       vestingEndTime : Time
-  | GLR_SubstituteLock with
-      substitution : AnySubstitution
+  | GLR_SubstituteGovernanceLock with
+      governanceLockKey : GovernanceLockKey
+  | GLR_SubstituteVestingLock with
+      vestingLockKey : VestingLockKey
   deriving (Show)
 
 governanceLockSubjectParser : Parser Metadata Text
@@ -1065,11 +925,11 @@ glr_substituteLock_parser : LockKindTag -> Party -> Parser Metadata GovernanceLo
 glr_substituteLock_parser tag admin = do
   targetState <- lockStateParser
   targetOwner <- partyFromMetadataParser targetLockOwnerMetaKey
-  GLR_SubstituteLock <$> case targetState of
+  case targetState of
     LS_Locked -> do
       kind <- governanceLockKindParser' tag
       pure
-        $ AS_Governance with
+        $ GLR_SubstituteGovernanceLock with
           governanceLockKey = GovernanceLockKey with
             dso = admin
             owner = targetOwner
@@ -1079,7 +939,7 @@ glr_substituteLock_parser tag admin = do
       vestingPeriod <- vestingDurationParser
       endTime <- vestingEndTimeParser
       pure
-        $ AS_Vesting with
+        $ GLR_SubstituteVestingLock with
           vestingLockKey = VestingLockKey with
             dso = admin
             owner = targetOwner
@@ -1159,6 +1019,20 @@ getSvRewardInputAmuletAndChange svRewardCouponInputs svRewardCouponPercentage ex
 
 -- Instances
 ------------
+
+instance LockTemplate GovernanceLock where
+  toLock governanceLock = Lock with
+    dso = governanceLock.dso
+    owner = governanceLock.owner
+    amount = governanceLock.amount
+    lockedAmulet = governanceLock.lockedAmulet
+    originalLockCid = governanceLock.originalLockCid
+    requestedAt = governanceLock.requestedAt
+
+  fromLock this = governanceLockFromLock this.specification
+
+  lockMinimumAmount _ state =
+    governanceLockMinimumLockAmount state.governanceLockConfig
 
 instance HasCheckedFetch GovernanceLock ForOwner where
   contractGroupId GovernanceLock{..} = ForOwner with dso; owner = owner
