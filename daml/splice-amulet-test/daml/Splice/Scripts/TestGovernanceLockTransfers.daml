@@ -15,7 +15,6 @@ import Splice.Api.Token.MetadataV1 (emptyMetadata)
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.GovernanceLock
 import Splice.Scripts.TestGovernanceLocks
-import Splice.Scripts.TestGovernanceLockSubstitution (expectFailureContaining)
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
@@ -84,18 +83,6 @@ vestingLockFor env owner lockCid amount = do
     env.registries env.registriesEnv.amuletV2 lockCid amount unlockAt
   Some vestingLock <- queryContractId owner vestingLockCid
   pure (vestingLockCid, vestingLock)
-
--- | Checks the total and unlocked balances of a party.
-checkBalances : TestEnv -> Party -> (Decimal, Decimal) -> Script ()
-checkBalances env party (unlocked, locked) = do
-  WalletClientV2.checkUnlockedBalance party env.instrId unlocked
-  WalletClientV2.checkBalance party env.instrId (unlocked + locked)
-
--- | Checks that a lock is still active, unchanged, under the same contract id.
-checkLockUntouched : (Template t, HasEnsure t, Eq t, Show t) => Party -> ContractId t -> t -> Script ()
-checkLockUntouched owner lockCid lock = do
-  current <- queryContractId owner lockCid
-  current === Some lock
 
 -- Creation of lock transfer proposals
 --------------------------------------
@@ -243,14 +230,6 @@ testLockTransfer_failures = do
 -- | The TSv1 interface of a lock transfer proposal.
 asTransferInstruction : ContractId t -> ContractId V1.TransferInstruction
 asTransferInstruction = coerceContractId
-
--- | The governance locks of `owner`.
-governanceLocksOf : Party -> Script [(ContractId GovernanceLock, GovernanceLock)]
-governanceLocksOf owner = queryFilter @GovernanceLock owner \l -> l.owner == owner && isFullLock l
-
--- | The vesting locks of `owner`.
-vestingLocksOf : Party -> Script [(ContractId GovernanceLock, GovernanceLock)]
-vestingLocksOf owner = queryFilter @GovernanceLock owner \l -> l.owner == owner && not (isFullLock l)
 
 -- | alice proposes to transfer `amount` of her 100000.0 SV lock to bob.
 setupGovernanceLockTransfer
