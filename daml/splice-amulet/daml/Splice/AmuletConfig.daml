@@ -242,10 +242,10 @@ data GovernanceLockConfig = GovernanceLockConfig with
       -- ^ Time from which SV reward mints are tracked on ledger and SV underlocks are enforced.
       --   Default: None
     superValidatorUnderlockTemporaryGracePeriod : Optional RelTime
-      -- ^ How long an underlocked provider has to cure before it temporarily drops a reward tier.
+      -- ^ How long an underlocked sv has to cure before it temporarily drops a reward tier.
       --   Default: 7 days.
     superValidatorUnderlockPermanentGracePeriod : Optional RelTime
-      -- ^ How long an underlocked provider has to cure before it permanently drops a reward tier.
+      -- ^ How long an underlocked sv has to cure before it permanently drops a reward tier.
       --   Default: 30 days.
     superValidatorWeightSchedule : Optional (Schedule RelTime [SvLockingTier])
       -- ^ Tiers in effect, keyed by the time elapsed since `superValidatorUnderlockEnforcementActivatesAt`.
@@ -420,11 +420,6 @@ instance Patchable GovernanceLockConfig where
     superValidatorUnderlockTemporaryGracePeriod = patch new.superValidatorUnderlockTemporaryGracePeriod base.superValidatorUnderlockTemporaryGracePeriod current.superValidatorUnderlockTemporaryGracePeriod
     superValidatorUnderlockPermanentGracePeriod = patch new.superValidatorUnderlockPermanentGracePeriod base.superValidatorUnderlockPermanentGracePeriod current.superValidatorUnderlockPermanentGracePeriod
     superValidatorWeightSchedule = patch new.superValidatorWeightSchedule base.superValidatorWeightSchedule current.superValidatorWeightSchedule
-
-instance Patchable SvLockingTier where
-  patch new base current = SvLockingTier with
-    minLockedFraction = patch new.minLockedFraction base.minLockedFraction current.minLockedFraction
-    rewardWeightFactor = patch new.rewardWeightFactor base.rewardWeightFactor current.rewardWeightFactor
 
 instance Patchable [SvLockingTier] where
   patch = patchScalar

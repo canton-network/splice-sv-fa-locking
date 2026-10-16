@@ -184,6 +184,7 @@ updatePermanentUnderlockState permanentBefore adjustmentState
   | otherwise = assertFail "Must make an underlock permanent"
   where isStillTemporary = (< permanentBefore). startTime
 
+-- | Underlocks older than the permanent grace period become permanent. The newest one has the lowest factor.
 promotePermanent : Time -> RewardAdjustmentState -> RewardAdjustmentState
 promotePermanent permanentCutoff s =
   case span (\underlockEvent -> underlockEvent.startTime > permanentCutoff) s.recoverableUnderlocks of
@@ -193,17 +194,20 @@ promotePermanent permanentCutoff s =
       recoverableUnderlocks = temporary
       lastAdjustedAt = s.lastAdjustedAt
 
+-- | Update the underlock history to include the factor that the SV currently qualifies for.
 applyWarrantedFactor : Time -> Decimal -> RewardAdjustmentState -> RewardAdjustmentState
 applyWarrantedFactor now warranted s
   | warranted >= s.permanentWeightFactor = s with recoverableUnderlocks = []
   | otherwise = s with
     recoverableUnderlocks =
       let (recoveredUnderlocks, rest) = span (\underlockEvent -> underlockEvent.newFactor < warranted) s.recoverableUnderlocks
+          -- The last should have the the oldest recovered underlock. The SV has been below the warranted factor since then.
           start = if null recoveredUnderlocks then now else (last recoveredUnderlocks).startTime
       in case rest of
         underlockEvent :: _ | underlockEvent.newFactor == warranted -> rest
         _ -> (UnderlockEvent with startTime = start; newFactor = warranted) :: rest
 
+-- | Factor used for coupon creation, determined by the lowest factor whose temporary grace period has passed.
 effectiveWeightFactor : RelTime -> Time -> RewardAdjustmentState -> Decimal
 effectiveWeightFactor temporaryGracePeriod now s =
   case dropWhile (\underlockEvent -> underlockEvent.startTime > now `addRelTime` negate temporaryGracePeriod) s.recoverableUnderlocks of

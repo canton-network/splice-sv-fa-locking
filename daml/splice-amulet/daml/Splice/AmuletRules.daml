@@ -222,7 +222,8 @@ template AmuletRules
               issueAppRewards = True
               issueValidatorRewards = True
         executeTransfer (toInterfaceContractId self) rewardsConfig context dso
-          (getDevelopmentFundManagerBlacklist configUsd) transfer
+          (getDevelopmentFundManagerBlacklist configUsd)
+          (configUsd.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)) transfer
 
     nonconsuming choice AmuletRules_CreateExternalPartySetupProposal : AmuletRules_CreateExternalPartySetupProposalResult
       -- ^ Propose to host an external party
@@ -311,12 +312,13 @@ template AmuletRules
         checkExpectedDso dso expectedDso
         -- validate choice parameters
         configUsd <- getValueAsOfLedgerTime configSchedule
+        let svUnderlockEnforcementActivatesAt = configUsd.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)
         case validateBuyMemberTrafficInputs configUsd synchronizerId trafficAmount of
           Left failureStatus -> failWithStatus failureStatus
           Right _ -> pure ()
         (trafficCostAmulet, trafficCostUsd) <- computeSynchronizerFees dso provider trafficAmount this context
         (transferResult, meta) <- splitAndBurn (toInterfaceContractId self) provider trafficCostAmulet inputs context dso
-          (getDevelopmentFundManagerBlacklist configUsd) "traffic purchase"
+          (getDevelopmentFundManagerBlacklist configUsd) svUnderlockEnforcementActivatesAt "traffic purchase"
         -- create a new MemberTraffic contract for the purchased traffic
         purchasedTraffic <- create MemberTraffic with
           dso
@@ -1192,10 +1194,10 @@ data RewardsIssuanceConfig = RewardsIssuanceConfig with
   deriving (Serializable)
 
 -- | Execute a transfer.
-executeTransfer : ContractId TransferEventsV2.EventLog -> RewardsIssuanceConfig -> TransferContext -> Party -> [Party] -> Transfer -> Update TransferResult
-executeTransfer eventLogCid config context dso developmentFundManagerBlacklist t = do
+executeTransfer : ContractId TransferEventsV2.EventLog -> RewardsIssuanceConfig -> TransferContext -> Party -> [Party] -> Optional Time -> Transfer -> Update TransferResult
+executeTransfer eventLogCid config context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt t = do
   -- compute summaries
-  csum <- summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlacklist t
+  csum <- summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt t
   executeTransfer' config csum dso t
 
 -- | Execute a transfer for external parties so that the prepared tx remains valid for 24h
@@ -1214,13 +1216,15 @@ executeTransfer' config csum dso t = do
   osum <- preprocessOutputs csum.config t.outputs
   summary <- summarizeTransfer t.sender csum.openRoundNumber csum.amuletPrice csum.config isum osum
 
-  case isum.mintedSvRewardMap of
-    None -> pure ()
-    Some m -> forA_ (Map.toList m) $ \(svRightOwnerName, amount) ->
-      create SvRewardMintReceipt with
-        dso
-        amount
-        svRightOwnerName
+  let mintedSvRewards = optional [] Map.toList isum.mintedSvRewardMap
+  unless (null mintedSvRewards) $ do
+    receiptsActive <- optional (pure False) isLedgerTimeGE csum.svUnderlockEnforcementActivatesAt
+    when receiptsActive $
+      forA_ mintedSvRewards $ \(svRightOwnerName, amount) ->
+        create SvRewardMintReceipt with
+          dso
+          amount
+          svRightOwnerName
 
   -- check that overall transfer constraints are satisfied
   case checkTransferConstraints t summary csum.config of
@@ -1312,6 +1316,7 @@ data TransferContextSummaryV2 = TransferContextSummaryV2 with
     rewardCalculationVersion : Optional RewardVersion
     eventLogCid : Optional (ContractId TransferEventsV2.EventLog)
     developmentFundManagerBlacklist : Optional [Party]
+    svUnderlockEnforcementActivatesAt : Optional Time
   deriving (Eq, Show, Serializable)
 
 data TransferInputsSummary = TransferInputsSummary with
@@ -1355,8 +1360,8 @@ getUnsuspendedFeaturedAppProvider dso contextFeaturedAppRight tf = do
         then None
         else Some tf.provider
 
-summarizeAndValidateContext : ContractId TransferEventsV2.EventLog -> TransferContext -> Party -> [Party] -> Transfer -> Update TransferContextSummaryV2
-summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlacklist tf = do
+summarizeAndValidateContext : ContractId TransferEventsV2.EventLog -> TransferContext -> Party -> [Party] -> Optional Time -> Transfer -> Update TransferContextSummaryV2
+summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt tf = do
   -- check that the current mining round is open
   openRound <- fetchReferenceData (ForDso with dso) context.openMiningRound
   assertDeadlineExceeded "openRound.opensAt" openRound.opensAt
@@ -1390,6 +1395,7 @@ summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlackl
     rewardCalculationVersion = (.mintingVersion) <$> openRound.rewardConfig
     eventLogCid = Some eventLogCid
     developmentFundManagerBlacklist = Some developmentFundManagerBlacklist
+    svUnderlockEnforcementActivatesAt
 
 
 summarizeAndValidateExternalPartyContext : ExternalPartyTransferContext -> Party -> Transfer -> Update TransferContextSummaryV2
@@ -1418,6 +1424,7 @@ summarizeAndValidateExternalPartyContext context dso tf = do
     -- the blacklist is still enforced in the future once we add support, we set it to `None` here
     -- to show that the list is unknown in the context.
     developmentFundManagerBlacklist = None
+    svUnderlockEnforcementActivatesAt = None
 
 getValidatorRight : TransferContextSummaryV2 -> Party -> Update (ContractId ValidatorRight)
 getValidatorRight csum user =
@@ -2356,13 +2363,13 @@ computeTransferPreapprovalFee duration amuletConfig context dso = do
   let feeAmulet = feeUsd / contextMiningRound.amuletPrice
   pure (feeAmulet, feeUsd)
 
-splitAndBurn : ContractId TransferEventsV2.EventLog -> Party -> Decimal -> [TransferInput] -> TransferContext -> Party -> [Party] -> Text -> Update (TransferResult, Metadata)
-splitAndBurn eventLogCid sender amount inputs context dso developmentFundManagerBlacklist usage = do
+splitAndBurn : ContractId TransferEventsV2.EventLog -> Party -> Decimal -> [TransferInput] -> TransferContext -> Party -> [Party] -> Optional Time -> Text -> Update (TransferResult, Metadata)
+splitAndBurn eventLogCid sender amount inputs context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt usage = do
 -- do not create activity records as part of the transfer. We create a validator activity record for the full burn below.
   let rewardsConfig = RewardsIssuanceConfig with
         issueAppRewards = False
         issueValidatorRewards = False
-  transferResult <- executeTransfer eventLogCid rewardsConfig context dso developmentFundManagerBlacklist Transfer with
+  transferResult <- executeTransfer eventLogCid rewardsConfig context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt Transfer with
     sender
     provider = sender
     inputs
@@ -2413,6 +2420,7 @@ payForTransferPreapproval reason dso provider context inputs expiresAt newExpire
   configUsd <- getValueAsOfLedgerTime amuletRules.configSchedule
   let extension = newExpiresAt `subTime` expiresAt
   let paidExtension = extension - getTransferPreapprovalBaseDuration configUsd
+      svUnderlockEnforcementActivatesAt = configUsd.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)
   if paidExtension <= seconds 0
     then do
       openMiningRound <- fetchChecked (ForDso dso) context.context.openMiningRound
@@ -2441,7 +2449,7 @@ payForTransferPreapproval reason dso provider context inputs expiresAt newExpire
     else do
       (amuletPaid, _) <- computeTransferPreapprovalFee paidExtension configUsd context.context dso
       (transferResult, meta) <- splitAndBurn (toInterfaceContractId context.amuletRules) provider amuletPaid inputs context.context dso
-        (getDevelopmentFundManagerBlacklist configUsd) reason
+        (getDevelopmentFundManagerBlacklist configUsd) svUnderlockEnforcementActivatesAt reason
       pure (amuletPaid, transferResult, meta)
 
 -- Token standard context parsing

@@ -23,7 +23,7 @@ import DA.Validation
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
-import Splice.AmuletConfig (governanceLockFeaturedAppLockVestingDuration, governanceLockMinimumLockAmount, governanceLockSearchTimeGranularity, governanceLockSuperValidatorLockVestingDuration)
+import Splice.AmuletConfig (governanceLockFeaturedAppLockVestingDuration, governanceLockMinimumLockAmount, governanceLockSearchTimeGranularity, governanceLockSuperValidatorLockVestingDuration, GovernanceLockConfig)
 import Splice.AmuletRules
 import Splice.Api.Token.AllocationV2 qualified as V2
 import Splice.Api.Token.AllocationInstructionV2 qualified as V2
@@ -143,7 +143,7 @@ template GovernanceLock
         require' ("svRewardCouponPercentage", svRewardCouponPercentage) isLessOrEqualR ("one", 1.0)
         let forOwner = ForOwner with dso; owner
 
-        (context, _) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+        (context, externalPartyConfigState) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
 
         (holdingsFromSvRewardCoupons, svRewardMintAllowance) <- getSvRewardInputAmuletAndChange
           svRewardCouponInputs
@@ -151,6 +151,7 @@ template GovernanceLock
           extraArgs
           forOwner
           (toInterfaceContractId context.externalPartyConfigState)
+          externalPartyConfigState.governanceLockConfig
 
         (unlockedAmuletCid, (_, lockProps)) <- unlockAmulet forOwner lockedAmulet
 
@@ -1223,9 +1224,10 @@ getSvRewardInputAmuletAndChange
   -> ExtraArgs
   -> ForOwner
   -> ContractId TransferEventsV2.EventLog
+  -> Optional GovernanceLockConfig
   -> Update ([ContractId Holding], Decimal)
-getSvRewardInputAmuletAndChange [] _ _ _ _ = pure ([], 0.0)
-getSvRewardInputAmuletAndChange svRewardCouponInputs svRewardCouponPercentage extraArgs forOwner transferEventsV2EventLog = do
+getSvRewardInputAmuletAndChange [] _ _ _ _ _ = pure ([], 0.0)
+getSvRewardInputAmuletAndChange svRewardCouponInputs svRewardCouponPercentage extraArgs forOwner transferEventsV2EventLog governanceLockConfig = do
   let dso = forOwner.dso
   (currentIssuingMiningRoundCids, openMiningRoundCid) <- getMiningRoundsFromChoiceContext extraArgs.context
   (_, issuingMiningRoundCidsMap) <-
@@ -1246,7 +1248,7 @@ getSvRewardInputAmuletAndChange svRewardCouponInputs svRewardCouponPercentage ex
         issueAppRewards = False
         issueValidatorRewards = False
 
-  result <- executeTransfer transferEventsV2EventLog rewardsConfig transferContext dso [] transfer
+  result <- executeTransfer transferEventsV2EventLog rewardsConfig transferContext dso [] (governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)) transfer
   let (Some changeFromSvCouponRewards) : Optional (ContractId Amulet) = result.senderChangeAmulet
 
   amulet <- fetchChecked forOwner changeFromSvCouponRewards
