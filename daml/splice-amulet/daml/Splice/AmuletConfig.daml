@@ -118,6 +118,7 @@ data AmuletConfig unit = AmuletConfig with
     minDevelopmentFundMintingDelay : Optional RelTime
       -- ^ Minimum delay between allocation and minting. Default: 0 days.
     amuletSwitchOverTimes : Optional (TextMap Time)
+      -- ^ Timepoints for synchronized switch-overs of amulet functionality both on and off-ledger.
     governanceLockConfig : Optional GovernanceLockConfig -- ^ Governance lock configuration.
   deriving (Eq, Show, Serializable)
 
