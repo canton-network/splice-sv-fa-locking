@@ -47,7 +47,7 @@ module Splice.GovernanceLock (
   governanceLockTagToText,
   governanceLockKindToTagAndSubject,
   lockStateToText,
-  encodeCommonLockMetadata,
+  encodeCommonLockMetadataEntries,
   encodeLockCompatMemo,
   transferGovernanceLockMetadata,
   missingMetadataMessage,
@@ -1193,22 +1193,20 @@ getRequiredMetadata' parse key meta = case getOptionalMetadata key meta of
 getRequiredMetadata : CanAssert m => Text -> Metadata -> m Text
 getRequiredMetadata = getRequiredMetadata' pure
 
-encodeRequestMetadata : Text -> Metadata
-encodeRequestMetadata request = Metadata $ TextMap.singleton requestMetaKey request
-
-encodeCommonLockMetadata : GovernanceLockKind -> LockState -> Metadata -> Metadata
-encodeCommonLockMetadata kind state meta =
+-- | The metadata entries of the kind, subject and status of a lock, in the order of the CIP.
+encodeCommonLockMetadataEntries : GovernanceLockKind -> LockState -> [(Text, Text)]
+encodeCommonLockMetadataEntries kind state =
   let (tag, subject) = governanceLockKindToTagAndSubject kind
-  in meta <> (Metadata $ TextMap.fromList
-    [ (lockKindMetaKey, governanceLockTagToText tag)
-    , (lockSubjectMetaKey, subject)
-    , (lockStatusMetaKey, lockStateToText state)
-    ])
+  in [ (lockKindMetaKey, governanceLockTagToText tag)
+     , (lockSubjectMetaKey, subject)
+     , (lockStatusMetaKey, lockStateToText state)
+     ]
 
-encodeGovernanceLockSpecMetadata : GovernanceLockSpecification -> Metadata
-encodeGovernanceLockSpecMetadata = foldGovernanceLockSpecification
-  (\FullLockSpecification{..} -> encodeCommonLockMetadata kind LS_Locked emptyMetadata)
-  (\VestingLockSpecification{..} -> encodeCommonLockMetadata kind LS_Vesting $ Metadata $ TextMap.fromList
+-- | The metadata entries of a lock specification, in the order of the CIP.
+encodeGovernanceLockSpecMetadataEntries : GovernanceLockSpecification -> [(Text, Text)]
+encodeGovernanceLockSpecMetadataEntries = foldGovernanceLockSpecification
+  (\FullLockSpecification{..} -> encodeCommonLockMetadataEntries kind LS_Locked)
+  (\VestingLockSpecification{..} -> encodeCommonLockMetadataEntries kind LS_Vesting <>
     [ (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
     , (lockVestingEndTimeMetaKey, encodeTime endTime)
     , (lockVestingInfoMetaKey, "\"vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime <> "\"")
@@ -1216,21 +1214,23 @@ encodeGovernanceLockSpecMetadata = foldGovernanceLockSpecification
 
 encodeGovernanceLockMetadata : GovernanceLock -> Metadata
 encodeGovernanceLockMetadata GovernanceLock{specification} =
-  let meta = encodeGovernanceLockSpecMetadata specification
-      memo = encodeLockCompatMemo meta
-  in reasonToMeta memo meta
+  encodeLockMetadataEntries $ encodeGovernanceLockSpecMetadataEntries specification
 
 encodeGovernanceLockMetadataWithRequest : Text -> GovernanceLockSpecification -> Metadata
 encodeGovernanceLockMetadataWithRequest request spec =
-  let meta = encodeRequestMetadata request <> encodeGovernanceLockSpecMetadata spec
-      memo = encodeLockCompatMemo meta
-  in reasonToMeta memo meta
+  encodeLockMetadataEntries $ (requestMetaKey, request) :: encodeGovernanceLockSpecMetadataEntries spec
 
-encodeLockCompatMemo : Metadata -> Text
-encodeLockCompatMemo meta =
+-- | Metadata with the given entries, and a memo that lists them in the given order.
+encodeLockMetadataEntries : [(Text, Text)] -> Metadata
+encodeLockMetadataEntries entries =
+  reasonToMeta (encodeLockCompatMemo entries) (Metadata $ TextMap.fromList entries)
+
+-- | The memo of the given metadata entries. It keeps the order of the entries,
+-- so that wallets show the memos as the CIP writes them.
+encodeLockCompatMemo : [(Text, Text)] -> Text
+encodeLockCompatMemo entries =
   let encodeKeyValue (k, v) = removeMetaKeyPrefix k <> "=" <> v
-      keyValues = fmap encodeKeyValue $ TextMap.toList $ meta.values
-  in cipMemoPrefix <> Text.intercalate "&" keyValues
+  in cipMemoPrefix <> Text.intercalate "&" (fmap encodeKeyValue entries)
 
 -- TSv1 support
 -- ============

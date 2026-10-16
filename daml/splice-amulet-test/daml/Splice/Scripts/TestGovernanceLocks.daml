@@ -333,7 +333,7 @@ tsv1RequestMemo request kind = tsv1RequestMemo' request kind []
 tsv1RequestMemo' : GovernanceLockRequestTag -> GovernanceLockKind -> [(Text, Text)] -> Text
 tsv1RequestMemo' request kind extraEntries =
   let (tag, subject) = governanceLockKindToTagAndSubject kind
-  in encodeLockCompatMemo $ Metadata $ TM.fromList $
+  in encodeLockCompatMemo $
        [ (requestMetaKey, governanceLockRequestTagToText request)
        , (lockKindMetaKey, governanceLockTagToText tag)
        , (lockSubjectMetaKey, subject)
