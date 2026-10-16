@@ -19,7 +19,7 @@ import qualified DA.TextMap as TextMap
 import DA.Time
 
 import Splice.Amulet
-import Splice.AmuletConfig (governanceLockSuperValidatorUnderlockTemporaryGracePeriod, governanceLockSuperValidatorUnderlockPermanentGracePeriod)
+import Splice.AmuletConfig (governanceLockSuperValidatorUnderlockTemporaryGracePeriod, governanceLockSuperValidatorUnderlockPermanentGracePeriod, AmuletConfig(..), USD)
 import Splice.Amulet.RewardAccountingV2 qualified as RewardAccountingV2
 import Splice.AmuletRules
 import Splice.ExternalPartyAmuletRules
@@ -137,8 +137,6 @@ data DsoRules_ActionRequiringConfirmation
   | SRARC_DsoRules_AddSvRightOwner DsoRules_AddSvRightOwner
   | SRARC_DsoRules_RemoveSvRightOwner DsoRules_RemoveSvRightOwner
   | SRARC_DsoRules_MigrateToOnLedgerSvRightOwners DsoRules_MigrateToOnLedgerSvRightOwners
-  | SRARC_DsoRules_UpdateTemporaryUnderlockState DsoRules_UpdateTemporaryUnderlockState
-  | SRARC_DsoRules_UpdatePermanentUnderlockState DsoRules_UpdatePermanentUnderlockState
   | SRARC_DsoRules_CreateSvUnderlockInstruction DsoRules_CreateSvUnderlockInstruction
   deriving (Eq, Show, Serializable)
 
@@ -283,7 +281,8 @@ data DsoRules_CreateSvUnderlockInstructionResult = DsoRules_CreateSvUnderlockIns
     instructionCid : ContractId SvUnderlockInstruction
   deriving (Serializable)
 
-data DsoRules_ExecuteSvUnderlockInstructionResult = DsoRules_ExecuteSvUnderlockInstructionResult
+data DsoRules_ExecuteSvUnderlockInstructionResult = DsoRules_ExecuteSvUnderlockInstructionResult with
+    svRewardStateCid : Optional (ContractId SvRewardState)
   deriving (Serializable)
 
 data DsoRules_OnboardValidatorResult = DsoRules_OnboardValidatorResult with
@@ -473,16 +472,6 @@ data DsoRules_ExpireAmuletAllocationsResult = DsoRules_ExpireAmuletAllocationsRe
 data DsoRules_ExpireAmuletAllocationsV2Result = DsoRules_ExpireAmuletAllocationsV2Result
   with
     result : ExternalPartyAmuletRules_ExpireAmuletAllocationsV2Result
-  deriving (Eq, Show, Serializable)
-
-data DsoRules_UpdateTemporaryUnderlockStateResult = DsoRules_UpdateTemporaryUnderlockStateResult
-  with
-    newRewardStateCid : ContractId SvRewardState
-  deriving (Eq, Show, Serializable)
-
-data DsoRules_UpdatePermanentUnderlockStateResult = DsoRules_UpdatePermanentUnderlockStateResult
-  with
-    newRewardStateCid : ContractId SvRewardState
   deriving (Eq, Show, Serializable)
 
 -- Workflow templates
@@ -1678,10 +1667,14 @@ template DsoRules with
           rewardState <- fetchAndArchive forSv rewardStateCid
           svRightOwner <- fetchChecked forSv rightOwnerCid
           require "Operator matches" (svRightOwner.info.rewardNodeOperatorName == operatorName)
+
+          active <- svUnderlockEnforcementActive config
           let svInfo = svRightOwner.info
           let state = rewardState.state
               beneficiaries = svInfo.beneficiaries
-              effectiveRewardWeight = getAdjustedRewardWeight temporaryGracePeriod state.rewardAdjustmentState now svInfo.rewardWeight
+              effectiveRewardWeight = if active
+                then getAdjustedRewardWeight temporaryGracePeriod state.rewardAdjustmentState now svInfo.rewardWeight
+                else svInfo.rewardWeight
           let (configuredBeneficiaryCouponWeights, remainingWeight) =
                 foldl
                   (\(acc, remainingWeight) (beneficiary, weight) ->
@@ -2325,50 +2318,19 @@ template DsoRules with
           state = svRewardState.state
           lifetimeRewardTotal = Some $ receiptTotal + getLifetimeRewardTotal svRewardState
 
-    nonconsuming choice DsoRules_UpdateTemporaryUnderlockState : DsoRules_UpdateTemporaryUnderlockStateResult
-      with
-        name : Text
-        svRewardStateCid : ContractId SvRewardState
-        newRewardWeightFactor : Decimal
-        effectiveTime : Time
-      controller dso
-      do
-        -- Assumes that we can calculate lock state one week in the past for enforcement.
-        requireOnLedgerSvRightOwners this
-        svRewardState <- fetchAndArchive (ForSv with dso; svName = name) svRewardStateCid
-        let rewardAdjustmentState = optional None (Some . applyWarrantedFactor effectiveTime newRewardWeightFactor) svRewardState.state.rewardAdjustmentState
-
-        DsoRules_UpdateTemporaryUnderlockStateResult <$> create svRewardState with
-          state = svRewardState.state with
-            rewardAdjustmentState
-
-    nonconsuming choice DsoRules_UpdatePermanentUnderlockState : DsoRules_UpdatePermanentUnderlockStateResult
-      with
-        name : Text
-        svRewardStateCid : ContractId SvRewardState
-        amuletRulesCid : ContractId AmuletRules
-      controller dso
-      do
-        requireOnLedgerSvRightOwners this
-        svRewardState <- fetchAndArchive (ForSv with dso; svName = name) svRewardStateCid
-        now <- getTime
-        amuletRules <- fetchReferenceData (ForDso with dso) amuletRulesCid
-
-        let config = getValueAsOf now amuletRules.configSchedule
-            permanentGracePeriod = addRelTime now $ governanceLockSuperValidatorUnderlockPermanentGracePeriod config.governanceLockConfig
-
-        let rewardAdjustmentState = optional None (Some . promotePermanent permanentGracePeriod) svRewardState.state.rewardAdjustmentState
-        DsoRules_UpdatePermanentUnderlockStateResult <$> create svRewardState with
-          state = svRewardState.state with
-            rewardAdjustmentState
-
     nonconsuming choice DsoRules_CreateSvUnderlockInstruction : DsoRules_CreateSvUnderlockInstructionResult
       with
         svName : Text -- ultimate right owner
         qualifyingFactor : Decimal -- svLockingWeightFactor result : Either 0.0 or a tier factor
+        amuletRulesCid : ContractId AmuletRules
       controller dso
       do
+        amuletRules <- fetchReferenceData (ForDso dso) amuletRulesCid
         now <- getTime
+        let config = getValueAsOf now amuletRules.configSchedule
+        svUnderlockEnforcementActive config >>= require "SV underlock enforcement is active"
+        require "qualifyingFactor should be between 0.0 - 1.0 inclusive"
+          $ 0.0 <= qualifyingFactor && qualifyingFactor <= 1.0
         instructionCid <- create SvUnderlockInstruction with
           dso
           svName
@@ -2376,7 +2338,6 @@ template DsoRules with
           observedAt = now
         pure DsoRules_CreateSvUnderlockInstructionResult with instructionCid
 
--- TODO: WIP
     nonconsuming choice DsoRules_ExecuteSvUnderlockInstruction : DsoRules_ExecuteSvUnderlockInstructionResult
       with
         amuletRulesCid : ContractId AmuletRules
@@ -2385,23 +2346,34 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        svName <- getAndValidateSvNodeOperatorParty this (Some sv)
-        instruction <- fetchAndArchive (ForDso dso) instructionCid
+        requireOnLedgerSvRightOwners this
+        void $ getAndValidateSvNodeOperatorParty this (Some sv)
         amuletRules <- fetchReferenceData (ForDso dso) amuletRulesCid
-        svRewardState <- fetchAndArchive (ForSv with dso; svName = svName) svRewardStateCid
         now <- getTime
         let config = getValueAsOf now amuletRules.configSchedule
-            temporaryGracePeriod = governanceLockSuperValidatorUnderlockTemporaryGracePeriod config.governanceLockConfig
-            permanentGracePeriod = governanceLockSuperValidatorUnderlockPermanentGracePeriod config.governanceLockConfig
-            stale = optional False (\s -> optional False (> instruction.observedAt) s.lastAdjustedAt) svRewardState.state.rewardAdjustmentState
+        svUnderlockEnforcementActive config >>= require "SV underlock enforcement is active"
 
---        unless stale $ do
+        instruction <- fetchAndArchive (ForDso dso) instructionCid
+        svRewardState <- fetchChecked (ForSv with dso; svName = instruction.svName) svRewardStateCid
+        let permanentGracePeriod = governanceLockSuperValidatorUnderlockPermanentGracePeriod config.governanceLockConfig
+            old = fromOptional defaultRewardAdjustmentState svRewardState.state.rewardAdjustmentState
+            observedAt = instruction.observedAt
+            stale = optional False (> observedAt) old.lastAdjustedAt
+            adjusted = applyWarrantedFactor observedAt instruction.qualifyingFactor
+              $ promotePermanent (observedAt `addRelTime` negate permanentGracePeriod) old
 
---        void $ exercise amuletRulesCid AmuletRules_UpdateSvUnderlockState with
---          rightCid
---          provider = instruction.provider
---          underlocked = instruction.underlocked
-        pure DsoRules_ExecuteSvUnderlockInstructionResult
+        optNewSvRewardStateCid <- if (stale || adjusted == old)
+          then pure None
+          else do
+            archive svRewardStateCid
+            newSvRewardState <- create svRewardState with
+              state = svRewardState.state with
+                rewardAdjustmentState = Some adjusted with
+                  lastAdjustedAt = Some observedAt
+            pure $ Some newSvRewardState
+
+        pure DsoRules_ExecuteSvUnderlockInstructionResult with
+          svRewardStateCid = optNewSvRewardStateCid
 
 template AddSvRightOwnerInstruction
   with
@@ -2494,8 +2466,6 @@ executeActionRequiringConfirmation dso dsoRulesCid amuletRulesCid act = case act
       SRARC_DsoRules_AddSvRightOwner choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_DsoRules_RemoveSvRightOwner choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_DsoRules_MigrateToOnLedgerSvRightOwners choiceArg -> void $ exercise dsoRulesCid choiceArg
-      SRARC_DsoRules_UpdateTemporaryUnderlockState choiceArg -> void $ exercise dsoRulesCid choiceArg
-      SRARC_DsoRules_UpdatePermanentUnderlockState choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_DsoRules_CreateSvUnderlockInstruction choiceArg -> void $ exercise dsoRulesCid choiceArg
   ARC_AnsEntryContext with .. -> do
     void $ fetchChecked (ForDso with dso) ansEntryContextCid
@@ -2792,3 +2762,7 @@ instance Patchable LogicalSynchronizerUpgradeSchedule where
 
 operatorParties : DsoRules -> [Party]
 operatorParties DsoRules{svs} = Map.keys svs
+
+svUnderlockEnforcementActive : AmuletConfig USD -> Update Bool
+svUnderlockEnforcementActive config = optional (pure False) isLedgerTimeGE
+  $ config.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)
