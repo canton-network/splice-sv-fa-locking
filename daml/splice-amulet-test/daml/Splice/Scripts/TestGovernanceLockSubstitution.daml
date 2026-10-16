@@ -314,7 +314,7 @@ testSubstitutionV1_updateFails : Script ()
 testSubstitutionV1_updateFails = do
   (TestEnv{..}, _, _, substitutionCid) <- setupSubstitution
   let registry = registriesEnv.amuletV2
-  expectFailureContaining substitutionTransferUpdateUnsupported =<<
+  expectFailureContaining "substitutions cannot be updated" =<<
     submitWithTransferContext registry (actAs instrId.admin) \context ->
       exerciseCmd substitutionCid V1.TransferInstruction_Update with extraActors = []; extraArgs = emptyExtraArgs with context
 

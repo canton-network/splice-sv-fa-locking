@@ -3,7 +3,90 @@
 
 {-# LANGUAGE ApplicativeDo #-}
 
-module Splice.GovernanceLock where
+module Splice.GovernanceLock (
+  -- * Templates and choices
+  GovernanceLock(..),
+  GovernanceLock_DsoExpire(..),
+  GovernanceLock_DsoExpireResult(..),
+  GovernanceLock_DsoConvertProvisionalFeaturedAppLock(..),
+  GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult(..),
+  GovernanceLock_DsoSubstitute(..),
+  GovernanceLock_DsoSubstituteResult(..),
+  GovernanceLock_DsoSplitForSubstitution(..),
+  GovernanceLock_DsoSplitForSubstitutionResult(..),
+  GovernanceLock_DsoTransfer(..),
+  GovernanceLock_DsoTransferResult(..),
+
+  GovernanceLockSubstitution(..),
+  GovernanceLockSubstitution_DsoExpire(..),
+  GovernanceLockSubstitution_DsoExpireResult(..),
+
+  GovernanceLockTransfer(..),
+  GovernanceLockTransfer_DsoExpire(..),
+  GovernanceLockTransfer_DsoExpireResult(..),
+
+  -- * Lock specifications
+  GovernanceLockKind(..),
+  GovernanceLockSpecification(..),
+  FullLockSpecification(..),
+  VestingLockSpecification(..),
+  GovernanceLockKey(..),
+  LockTransfer(..),
+  foldGovernanceLockSpecification,
+  requireVestingLock,
+  governanceLockKind,
+  calculateUnvestedAmount,
+  lockManagerParty,
+
+  -- * Token standard implementation
+  governanceLock_transferFactoryV1_transferImpl,
+
+  -- * Lock metadata
+  GovernanceLockTag(..),
+  LockState(..),
+  governanceLockTagToText,
+  governanceLockKindToTagAndSubject,
+  lockStateToText,
+  encodeCommonLockMetadataEntries,
+  encodeLockCompatMemo,
+  transferGovernanceLockMetadata,
+  missingMetadataMessage,
+  cipMetaPrefix,
+  cipMemoPrefix,
+  requestMetaKey,
+  unlockAmountMetaKey,
+  transferAmountMetaKey,
+  newLockOwnerMetaKey,
+  targetLockOwnerMetaKey,
+  lockKindMetaKey,
+  lockSubjectMetaKey,
+  lockStatusMetaKey,
+  lockVestingDurationMetaKey,
+  lockVestingEndTimeMetaKey,
+  vestingStartTimeMetaKey,
+  vestedUntilTimeMetaKey,
+
+  -- * Lock requests
+  GovernanceLockRequest(..),
+  governanceLockRequestCreateLock,
+  governanceLockRequestUnlockAndStartVesting,
+  governanceLockRequestTransferLock,
+  governanceLockRequestWithdrawVestedFunds,
+  governanceLockRequestSubstituteLock,
+  parseGovernanceLockRequestTSv1,
+
+  -- * Parsers
+  Parser(..),
+  runParser,
+  assertParsed,
+  governanceLockMetadataParser,
+  governanceLockTagParser,
+  governanceLockTagParser',
+  governanceLockKindParser,
+  governanceLockKindParser',
+  fullLockSpecificationParser,
+  governanceLockRequestTSv1Parser,
+) where
 
 import Prelude hiding (forA)
 import DA.Action (foldrA, unless)
@@ -33,7 +116,6 @@ import Splice.Expiry hiding (maxTime)
 import Splice.Fees (relTimeToDays, relTimeToSeconds)
 import Splice.ExternalPartyConfigState
 import Splice.Iso8601 (parseIso8601UtcTime)
-import Splice.Round
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime, relTimeFromMeta, timeFromMeta)
 import Splice.Types
@@ -452,12 +534,6 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
           featuredAppRight = None
        , configState )
 
-getMiningRoundsFromChoiceContext : ChoiceContext -> Update ([ContractId IssuingMiningRound], ContractId OpenMiningRound)
-getMiningRoundsFromChoiceContext choiceContext = do
-  issuingMiningRoundCids <- getFromContextU @([ContractId IssuingMiningRound]) choiceContext issuingMiningRoundContextKey
-  openMiningRoundCid <- getFromContextU @(ContractId OpenMiningRound) choiceContext openMiningRoundContextKey
-  pure (issuingMiningRoundCids, openMiningRoundCid)
-
 -- Substitution
 -- ============
 
@@ -634,12 +710,14 @@ substitution_returnFunds dso proposer lockedAmulet =
 governanceLockSubstitution_withdrawImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> Update GovernanceLockSubstitution_WithdrawResult
 governanceLockSubstitution_withdrawImpl _self this actors = do
   checkActors actors [[this.owner]]
-  GovernanceLockSubstitution_WithdrawResult <$> substitution_returnFunds this.target.dso this.owner this.lockedAmulet
+  unlockedAmulet <- substitution_returnFunds this.target.dso this.owner this.lockedAmulet
+  pure GovernanceLockSubstitution_WithdrawResult with unlockedAmulet
 
 governanceLockSubstitution_rejectImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> Update GovernanceLockSubstitution_RejectResult
 governanceLockSubstitution_rejectImpl _self this actors = do
   checkActors actors [[this.target.owner]]
-  GovernanceLockSubstitution_RejectResult <$> substitution_returnFunds this.target.dso this.owner this.lockedAmulet
+  unlockedAmulet <- substitution_returnFunds this.target.dso this.owner this.lockedAmulet
+  pure GovernanceLockSubstitution_RejectResult with unlockedAmulet
 
 data SubstitutionTransferInstructionViewArgs = SubstitutionTransferInstructionViewArgs with
   dso : Party
