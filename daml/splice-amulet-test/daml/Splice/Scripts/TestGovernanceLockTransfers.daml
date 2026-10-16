@@ -219,7 +219,7 @@ testLockTransfer_failures = do
     executeBefore = now `addRelTime` hours (-1)
   expectFailureContaining (missingMetadataMessage newLockOwnerMetaKey) =<< submitLockRequest registries request with
     meta = reasonToMeta
-      (tsv1RequestMemo' governanceLockRequestTransferLock (governanceLockKind lock.specification) [(transferAmountMetaKey, "40000.0")])
+      (tsv1RequestMemo' GLRT_TransferLock (governanceLockKind lock.specification) [(transferAmountMetaKey, "40000.0")])
       emptyMetadata
 
   -- A source vesting lock that has fully vested cannot be transferred.

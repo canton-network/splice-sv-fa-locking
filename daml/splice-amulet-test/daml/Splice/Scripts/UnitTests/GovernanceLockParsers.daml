@@ -373,7 +373,7 @@ substitutionTSv1Parser admin = governanceLockRequestTSv1Parser admin lockManager
 
 -- | The metadata entry that requests a substitution.
 substitutionRequest : (Text, Text)
-substitutionRequest = (requestMetaKey, governanceLockRequestSubstituteLock)
+substitutionRequest = (requestMetaKey, governanceLockRequestTagToText GLRT_SubstituteLock)
 
 -- | Examples of the `allocation.meta` of an `AllocationFactory_Allocate` call that proposes a substitution.
 --
