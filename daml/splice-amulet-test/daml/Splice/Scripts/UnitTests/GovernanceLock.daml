@@ -34,7 +34,7 @@ test_parseGovernanceLockRequestTSv1_memo = do
     GLR_CreateGovernanceLock{fullSpecification} <- parse $ Metadata $ TextMap.fromList [(reasonMetaKey, memo)]
     fullSpecification === FullLockSpecification with kind = GLK_SuperValidatorRightsOwner "someSv"
   where
-    parse = parseGovernanceLockRequestTSv1 testAdmin lockManagerParty
+    parse = parseGovernanceLockRequestTSv1 testAdmin lockManagerParty None
 
 -- | Round-trip testing to cover the GovernanceLockKind space in the parsers.
 -- A lock's memo, with a request added, parses back to the lock's specification.
@@ -51,7 +51,7 @@ test_governanceLockSpecificationTSv1_roundTrip = do
     serializeThenParse specification = do
       let memo = encodeLockCompatMemo $
             (requestMetaKey, "create-lock") :: encodeCommonLockMetadataEntries specification.kind LS_Locked
-      request <- parseGovernanceLockRequestTSv1 testAdmin lockManagerParty $ Metadata $ TextMap.singleton reasonMetaKey memo
+      request <- parseGovernanceLockRequestTSv1 testAdmin lockManagerParty None $ Metadata $ TextMap.singleton reasonMetaKey memo
       case request of
         GLR_CreateGovernanceLock{fullSpecification} -> pure fullSpecification
         _ -> fail "Expected GLR_CreateGovernanceLock"

@@ -6,6 +6,7 @@ module Splice.Scripts.UnitTests.GovernanceLockParsers where
 
 import DA.Assert
 import DA.Date (Month(..), date)
+import DA.List (dedup)
 import DA.NonEmpty qualified as NonEmpty
 import DA.Optional
 import DA.Text qualified as Text
@@ -223,12 +224,12 @@ expectRequest result check = case result of
 
 expectRequestErrors : [Text] -> Validation Text GovernanceLockRequest -> Script ()
 expectRequestErrors expected result = case result of
-  Errors errors -> NonEmpty.toList errors === expected
+  Errors errors -> dedup (NonEmpty.toList errors) === expected
   Success _ -> fail "Expected errors, but got success"
 
 test_governanceLockRequestTSv1Parser : Script ()
 test_governanceLockRequestTSv1Parser = do
-  let run receiver entries = runParser (governanceLockRequestTSv1Parser testAdmin receiver) (mkMeta entries)
+  let run receiver entries = runParser (governanceLockRequestTSv1Parser testAdmin receiver None) (mkMeta entries)
       request r = (requestMetaKey, r)
       faLock = [(lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp), (lockSubjectMetaKey, "provider")]
       faSpecification = FullLockSpecification with kind = GLK_FeaturedApp testProvider
@@ -256,12 +257,27 @@ test_governanceLockRequestTSv1Parser = do
       GLR_UnlockGovernanceLock{fullSpecification, unlockAmount, vestingStartTime} -> do
         fullSpecification === faSpecification
         unlockAmount === 10000.0
-        vestingStartTime === time (date 2026 Jan 1) 0 0 0
+        vestingStartTime === Some (time (date 2026 Jan 1) 0 0 0)
       _ -> fail "Expected GLR_UnlockGovernanceLock"
 
   -- Unlock without the vesting start time
   expectRequestErrors [missingMetadataMessage vestingStartTimeMetaKey] $
     run lockManagerParty (request "unlock-and-start-vesting" :: (unlockAmountMetaKey, "10000.0") :: faLock)
+
+  -- Provisional featured app locks do not vest, so their unlock ignores the vesting start time
+  let provisionalFaLock = [(lockKindMetaKey, governanceLockTagToText GLT_ProvisionalFeaturedApp), (lockSubjectMetaKey, "provider")]
+      expectProvisionalUnlock entries = expectRequest (run lockManagerParty entries) \case
+        GLR_UnlockGovernanceLock{fullSpecification, unlockAmount, vestingStartTime} -> do
+          fullSpecification === FullLockSpecification with kind = GLK_ProvisionalFeaturedApp testProvider
+          unlockAmount === 10000.0
+          vestingStartTime === None
+        _ -> fail "Expected GLR_UnlockGovernanceLock"
+  expectProvisionalUnlock $ request "unlock-and-start-vesting" :: (unlockAmountMetaKey, "10000.0") :: provisionalFaLock
+  expectProvisionalUnlock $
+    request "unlock-and-start-vesting"
+      :: (unlockAmountMetaKey, "10000.0")
+      :: (vestingStartTimeMetaKey, "not-a-time")
+      :: provisionalFaLock
 
   -- Transfer a lock: the new owner is read from the metadata
   expectRequest
@@ -362,7 +378,7 @@ testAdmin = testParty "registry-admin"
 -- | Parses a substitution request and returns its substitution.
 -- Arguments: registry admin. Input: metadata to be converted to a compat mode memo.
 substitutionTSv1Parser : Party -> Parser Metadata GovernanceLockKey
-substitutionTSv1Parser admin = governanceLockRequestTSv1Parser admin lockManagerParty >>= \case
+substitutionTSv1Parser admin = governanceLockRequestTSv1Parser admin lockManagerParty None >>= \case
   GLR_SubstituteLock{target} -> pure target
   result -> assertFail $ "Expected GLR_SubstituteLock but got: " <> show result
 
