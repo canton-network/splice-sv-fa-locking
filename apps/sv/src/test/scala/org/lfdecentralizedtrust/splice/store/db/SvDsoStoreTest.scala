@@ -2522,6 +2522,19 @@ class DbSvDsoStoreTest
       val confirmedRight = featuredAppRight(confirmedProvider)
       // confirmedLock has a matching right but isn't provisional, so it should be excluded.
 
+      val vestingProvider = userParty(7)
+      val vestingLock = governanceLock(
+        userParty(8),
+        amount = BigDecimal(40),
+        kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+          vestingProvider.toProtoPrimitive
+        ),
+        vestingEndTime = Some(time(1).toInstant),
+      )
+      val vestingRight = featuredAppRight(vestingProvider)
+      // vestingLock is provisional with a matching right, but `GovernanceLock_DsoConvert-
+      // ProvisionalFeaturedAppLock` calls `requireFullLock`, so it must be excluded.
+
       for {
         store <- mkStore()
         _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
@@ -2530,6 +2543,8 @@ class DbSvDsoStoreTest
         _ <- dummyDomain.create(notReadyLock)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(confirmedLock)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(confirmedRight)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(vestingLock)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(vestingRight)(store.multiDomainAcsStore)
         result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()(
           CantonTimestamp.now(),
           PageLimit.tryCreate(100),
