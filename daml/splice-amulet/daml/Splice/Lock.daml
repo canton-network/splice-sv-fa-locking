@@ -4,36 +4,42 @@
 {-# LANGUAGE ApplicativeDo #-}
 
 -- | Lock mechanics on locked amulets, and the parts of lock transfers,
--- substitutions and TSv1 support that governance and vesting locks share.
+-- substitutions and TSv1 support that do not depend on the lock type.
 module Splice.Lock where
 
 import Prelude hiding (forA)
+import DA.Action (unless)
 import DA.Assert
 import DA.List.Total (head)
 import DA.Map qualified as Map
 import DA.Optional
-import DA.Text qualified as Text
-import DA.TextMap qualified as TextMap
 import DA.Time
 import DA.Traversable (forA)
 
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
-import Splice.AmuletConfig (getTokenStandardMaxTTL, governanceLockMinimumLockAmount)
+import Splice.AmuletConfig
+  ( getTokenStandardMaxTTL
+  )
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Expiry hiding (maxTime)
 import Splice.ExternalPartyConfigState
+import Splice.Lock.TSv1MemoParser (cipPrefix)
+import Splice.Round
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.Types
 import Splice.Util
 
-requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
-requireMinimumLock context amount = do
-  require' ("locked amount", amount) isGreaterOrEqualR ("minimum governance lock amount", governanceLockMinimumLockAmount context.governanceLockConfig)
+-- Checks and choice context
+-- =========================
+
+requireMinimumLock : Decimal -> Decimal -> Update ()
+requireMinimumLock minimumLockAmount amount = do
+  require' ("locked amount", amount) isGreaterOrEqualR ("minimum lock amount", minimumLockAmount)
 
 unfeaturedPaymentContextAndConfigFromChoiceContext : Party -> ChoiceContext -> Update (ExternalPartyTransferContext, ExternalPartyConfigState)
 unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
@@ -43,11 +49,253 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
           featuredAppRight = None
        , configState )
 
+getMiningRoundsFromChoiceContext : ChoiceContext -> Update ([ContractId IssuingMiningRound], ContractId OpenMiningRound)
+getMiningRoundsFromChoiceContext choiceContext = do
+  issuingMiningRoundCids <- getFromContextU @([ContractId IssuingMiningRound]) choiceContext issuingMiningRoundContextKey
+  openMiningRoundCid <- getFromContextU @(ContractId OpenMiningRound) choiceContext openMiningRoundContextKey
+  pure (issuingMiningRoundCids, openMiningRoundCid)
+
+-- Lock and unlock
+-- ===============
+
+-- | Funds of `owner` held in a `LockedAmulet` by a lock contract.
+data Lock = Lock with
+    dso : Party
+    owner : Party  -- ^ Lock owner
+    amount : Decimal  -- ^ Locked amount
+    lockedAmulet : ContractId LockedAmulet
+    originalLockCid : Optional AnyContractId
+    requestedAt : Time  -- ^ Time of the request to create this lock.
+  deriving (Eq, Show)
+
+-- | Arguments of `lock_impl`.
+data LockArgs = LockArgs with
+    dso : Party
+    owner : Party
+    amount : Decimal
+    minimumLockAmount : Decimal
+      -- ^ Smallest amount allowed in a lock of this type.
+    inputHoldingCids : [ContractId Holding]
+    lockProperties : LockProperties
+      -- ^ Context and expiry of the created `LockedAmulet`.
+    requestedAt : Time
+    context : ExternalPartyTransferContext
+
+-- | Locks `amount` of the owner's holdings. Returns the new lock and the
+-- change.
+lock_impl : LockArgs -> Update (Lock, Optional (ContractId Amulet))
+lock_impl LockArgs{..} = do
+  assertWithinDeadline "requestedAt + 1 day" $ requestedAt `addRelTime` days 1
+  requireMinimumLock minimumLockAmount amount
+  require' ("amount", amount) isGreaterR ("zero", 0.0)
+  ([lockedAmulet], changeHolding) <- lockAmulet
+    (ForOwner with dso; owner)
+    [(amount, lockProperties)]
+    inputHoldingCids
+    context
+    ""
+  let lock = Lock with
+        dso
+        owner
+        amount
+        lockedAmulet
+        originalLockCid = None
+        requestedAt
+  pure (lock, changeHolding)
+
+-- | Arguments of `unlock_impl` and `split_impl`.
+data UnlockArgs = UnlockArgs with
+    lock : Lock
+    unlockAmount : Decimal
+    minimumLockAmount : Decimal
+      -- ^ Smallest amount allowed on either side of a partial unlock.
+    context : ExternalPartyTransferContext
+
+-- | Unlocks `unlockAmount` of `lock` as an `Amulet` of its owner. Returns
+-- the lock over the remaining funds, if any, and the `Amulet`.
+unlock_impl : UnlockArgs -> Update (Optional Lock, ContractId Amulet)
+unlock_impl args@UnlockArgs{..} = do
+  requireValidUnlock args
+  let forOwner = ForOwner with dso = lock.dso; owner = lock.owner
+  (optStillLocked, amulet) <-
+    partialUnlock forOwner lock.lockedAmulet unlockAmount context
+  pure (remainingLock lock optStillLocked, amulet)
+
+-- | Splits `unlockAmount` of `lock` off into a `LockedAmulet` with
+-- `lockProperties`. Returns the lock over the remaining funds, if any, and
+-- the split-off `LockedAmulet`.
+split_impl
+  :  UnlockArgs
+  -> LockProperties
+  -> Update (Optional Lock, ContractId LockedAmulet)
+split_impl args@UnlockArgs{..} lockProperties = do
+  requireValidUnlock args
+  let forOwner = ForOwner with dso = lock.dso; owner = lock.owner
+  (optStillLocked, (splitAmulet, _)) <- splitLockedAmulet
+    forOwner lock.lockedAmulet (unlockAmount, lockProperties) context
+  pure (remainingLock lock optStillLocked, splitAmulet)
+
+-- | Checks of `unlock_impl` and `split_impl`: `unlockAmount` is positive and
+-- at most the locked amount, and a partial unlock leaves at least the
+-- minimum on both sides.
+requireValidUnlock : UnlockArgs -> Update ()
+requireValidUnlock UnlockArgs{..} = do
+  require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", lock.amount)
+  require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
+  unless (unlockAmount == lock.amount) $ do
+    requireMinimumLock minimumLockAmount unlockAmount
+    requireMinimumLock minimumLockAmount (lock.amount - unlockAmount)
+
+-- | `lock` over the funds that stayed locked, if any.
+remainingLock
+  : Lock -> Optional (ContractId LockedAmulet, Decimal) -> Optional Lock
+remainingLock lock optStillLocked = case optStillLocked of
+  None -> None
+  Some (lockedAmulet, amount) -> Some lock with lockedAmulet; amount
+
+-- | A lock template whose funds core manages as a `Lock`.
+class LockTemplate t where
+  -- | The funds that `t` holds.
+  toLock : t -> Lock
+  -- | `t` holding the funds of `lock`, with its other fields unchanged.
+  fromLock : t -> Lock -> t
+  -- | Smallest amount allowed in a lock of this type.
+  lockMinimumAmount : t -> ExternalPartyConfigState -> Decimal
+
+-- | Releases `releaseAmount` of the lock's funds as an `Amulet` of its
+-- owner, and keeps the remainder in a new lock.
+release_impl
+  :  (HasCreate t, LockTemplate t)
+  => ContractId t
+  -> t
+  -> Decimal
+  -> ExtraArgs
+  -> Update (Optional (ContractId t), ContractId Amulet)
+release_impl self this releaseAmount extraArgs = do
+  let lock = toLock this
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext
+    lock.dso extraArgs.context
+  (optRemainingLock, unlockedAmulet) <- unlock_impl UnlockArgs with
+    lock
+    unlockAmount = releaseAmount
+    minimumLockAmount = lockMinimumAmount this state
+    context
+  remainingLockCid <- create_remainder self this optRemainingLock
+  pure (remainingLockCid, unlockedAmulet)
+
+-- | Splits `releaseAmount` of the lock's funds off into a `LockedAmulet`
+-- with `lockProperties`, and keeps the remainder in a new lock.
+releaseLocked_impl
+  :  (HasCreate t, LockTemplate t)
+  => ContractId t
+  -> t
+  -> Decimal
+  -> LockProperties
+  -> ExtraArgs
+  -> Update (Optional (ContractId t), ContractId LockedAmulet)
+releaseLocked_impl self this releaseAmount lockProperties extraArgs = do
+  let lock = toLock this
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext
+    lock.dso extraArgs.context
+  (optRemainingLock, splitAmulet) <- split_impl
+    UnlockArgs with
+      lock
+      unlockAmount = releaseAmount
+      minimumLockAmount = lockMinimumAmount this state
+      context
+    lockProperties
+  remainingLockCid <- create_remainder self this optRemainingLock
+  pure (remainingLockCid, splitAmulet)
+
+-- | Keeps the remaining funds of `this` in a new lock that records the
+-- original lock.
+create_remainder
+  :  (HasCreate t, LockTemplate t)
+  => ContractId t
+  -> t
+  -> Optional Lock
+  -> Update (Optional (ContractId t))
+create_remainder self this optRemainingLock =
+  forA optRemainingLock \remainingLock ->
+    create $ fromLock this remainingLock with
+      originalLockCid =
+        Some (fromOptional (toAnyContractId self) remainingLock.originalLockCid)
+
+-- Substitution
+-- ============
+
 -- | Unlocks the funds of a substitution proposal, which returns them to the proposer.
 -- Returns `None` if the proposal did not lock any funds.
 substitution_returnFunds : Party -> Party -> Optional (ContractId LockedAmulet) -> Update (Optional (ContractId Amulet))
 substitution_returnFunds dso proposer lockedAmulet =
   forA lockedAmulet (fmap fst . unlockAmulet (ForOwner with dso; owner = proposer))
+
+-- | The terms of a lock substitution: `proposer` locks `amount` under the
+-- specification of the locks with key `target`, whose owner gets the same
+-- amount back. If `proposer` owns the target lock, the target lock funds
+-- the new lock instead.
+data LockSubstitution lockKey = LockSubstitution with
+    target : lockKey
+    proposer : Party
+    amount : Decimal
+    requestedAt : Time
+      -- ^ When the proposer requested the substitution.
+  deriving (Eq, Show, Serializable)
+
+lockSubstitutionTarget : LockSubstitution lockKey -> lockKey
+lockSubstitutionTarget (LockSubstitution {target = t}) = t
+
+-- | Arguments of `createGovernanceLockSubstitution` and
+-- `createVestingLockSubstitution`.
+data LockSubstitutionArgs lockKey = LockSubstitutionArgs with
+    substitution : LockSubstitution lockKey
+    inputHoldingCids : [ContractId Holding]
+      -- ^ Holdings that fund the proposal. Ignored if `proposer` owns the
+      -- target lock.
+    extraArgs : ExtraArgs
+  deriving (Eq, Show, Serializable)
+
+-- | Arguments of `lockSubstitution_createImpl`, set by the lock module.
+data LockSubstitutionCreateArgs lockKey = LockSubstitutionCreateArgs with
+    substitution : LockSubstitution lockKey
+    inputHoldingCids : [ContractId Holding]
+    minimumLockAmount : Decimal
+    newLockProperties : LockProperties
+      -- ^ Properties of the new lock's `LockedAmulet`.
+    context : ExternalPartyTransferContext
+
+-- | The funds of a new substitution proposal.
+data LockSubstitutionFunding = LockSubstitutionFunding with
+    optLockedAmulet : Optional (ContractId LockedAmulet)
+      -- ^ The proposer's funds, locked with the new lock's properties.
+      -- `None` if the proposer owns the target lock, which then funds the
+      -- new lock on acceptance.
+    optChangeHolding : Optional (ContractId Amulet)
+
+-- | Validates a substitution proposal and locks the proposer's funds with
+-- the new lock's properties, unless the proposer owns the target lock.
+lockSubstitution_createImpl
+  :  LockKeyForOwner lockKey
+  => LockSubstitutionCreateArgs lockKey
+  -> Update LockSubstitutionFunding
+lockSubstitution_createImpl LockSubstitutionCreateArgs{..} = do
+  let target = lockSubstitutionTarget substitution
+  assertDeadlineExceeded "requestedAt" substitution.requestedAt
+  requireMinimumLock minimumLockAmount substitution.amount
+  if lockKeyOwner target == substitution.proposer
+    then pure LockSubstitutionFunding with
+      optLockedAmulet = None
+      optChangeHolding = None
+    else do
+      ([lockedAmulet], optChangeHolding) <- lockAmulet
+        (ForOwner with dso = lockKeyDso target; owner = substitution.proposer)
+        [(substitution.amount, newLockProperties)]
+        inputHoldingCids
+        context
+        ""
+      pure LockSubstitutionFunding with
+        optLockedAmulet = Some lockedAmulet
+        optChangeHolding
 
 data SubstitutionTransferInstructionViewArgs = SubstitutionTransferInstructionViewArgs with
   admin : Party
@@ -101,6 +349,7 @@ substitutionTransferResult_failed unlockedAmulet = V1.TransferInstructionResult 
 
 -- Transfer
 -- ========
+
 -- | The terms of a lock transfer: how much of the owner's locks moves to the
 -- receiver.
 --
@@ -208,9 +457,46 @@ lockTransferExpiresAt transfer extraArgs = do
   pure $ transfer.requestedAt `addRelTime`
     getTokenStandardMaxTTL state.transferConfig
 
+-- | Arguments of `lockTransfer_lockForReceiver`.
+data LockForReceiverArgs = LockForReceiverArgs with
+    dso : Party
+    sender : Party
+    receiver : Party
+    amount : Decimal
+    amulet : ContractId Amulet
+      -- ^ The funds released from the sender's lock.
+    lockProperties : LockProperties
+      -- ^ Properties of the receiver's new `LockedAmulet`.
+    transferCid : AnyContractId
+      -- ^ The accepted transfer proposal, recorded as the new lock's
+      -- `originalLockCid`.
+    requestedAt : Time
+    context : ExternalPartyTransferContext
+
+-- | Locks the funds released from the sender's lock for the receiver.
+-- Needs the authority of both the sender and the receiver.
+lockTransfer_lockForReceiver : LockForReceiverArgs -> Update Lock
+lockTransfer_lockForReceiver LockForReceiverArgs{..} = do
+  ([lockedAmulet], None) <- lockAmuletFor
+    (ForOwner with dso; owner = sender)
+    receiver
+    [(amount, lockProperties)]
+    [toInterfaceContractId amulet]
+    context
+    ""
+  pure Lock with
+    dso
+    owner = receiver
+    amount
+    lockedAmulet
+    originalLockCid = Some transferCid
+    requestedAt
+
 -- Helpers for handling LockedAmulet
 -- =================================
+
 -- Invariant: _none_ of these functions move amounts to new parties or modify total amounts of amulet (except when minting from reward coupons).
+
 type LockSpecification = (Decimal, LockProperties)
 data LockProperties = LockProperties with
   context : Text
@@ -277,82 +563,52 @@ lockAmuletFor forOwner@ForOwner {..} receiver specs holdingInputs context reason
     , result.senderChangeAmulet
     )
 
--- Metadata
--- ========
--- Update this to the implementation CIP once that has a number assigned.
-cipPrefix = "cip-127"
-
--- | Prefix of the metadata keys used to pass extra choice parameters.
-cipMetaPrefix = cipPrefix <> "/"
-
--- | Remove `cipMetaPrefix` from a metadata key.
-removeMetaKeyPrefix : Text -> Text
-removeMetaKeyPrefix = Text.dropPrefix cipMetaPrefix
-
--- | Prefix of the memo tag used to specify lock attributes.
-cipMemoPrefix = cipMetaPrefix <> "memo:"
-
--- | Metadata key that specifies the requested lock operation.
-requestMetaKey = cipMetaPrefix <> "request"
-
--- | Metadata key of a `GovernanceLock` kind.
-lockKindMetaKey = cipMetaPrefix <> "lock-kind"
-
--- | Metadata key of a `GovernanceLock` subject.
-lockSubjectMetaKey = cipMetaPrefix <> "lock-subject"
-
--- | Metadata key that specifies the status of a lock.
-lockStatusMetaKey = cipMetaPrefix <> "lock-status"
-
--- | Metadata key that specifies the duration of a `VestingLock`.
-lockVestingDurationMetaKey = cipMetaPrefix <> "lock-vesting-duration-micros"
-
--- | Metadata key that specifies the end time of a `VestingLock`.
-lockVestingEndTimeMetaKey = cipMetaPrefix <> "lock-vesting-end-time-micros"
-
--- | Metadata key that encodes a human-readable description of a `VestingLock` duration and end time.
-lockVestingInfoMetaKey = cipMetaPrefix <> "lock-vesting-info"
-
-encodeRequestMetadata : Text -> Metadata
-encodeRequestMetadata request = Metadata $ TextMap.singleton requestMetaKey request
-
-encodeCommonLockMetadata : GovernanceLockTag -> Text -> LockState -> Metadata -> Metadata
-encodeCommonLockMetadata tag subject state meta =
-  meta <> (Metadata $ TextMap.fromList
-    [ (lockKindMetaKey, governanceLockTagToText tag)
-    , (lockSubjectMetaKey, subject)
-    , (lockStatusMetaKey, lockStateToText state)
-    ])
-
-encodeLockCompatMemo : Metadata -> Text
-encodeLockCompatMemo meta =
-  let encodeKeyValue (k, v) = removeMetaKeyPrefix k <> "=" <> v
-      keyValues = fmap encodeKeyValue $ TextMap.toList $ meta.values
-  in cipMemoPrefix <> Text.intercalate "&" keyValues
-
 -- TSv1 support
 -- ============
+
 -- | Special party used to identify lock transfers.
 lockManagerParty : Party
 lockManagerParty = fromSome $ partyFromText $ cipPrefix <> "_lock-manager::1220000000000000000000000000000000000000000000000000000000000000abcd"
 
-data GovernanceLockTag
-  = GLT_FeaturedApp
-  | GLT_ProvisionalFeaturedApp
-  | GLT_SuperValidator
-  deriving (Eq)
+-- | Arguments for a substitution proposal requested through the TSv1
+-- transfer factory.
+substitution_transferFactoryArgs
+  : V1.Transfer -> ExtraArgs -> lockKey -> LockSubstitutionArgs lockKey
+substitution_transferFactoryArgs transfer extraArgs target =
+  LockSubstitutionArgs with
+    substitution = LockSubstitution with
+      target
+      proposer = transfer.sender
+      amount = transfer.amount
+      requestedAt = transfer.requestedAt
+    inputHoldingCids = transfer.inputHoldingCids
+    extraArgs
 
-governanceLockTagToText : GovernanceLockTag -> Text
-governanceLockTagToText GLT_FeaturedApp = "fa-lock"
-governanceLockTagToText GLT_ProvisionalFeaturedApp = "provisional-fa-lock"
-governanceLockTagToText GLT_SuperValidator = "sv-lock"
+-- | The TSv1 result of a transfer factory call that created the substitution
+-- proposal `proposalCid`. Checks that the proposal's TSv1 transfer matches
+-- the requested `transfer`.
+substitution_transferFactoryResult
+  :  ( HasFetch t, HasCheckedFetch t ForOwner
+     , HasToInterface t V1.TransferInstruction )
+  => Party
+  -> V1.Transfer
+  -> ContractId t
+  -> Optional (ContractId Amulet)
+  -> Update V1.TransferInstructionResult
+substitution_transferFactoryResult dso transfer proposalCid changeCid = do
+  proposal <- fetchChecked (ForOwner with dso; owner = transfer.sender) proposalCid
+  let substitutionCid = toInterfaceContractId @V1.TransferInstruction proposalCid
+      substitution = toInterface @V1.TransferInstruction proposal
+  let substitutionTransfer = (view substitution).transfer
+  requireMatchExpected ("substitution transfer", substitutionTransfer) transfer with
+    -- The receiver of the substitution is the owner of the target lock, not `lockManagerParty`
+    receiver = substitutionTransfer.receiver
+    executeBefore = substitutionTransfer.executeBefore
+    inputHoldingCids = substitutionTransfer.inputHoldingCids
+    meta = substitutionTransfer.meta
 
-data LockState = LS_Locked | LS_Vesting
-  deriving (Eq, Show)
-
-lockStateToText : LockState -> Text
-lockStateToText LS_Locked = "locked"
-lockStateToText LS_Vesting = "vesting"
-
-governanceLockRequestAcceptToSubstituteLock = "accept-to-substitute-lock"
-governanceLockRequestAcceptToTransferLock = "accept-to-transfer-lock"
+  pure V1.TransferInstructionResult with
+    output = V1.TransferInstructionResult_Pending with
+      transferInstructionCid = substitutionCid
+    senderChangeCids = optionalToList $ toInterfaceContractId <$> changeCid
+    meta = emptyMetadata

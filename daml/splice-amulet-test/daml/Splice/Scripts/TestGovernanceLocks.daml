@@ -19,6 +19,7 @@ import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyAmuletRules
 import Splice.GovernanceLock
 import Splice.Lock
+import Splice.Lock.TSv1MemoParser
 import Splice.VestingLock
 import Splice.Round
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
@@ -49,7 +50,7 @@ testGovernanceLockHappyPathScenario ops = do
   now <- getTime
 
   -- Check that negative allocations are impossible
-  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum lock amount'") $
     ops.governanceLock registry bob (-10000.0) someSvKind
 
   -- Check that we can't unlock with a time in the past
@@ -233,7 +234,7 @@ testGovernanceLockCompatPartialUnlockFromMetaScenario ops = do
     ops.governanceUnlock env aliceLock alice (unlockAmountMeta "not-a-decimal")
 
   -- Both the unlocked and the remaining amount must meet the minimum lock amount
-  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum lock amount'") $
     ops.governanceUnlock env aliceLock alice (unlockAmountMeta "25000.0")
 
   -- Unlock 10k of the 30k, which starts vesting 10k and keeps 20k locked
@@ -283,15 +284,15 @@ testGovernanceLockMinimumLocksLockUnlockWithdrawScenario ops = do
   AmuletRegistryV2.tapFaucet registry alice 180000.0
   AmuletRegistryV2.tapFaucet registry bob 10000.0
 
-  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $ ops.governanceLock registry alice 8000.0 someSvKind
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum lock amount'") $ ops.governanceLock registry alice 8000.0 someSvKind
 
   successfulLockCid <- governanceLockRawChoice registry alice 20000.0 someSvKind
 
   unlockAt <- (`addRelTime` minutes 5) <$> getTime
 
-  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $ ops.governanceUnlock registry successfulLockCid 5000.0 unlockAt [alice]
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum lock amount'") $ ops.governanceUnlock registry successfulLockCid 5000.0 unlockAt [alice]
 
-  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum governance lock amount'") $ ops.governanceUnlock registry successfulLockCid 15000.0 unlockAt [alice]
+  actionMustFail (expectMessageContains "'locked amount' is less than 'minimum lock amount'") $ ops.governanceUnlock registry successfulLockCid 15000.0 unlockAt [alice]
 
   -- Exact amount should succeed.
   (Some firstWithdrawnCid, Some remainingLockCid, None) <- expectSuccess $ ops.governanceUnlock registry successfulLockCid 10000.0 unlockAt [alice]
@@ -717,28 +718,58 @@ governanceLockWithSpecRawChoice' registry owner amount specification = do
       requestedAt = now
   pure $ (.governanceLock) <$> result
 
+-- | The target locks of a substitution proposal, of either lock type.
+data AnySubstitution
+  = AS_Governance with
+      governanceLockKey : GovernanceLockKey
+  | AS_Vesting with
+      vestingLockKey : VestingLockKey
+  deriving (Eq, Show)
+
+-- | A substitution proposal of either lock type, as a TSv1 transfer
+-- instruction, and the proposer's change.
+data ProposeSubstitutionResult = ProposeSubstitutionResult with
+    proposal : ContractId V1.TransferInstruction
+    changeHolding : Optional (ContractId Amulet)
+  deriving (Eq, Show)
+
 proposeSubstitutionRawChoice
   :  AmuletRegistryV2.AmuletRegistry -> Party -> AnySubstitution -> Decimal -> Time
-  -> Script ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult
+  -> Script ProposeSubstitutionResult
 proposeSubstitutionRawChoice registry proposer substitution amount requestedAt =
   errorIfLeft =<< proposeSubstitutionRawChoice' registry proposer substitution amount requestedAt
 
 proposeSubstitutionRawChoice'
   :  AmuletRegistryV2.AmuletRegistry -> Party -> AnySubstitution -> Decimal -> Time
-  -> Script (Either SubmitError ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult)
+  -> Script (Either SubmitError ProposeSubstitutionResult)
 proposeSubstitutionRawChoice' registry proposer substitution amount requestedAt = do
   (eparCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
   inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount proposer) proposer registry.instrumentId
-  submitWithTransferContext registry (actAs [proposer] <> discloseMany' disc)
-    \context -> exerciseCmd eparCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
-      args = CreateSubstitutionArgs with
-        dso = registry.instrumentId.admin
-        substitution
-        owner = proposer
-        amount
+  let mkArgs : ChoiceContext -> lockKey -> LockSubstitutionArgs lockKey
+      mkArgs context target = LockSubstitutionArgs with
+        substitution = LockSubstitution with
+          target
+          proposer
+          amount
+          requestedAt
         inputHoldingCids = map downcast inputHoldingCids
         extraArgs = emptyExtraArgs with context
-        requestedAt
+  submitWithTransferContext registry (actAs [proposer] <> discloseMany' disc)
+    \context -> case substitution of
+      AS_Governance{governanceLockKey} ->
+        fmap
+          (\r -> ProposeSubstitutionResult with
+            proposal = toInterfaceContractId r.proposal
+            changeHolding = r.changeHolding)
+          (exerciseCmd eparCid ExternalPartyAmuletRules_ProposeGovernanceLockSubstitution with
+            args = mkArgs context governanceLockKey)
+      AS_Vesting{vestingLockKey} ->
+        fmap
+          (\r -> ProposeSubstitutionResult with
+            proposal = toInterfaceContractId r.proposal
+            changeHolding = r.changeHolding)
+          (exerciseCmd eparCid ExternalPartyAmuletRules_ProposeVestingLockSubstitution with
+            args = mkArgs context vestingLockKey)
 
 governanceUnlockRawChoice
   :  AmuletRegistryV2.AmuletRegistry
@@ -899,11 +930,11 @@ tsv1RequestMemo : Text -> GovernanceLockKind -> Text
 tsv1RequestMemo request kind = tsv1RequestMemo' request (governanceLockKindToTagAndSubject kind) []
 
 -- | The TSv1 memo of a lock request, with extra metadata entries.
-tsv1RequestMemo' : Text -> (GovernanceLockTag, Text) -> [(Text, Text)] -> Text
+tsv1RequestMemo' : Text -> (LockKindTag, Text) -> [(Text, Text)] -> Text
 tsv1RequestMemo' request (tag, subject) extraEntries =
   encodeLockCompatMemo $ Metadata $ TM.fromList $
        [ (requestMetaKey, request)
-       , (lockKindMetaKey, governanceLockTagToText tag)
+       , (lockKindMetaKey, lockKindTagToText tag)
        , (lockSubjectMetaKey, subject)
        ] <> extraEntries
 

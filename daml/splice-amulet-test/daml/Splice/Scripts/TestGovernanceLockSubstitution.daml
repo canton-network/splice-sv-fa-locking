@@ -21,6 +21,7 @@ import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyAmuletRules
 import Splice.GovernanceLock
 import Splice.Lock
+import Splice.Lock.TSv1MemoParser
 import Splice.VestingLock
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
@@ -42,11 +43,11 @@ expectParseError needle (Errors es) =
   unless (any (needle `Text.isInfixOf`) (NonEmpty.toList es)) $
     fail $ "Expected a parse error containing '" <> needle <> "', got " <> show es
 
--- | Proposes a substitution through `ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution`,
+-- | Proposes a substitution through `ExternalPartyAmuletRules`,
 -- funded with all unlocked holdings of the proposer.
 createSubstitutionRaw
   :  TestEnv -> Party -> AnySubstitution -> Decimal
-  -> Script (Either SubmitError ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult)
+  -> Script (Either SubmitError ProposeSubstitutionResult)
 createSubstitutionRaw env proposer substitution amount = do
   now <- getTime
   proposeSubstitutionRawChoice' env.registriesEnv.amuletV2 proposer substitution amount now
@@ -85,8 +86,8 @@ expectFailureContaining needle (Left err) =
   unless (needle `Text.isInfixOf` show err) $
     fail $ "Expected a failure containing '" <> needle <> "', got: " <> show err
 
-lockKindMetadata : GovernanceLockTag -> Metadata
-lockKindMetadata tag = Metadata $ TextMap.singleton lockKindMetaKey (governanceLockTagToText tag)
+lockKindMetadata : LockKindTag -> Metadata
+lockKindMetadata tag = Metadata $ TextMap.singleton lockKindMetaKey (lockKindTagToText tag)
 
 substitutionRequestMetadata : Metadata
 substitutionRequestMetadata = Metadata $ TextMap.singleton requestMetaKey governanceLockRequestSubstituteLock
@@ -94,7 +95,7 @@ substitutionRequestMetadata = Metadata $ TextMap.singleton requestMetaKey govern
 substitutionAcceptRequestMetadata : Metadata
 substitutionAcceptRequestMetadata = Metadata $ TextMap.singleton requestMetaKey governanceLockRequestAcceptToSubstituteLock
 
-parseSubstitutionTSv1 : Party -> GovernanceLockTag -> Metadata -> Validation Text AnySubstitution
+parseSubstitutionTSv1 : Party -> LockKindTag -> Metadata -> Validation Text AnySubstitution
 parseSubstitutionTSv1 admin tag meta =
   runParser (substitutionTSv1Parser admin) (substitutionRequestMetadata <> lockKindMetadata tag <> meta)
 
@@ -116,7 +117,7 @@ testSubstitutionMeta_lockedTargetDefaults = do
         [ (lockSubjectMetaKey, "TestSV")
         , (targetLockOwnerMetaKey, partyToText alice)
         ]
-  parsed <- expectParsed $ parseSubstitutionTSv1 admin GLT_SuperValidator meta
+  parsed <- expectParsed $ parseSubstitutionTSv1 admin LKT_SuperValidator meta
   parsed === AS_Governance with
     governanceLockKey = GovernanceLockKey with
       dso = admin
@@ -138,7 +139,7 @@ testSubstitutionMeta_lockedTargetRoundTrip = do
         , (targetLockOwnerMetaKey, partyToText targetKey.owner)
         , (lockStatusMetaKey, lockStateToText LS_Locked)
         ]
-  parsed <- expectParsed $ parseSubstitutionTSv1 admin GLT_FeaturedApp meta
+  parsed <- expectParsed $ parseSubstitutionTSv1 admin LKT_FeaturedApp meta
   parsed === AS_Governance with governanceLockKey = targetKey
 
 testSubstitutionMeta_vestingTargetRoundTrip : Script ()
@@ -156,7 +157,7 @@ testSubstitutionMeta_vestingTargetRoundTrip = do
         endTime = now `addRelTime` days 45
       meta = encodeVestingLockSubstitutionTargetMetadata targetKey <>
         (Metadata $ TextMap.fromList [(lockSubjectMetaKey, "TestSV")])
-  parsed <- expectParsed $ parseSubstitutionTSv1 admin GLT_SuperValidator meta
+  parsed <- expectParsed $ parseSubstitutionTSv1 admin LKT_SuperValidator meta
   parsed === AS_Vesting with vestingLockKey = targetKey
 
 testSubstitutionMeta_failures : Script ()
@@ -167,7 +168,7 @@ testSubstitutionMeta_failures = do
         [ (lockSubjectMetaKey, "TestSV")
         , (targetLockOwnerMetaKey, partyToText alice)
         ]
-      parse values = parseSubstitutionTSv1 admin GLT_SuperValidator (Metadata values)
+      parse values = parseSubstitutionTSv1 admin LKT_SuperValidator (Metadata values)
 
   expectParseError lockStatusMetaKey $
     parse $ TextMap.insert lockStatusMetaKey "unlocking" base
@@ -213,19 +214,18 @@ testSubstitution_governanceLock = do
   let createSubstitution amount = do
         inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
         result <- submitWithTransferContext registry (actAs [bob] <> discloseMany' disc) $ \context ->
-          exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
-            args = CreateSubstitutionArgs with
-              dso
-              substitution = AS_Governance with
-                governanceLockKey = GovernanceLockKey with
+          exerciseCmd rulesCid ExternalPartyAmuletRules_ProposeGovernanceLockSubstitution with
+            args = LockSubstitutionArgs with
+              substitution = LockSubstitution with
+                target = GovernanceLockKey with
                   dso
                   owner = alice
                   specification = GovernanceLockSpecification with kind = someSvKind
-              owner = bob
-              amount
+                proposer = bob
+                amount
+                requestedAt = now
               inputHoldingCids = map downcast inputHoldingCids
               extraArgs = emptyExtraArgs with context
-              requestedAt = now
         errorIfLeft result
         pure ()
 
@@ -252,19 +252,18 @@ testSubstitution_governanceLock = do
   (rulesCid, disc) <- AmuletRegistryV2.getExtAmuletRulesWithDisclosures registry
   inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount bob) bob env.instrId
   result <- submitWithTransferContext registry (actAs [bob] <> discloseMany' disc) $ \context ->
-    exerciseCmd rulesCid ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitution with
-      args = CreateSubstitutionArgs with
-        dso
-        substitution = AS_Governance with
-                governanceLockKey = GovernanceLockKey with
+    exerciseCmd rulesCid ExternalPartyAmuletRules_ProposeGovernanceLockSubstitution with
+      args = LockSubstitutionArgs with
+        substitution = LockSubstitution with
+                target = GovernanceLockKey with
                   dso
                   owner = alice
                   specification = GovernanceLockSpecification with kind = someSvKind
-        owner = bob
-        amount = testLockAmount - testSubstAmount
+                proposer = bob
+                amount = testLockAmount - testSubstAmount
+                requestedAt = now
         inputHoldingCids = map downcast inputHoldingCids
         extraArgs = emptyExtraArgs with context
-        requestedAt = now
   _ <- errorIfLeft result
 
   checkBalances (testSubstAmount, testLockAmount - testSubstAmount) (0.0, testLockAmount)
@@ -300,7 +299,7 @@ testSubstitutionRaw_failures = do
     60000.0
   [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob
 
-  expectFailureContaining "substituted lock has less funds " =<<
+  expectFailureContaining "'unlockAmount' is greater than 'amount'" =<<
     acceptGovernanceSubstitutionRaw env mempty substitutionCid [alice]
 
 -- | Negative: `expiresAt` is derived from `requestedAt`, so dating a proposal into
@@ -507,7 +506,7 @@ setupSelfSubstitution targetSpec = do
 -- | alice proposes to move `amount` of her lock with `targetSpec` to a lock with `newSpec`.
 proposeSelfSubstitution
   :  TestEnv -> GovernanceLockSpecification -> Decimal
-  -> Script ExternalPartyAmuletRules_GovernanceLocks_ProposeSubstitutionResult
+  -> Script ProposeSubstitutionResult
 proposeSelfSubstitution env targetSpec amount =
   expectSuccess $ createSubstitutionRaw env env.alice
     (AS_Governance with
@@ -645,12 +644,12 @@ testSelfSubstitution_failures = do
 
   -- more than the target lock holds
   tooLarge <- proposeSelfSubstitution env targetSpec 60000.0
-  expectFailureContaining "substituted lock has less funds" =<<
+  expectFailureContaining "'unlockAmount' is greater than 'amount'" =<<
     acceptGovernanceSubstitutionRaw env mempty (fromInterfaceContractId tooLarge.proposal) [alice]
 
   -- the remainder of 5000.0 is below the minimum lock amount of 10000.0
   smallRemainder <- proposeSelfSubstitution env targetSpec 45000.0
-  expectFailureContaining "minimum governance lock amount" =<<
+  expectFailureContaining "minimum lock amount" =<<
     acceptGovernanceSubstitutionRaw env mempty (fromInterfaceContractId smallRemainder.proposal) [alice]
 
 -- | Rejecting a proposal by the owner of the target lock returns no funds and leaves the target lock unchanged.
