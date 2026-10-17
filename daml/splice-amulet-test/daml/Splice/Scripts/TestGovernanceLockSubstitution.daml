@@ -37,13 +37,6 @@ expectParseError needle (Errors es) =
   unless (any (needle `Text.isInfixOf`) (NonEmpty.toList es)) $
     fail $ "Expected a parse error containing '" <> needle <> "', got " <> show es
 
-expectFailureContaining : Text -> Either SubmitError a -> Script ()
-expectFailureContaining needle (Right _) =
-  fail $ "Expected a failure containing '" <> needle <> "', but the submission succeeded"
-expectFailureContaining needle (Left err) =
-  unless (needle `Text.isInfixOf` show err) $
-    fail $ "Expected a failure containing '" <> needle <> "', got: " <> show err
-
 lockKindMetadata : GovernanceLockTag -> Metadata
 lockKindMetadata tag = Metadata $ TextMap.singleton lockKindMetaKey (governanceLockTagToText tag)
 

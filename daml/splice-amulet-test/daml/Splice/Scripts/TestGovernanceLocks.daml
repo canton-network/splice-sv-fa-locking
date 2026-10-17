@@ -7,6 +7,7 @@ import DA.Action (unless)
 import DA.Assert ((===))
 import DA.Either
 import DA.Optional
+import DA.Text qualified as Text
 import DA.TextMap qualified as TM
 import DA.Time
 
@@ -294,6 +295,14 @@ testGovernanceLockMergeOnWithdrawTSv1 = do
 -- Utilities
 ------------
 
+-- | The governance locks of `owner`.
+governanceLocksOf : Party -> Script [(ContractId GovernanceLock, GovernanceLock)]
+governanceLocksOf owner = queryFilter @GovernanceLock owner \l -> l.owner == owner && isFullLock l
+
+-- | The vesting locks of `owner`.
+vestingLocksOf : Party -> Script [(ContractId GovernanceLock, GovernanceLock)]
+vestingLocksOf owner = queryFilter @GovernanceLock owner \l -> l.owner == owner && not (isFullLock l)
+
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
 checkHolding' party holding amount = WalletClientV2.checkHolding party (toInterfaceContractId holding) amount
@@ -309,6 +318,18 @@ checkLockedHolding p lockCid amount = do
   Some lock <- queryContractId p lockCid
   checkHolding' p lock.lockedAmulet amount
 
+-- | Checks the total and unlocked balances of a party.
+checkBalances : TestEnv -> Party -> (Decimal, Decimal) -> Script ()
+checkBalances env party (unlocked, locked) = do
+  WalletClientV2.checkUnlockedBalance party env.instrId unlocked
+  WalletClientV2.checkBalance party env.instrId (unlocked + locked)
+
+-- | Checks that a lock is still active, unchanged, under the same contract id.
+checkLockUntouched : (Template t, HasEnsure t, Eq t, Show t) => Party -> ContractId t -> t -> Script ()
+checkLockUntouched owner lockCid lock = do
+  current <- queryContractId owner lockCid
+  current === Some lock
+
 -- | a couple helpers to make the raw choice implementations easier to write
 submitWithTransferContext : AmuletRegistryV2.AmuletRegistry -> SubmitOptions -> (ChoiceContext -> Commands a) -> Script (Either SubmitError a)
 submitWithTransferContext registry options commands = do
@@ -317,6 +338,13 @@ submitWithTransferContext registry options commands = do
 
 expectSuccess : (CanAssert m, Show err) => m (Either err a) -> m a
 expectSuccess a = a >>= errorIfLeft
+
+expectFailureContaining : Text -> Either SubmitError a -> Script ()
+expectFailureContaining needle (Right _) =
+  fail $ "Expected a failure containing '" <> needle <> "', but the submission succeeded"
+expectFailureContaining needle (Left err) =
+  unless (needle `Text.isInfixOf` show err) $
+    fail $ "Expected a failure containing '" <> needle <> "', got: " <> show err
 
 errorIfLeft : (Show e, CanAssert m) => Either e a -> m a
 errorIfLeft (Left e) = assertFail $ "Expected success, but failed with " <> show e
@@ -333,7 +361,7 @@ tsv1RequestMemo request kind = tsv1RequestMemo' request kind []
 tsv1RequestMemo' : GovernanceLockRequestTag -> GovernanceLockKind -> [(Text, Text)] -> Text
 tsv1RequestMemo' request kind extraEntries =
   let (tag, subject) = governanceLockKindToTagAndSubject kind
-  in encodeLockCompatMemo $ Metadata $ TM.fromList $
+  in encodeLockCompatMemo $
        [ (requestMetaKey, governanceLockRequestTagToText request)
        , (lockKindMetaKey, governanceLockTagToText tag)
        , (lockSubjectMetaKey, subject)
