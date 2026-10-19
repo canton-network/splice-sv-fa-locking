@@ -174,10 +174,9 @@ governanceLockTransfer_acceptImpl self GovernanceLockTransfer{..} actors extraAr
   ([newLockedAmulet], None) <- lockAmuletFor
     (ForOwner with dso; owner = source.owner)
     receiver
-    [(amount, governanceLockProperties source.specification)]
+    [(amount, governanceLockExpiresAt source.specification)]
     [toInterfaceContractId result.unlockedAmulet]
     context
-    ""
   newLockCid <- create GovernanceLock with
     dso
     owner = receiver
