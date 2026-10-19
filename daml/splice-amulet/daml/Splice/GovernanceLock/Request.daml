@@ -138,7 +138,7 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
         newOwner
         transferAmount
     GLR_WithdrawVestingLock{vestingSpecification, vestedUntilTime} ->
-      governanceLock_transferFactoryV1_withdrawImpl dso arg vestingSpecification vestedUntilTime context state
+      governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso arg vestingSpecification vestedUntilTime context state
     GLR_SubstituteLock{target} ->
       governanceLock_transferFactoryV1_substituteImpl dso arg target context state
 
@@ -219,7 +219,7 @@ governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{tr
     senderChangeCids = []
     meta = emptyMetadata
 
-governanceLock_transferFactoryV1_withdrawImpl
+governanceLock_transferFactoryV1_withdrawVestedFundsImpl
   :  Party
   -> V1.TransferFactory_Transfer
   -> VestingLockSpecification
@@ -227,7 +227,7 @@ governanceLock_transferFactoryV1_withdrawImpl
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_withdrawImpl dso V1.TransferFactory_Transfer{..} specification vestedUntilTime context state = do
+governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso V1.TransferFactory_Transfer{..} specification vestedUntilTime context state = do
   let key = GovernanceLockKey with
         dso
         owner = transfer.sender
