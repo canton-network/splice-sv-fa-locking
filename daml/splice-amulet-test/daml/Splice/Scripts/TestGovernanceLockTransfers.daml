@@ -424,7 +424,7 @@ testLockTransferV1_acceptFailures = do
   let noLockKey = (key lock) with specification = fullLockSpecification $ GLK_SuperValidatorRightsOwner "NoSuchSV"
   noLock <- validLockTransfer noLockKey bob 40000.0
   noLockCid <- expectSuccess $ proposeGovernanceLockTransfer' env.registries env.registriesEnv.amuletV2 alice noLock
-  expectFailureContaining "" =<<
+  expectFailureContaining "No locks found with key" =<<
     submitWithTransferContext registriesEnv.amuletV2 (actAs bob) \context ->
       exerciseCmd (asTransferInstruction noLockCid) V1.TransferInstruction_Accept with
         extraArgs = emptyExtraArgs with context
