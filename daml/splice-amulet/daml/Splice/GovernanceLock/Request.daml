@@ -13,7 +13,7 @@ module Splice.GovernanceLock.Request (
   governanceLockRequestTagToText,
   parseGovernanceLockRequestTSv1,
 
-  -- * Parsers
+  -- * Parsers (for testing only)
   Parser(..),
   runParser,
   assertParsed,
