@@ -360,7 +360,7 @@ data DsoRules_GovernanceLock_DsoExpireResult = DsoRules_GovernanceLock_DsoExpire
 data DsoRules_GovernanceLockSubstitution_DsoExpireResult = DsoRules_GovernanceLockSubstitution_DsoExpireResult {}
   deriving (Serializable)
 
-data DsoRules_GovernanceLockTransfer_ExpireResult = DsoRules_GovernanceLockTransfer_ExpireResult {}
+data DsoRules_GovernanceLockTransfer_DsoExpireResult = DsoRules_GovernanceLockTransfer_DsoExpireResult {}
   deriving (Serializable)
 
 data DsoRules_MiningRound_CloseResult = DsoRules_MiningRound_CloseResult with
@@ -1660,7 +1660,7 @@ template DsoRules with
         _ <- exercise substitutionCid GovernanceLockSubstitution_DsoExpire
         pure $ DsoRules_GovernanceLockSubstitution_DsoExpireResult
 
-    nonconsuming choice DsoRules_GovernanceLockTransfer_Expire : DsoRules_GovernanceLockTransfer_ExpireResult
+    nonconsuming choice DsoRules_GovernanceLockTransfer_DsoExpire : DsoRules_GovernanceLockTransfer_DsoExpireResult
       -- ^ Expires a lock transfer proposal that the receiver never accepted, so
       -- that SVs can garbage-collect proposals left behind by their senders.
       with
@@ -1670,7 +1670,7 @@ template DsoRules with
       do
         _ <- getAndValidateSvParty this (Some sv)
         _ <- exercise transferCid GovernanceLockTransfer_DsoExpire
-        pure $ DsoRules_GovernanceLockTransfer_ExpireResult
+        pure $ DsoRules_GovernanceLockTransfer_DsoExpireResult
 
     nonconsuming choice DsoRules_MiningRound_Close : DsoRules_MiningRound_CloseResult
       with
