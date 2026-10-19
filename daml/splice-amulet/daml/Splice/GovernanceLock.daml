@@ -383,7 +383,8 @@ fetchAndMergeGovernanceLocks' newFunds key context state =
       stillVesting <- isLedgerTimeLT spec.endTime
       attemptMerge $ if stillVesting then defaultNumberToMerge else 1
 
-    _ -> attemptMerge defaultNumberToMerge
+    (GLS_FullLock _, None) -> attemptMerge defaultNumberToMerge
+    (GLS_FullLock _, Some _) -> attemptMerge defaultNumberToMerge
 
 fetchAndMergeGovernanceLocks : GovernanceLockKey -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update FetchAndMergeLocksResult
 fetchAndMergeGovernanceLocks key context state = do
