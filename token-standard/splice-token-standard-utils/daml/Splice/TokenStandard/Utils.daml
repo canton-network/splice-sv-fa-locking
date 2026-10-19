@@ -68,6 +68,7 @@ module Splice.TokenStandard.Utils (
   receiverMetaKey,
   reasonFromMeta,
   reasonToMeta,
+  reasonIsCipMemo,
   mkMetaTransferFrom,
   v1HistoryTagAsUnlockV1,
 
