@@ -45,7 +45,6 @@ import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
-import Splice.Iso8601 (parseIso8601UtcTime)
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (relTimeFromMeta, timeFromMeta)
 import Splice.Util
