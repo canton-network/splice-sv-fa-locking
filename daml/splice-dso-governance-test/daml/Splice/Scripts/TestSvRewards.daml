@@ -14,6 +14,7 @@ import DA.Time
 import Daml.Script
 
 import Splice.Amulet
+import Splice.AmuletRules
 import Splice.Round
 import Splice.Types
 import Splice.Scripts.Util
@@ -374,6 +375,7 @@ test_SvRewardUpdatedWeight = do
 test_Lifetime_SvRewards_Tracking : Script ()
 test_Lifetime_SvRewards_Tracking = do
   (app, (dso), (sv1, sv2, _, _)) <- initMainNet
+  [(amuletRulesCid, _)] <- query @AmuletRules dso
 
   -- create validator rights for sv1-4, so that runAmuletDepositBots can collect the rewards
   forA_ [sv1, sv2] $ \sv -> do
@@ -411,6 +413,7 @@ test_Lifetime_SvRewards_Tracking = do
           sv = sv
           openRoundCid = round._1
           svRewardStates = TextMap.singleton svRightOwner.rightOwnerName (svRightOwnerCid, rewardStateCid)
+          amuletRulesCid
 
   [(rulesCid, _)] <- query @DsoRules dso
 
@@ -436,22 +439,27 @@ test_Lifetime_SvRewards_Tracking = do
   [(rewardReceiptCid, _)] <- query @SvRewardMintReceipt dso
   [(rewardStateCid, _)] <- queryFilter @SvRewardState dso (\s -> s.svName == "sv1")
 
+  (sv1Name, _) <- getSvInfoByParty app sv1
+  (sv2Name, _) <- getSvInfoByParty app sv2
   -- Should fail when no receiptCids are supplied
   submitMustFail (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
     receiptCids = []
     svOperator = sv1
     svRewardStateCid = rewardStateCid
+    svName = sv1Name
 
   -- Should fail when wrong svOperator supplied
   submitMustFail (actAs sv1 <> actAs sv2 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
     receiptCids = [rewardReceiptCid]
     svOperator = sv2
     svRewardStateCid = rewardStateCid
+    svName = sv2Name
 
   submit (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
     receiptCids = [rewardReceiptCid]
     svOperator = sv1
     svRewardStateCid = rewardStateCid
+    svName = sv1Name
 
   checkLifetimeRewardTotal dso sv1 sv1Balance0
 
@@ -473,6 +481,7 @@ test_Lifetime_SvRewards_Tracking = do
     receiptCids = [rewardReceiptCid]
     svOperator = sv1
     svRewardStateCid = rewardStateCid
+    svName = sv1Name
 
   -- Check aggregated balances
   checkLifetimeRewardTotal dso sv1 $ sv1Balance1 + sv1Balance0

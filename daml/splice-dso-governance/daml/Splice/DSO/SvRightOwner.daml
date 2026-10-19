@@ -1,6 +1,8 @@
 module Splice.DSO.SvRightOwner where
 
 import DA.List (unique)
+import DA.Optional (fromOptional)
+import DA.Text qualified as Text
 import Splice.DSO.SvState
 import Splice.Util
 import Splice.Types
@@ -18,11 +20,13 @@ data SvRightOwnerInfo = SvRightOwnerInfo
       -- For rewards to be minted both the node operator.
     beneficiaries : [(Party, Decimal)]
       -- ^ List of beneficiaries and their percentages for reward distribution. Must not include rightOwnerParty. Remainder goes to rightOwnerParty.
-    -- TODO: Double check whether this template already exists in main or not (or deployed). Make optional decimal if so (for upgrade reasons).
     svLifetimeRewardsAdjustment : Decimal
       -- ^ Adjustment to this SV's lifetime rewards. Used for example to
       -- reflect the lifetime rewards accumulated before Phase 1 of
       -- SV locking. Can be changed by the SVs via voting.
+    ultimateSvOwner : Optional Text
+      -- ^ Optional Ultimate SV rights Owner. Used when an organization operates more than one SV, the lock up calculation is based on the
+      -- aggregate lifetime earnings of any/all operating SVs. Any reduction in weighting will apply to total SV weight for that organization.
   deriving (Eq, Show, Serializable)
 
 instance Patchable SvRightOwnerInfo where
@@ -34,6 +38,7 @@ instance Patchable SvRightOwnerInfo where
       rewardNodeOperatorName = patch new.rewardNodeOperatorName base.rewardNodeOperatorName current.rewardNodeOperatorName
       beneficiaries = patchScalar new.beneficiaries base.beneficiaries current.beneficiaries
       svLifetimeRewardsAdjustment = patch new.svLifetimeRewardsAdjustment base.svLifetimeRewardsAdjustment current.svLifetimeRewardsAdjustment
+      ultimateSvOwner = patch new.ultimateSvOwner base.ultimateSvOwner current.ultimateSvOwner
 
 template SvRightOwner
   with
@@ -65,4 +70,13 @@ validSvRightOwnerInfo SvRightOwnerInfo{..} =
   all (\(_, beneficiaryWeight) -> beneficiaryWeight > 0.0) beneficiaries &&
   all (\(beneficiary,_) -> beneficiary /= rightOwnerParty) beneficiaries &&
   unique (map fst beneficiaries) &&
-  length beneficiaries <= 20
+  length beneficiaries <= 20 &&
+  optional True validSvLockSubject ultimateSvOwner
+
+validSvLockSubject : Text -> Bool
+validSvLockSubject name =
+  not (Text.isEmpty name) && Text.isPred (\c -> c == "-" || Text.isAlphaNum c) name
+
+-- | Helper to return Group Name if it exists under SvRightOwnerInfo
+svLockingGroup : Text -> SvRightOwnerInfo -> Text
+svLockingGroup rightOwnerName info = fromOptional rightOwnerName info.ultimateSvOwner

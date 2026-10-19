@@ -34,6 +34,7 @@ testGovernanceRefactor = do
     rewardNodeOperatorName = "sv1"
     beneficiaries = []
     svLifetimeRewardsAdjustment = 0.0
+    ultimateSvOwner = None
   executeAddSvRightOwnerInstructions sv1 app
   [(_, dsoRules)] <- query @DsoRules app.dso
   length (getSvRightOwners dsoRules) === 5
@@ -44,6 +45,7 @@ testGovernanceRefactor = do
     rewardNodeOperatorName = "sv1"
     beneficiaries = []
     svLifetimeRewardsAdjustment = 0.0
+    ultimateSvOwner = None
 
   executeAllDefinitiveVotes app
 
@@ -75,6 +77,7 @@ testGovernanceRefactorMigration = do
             rewardNodeOperatorName = "sv1"
             beneficiaries = []
             svLifetimeRewardsAdjustment = 0.0
+            ultimateSvOwner = None
         ),
         ( "sv2",
           SvRightOwnerInfo with
@@ -84,6 +87,7 @@ testGovernanceRefactorMigration = do
             rewardNodeOperatorName = "sv2"
             beneficiaries = []
             svLifetimeRewardsAdjustment = 0.0
+            ultimateSvOwner = None
         ),
         ( "sv3",
           SvRightOwnerInfo with
@@ -93,6 +97,7 @@ testGovernanceRefactorMigration = do
             rewardNodeOperatorName = "sv3"
             beneficiaries = []
             svLifetimeRewardsAdjustment = 0.0
+            ultimateSvOwner = None
         ),
         ( "sv4",
           SvRightOwnerInfo with
@@ -102,6 +107,7 @@ testGovernanceRefactorMigration = do
             rewardNodeOperatorName = "sv4"
             beneficiaries = []
             svLifetimeRewardsAdjustment = 0.0
+            ultimateSvOwner = None
         ),
         -- before the migration sv4 had weight 30_000 with 20_000 of this going to a beneficiary. The beneficiary is now represented as a dedicated right owner.
         ( "rightOwnerFormerlyOnSv4",
@@ -112,6 +118,7 @@ testGovernanceRefactorMigration = do
             rewardNodeOperatorName = "sv4"
             beneficiaries = []
             svLifetimeRewardsAdjustment = 0.0
+            ultimateSvOwner = None
         )
       ]
   executeAllDefinitiveVotes app

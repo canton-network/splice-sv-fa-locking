@@ -5,7 +5,7 @@ module Splice.AmuletConfig where
 
 import DA.Optional
 import DA.Time
-import DA.TextMap hiding (filter)
+import DA.TextMap hiding (filter, null)
 
 import Splice.Fees
 import Splice.DecentralizedSynchronizer
@@ -286,18 +286,17 @@ validGovernanceLockConfig GovernanceLockConfig
 
 
 validSuperValidatorWeightSchedule : Schedule RelTime [SvLockingTier] -> Bool
-validSuperValidatorWeightSchedule schedule = ((allValues schedule) /= [])
-  && all validateSvLockingTier schedule.initialValue
-  && (all (\(_, tier) -> all validateSvLockingTier tier) schedule.futureValues)
+validSuperValidatorWeightSchedule schedule = validSchedule schedule validTierList
+
+validTierList : [SvLockingTier] -> Bool
+validTierList tiers = not (null tiers)
+    && all validTier tiers
+    && isDecreasing (map (.minLockedFraction) tiers)
+    && isDecreasing (map (.rewardWeightFactor) tiers)
   where
-    validateSvLockingTier : SvLockingTier -> Bool
-    validateSvLockingTier (SvLockingTier minLockedFraction rewardWeightFactor) =
-      validMinLockedFraction minLockedFraction
-      && validRewardWeightFactor rewardWeightFactor
-    validMinLockedFraction : Decimal -> Bool
-    validMinLockedFraction val = 0.0 <= val && val <= 1.0
-    validRewardWeightFactor : Decimal -> Bool
-    validRewardWeightFactor val = 0.0 < val && val <= 1.0
+    validTier t = 0.0 <= t.minLockedFraction && t.minLockedFraction <= 1.0
+      && 0.0 < t.rewardWeightFactor && t.rewardWeightFactor <= 1.0
+    isDecreasing xs = and (zipWith (>) xs $ drop 1 xs)
 
 getGovernanceLockConfigValue : a -> (GovernanceLockConfig -> Optional a) -> Optional GovernanceLockConfig -> a
 getGovernanceLockConfigValue defaultValue getValue config = fromOptional defaultValue $ config >>= getValue

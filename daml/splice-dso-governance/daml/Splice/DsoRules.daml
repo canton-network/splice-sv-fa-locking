@@ -2298,29 +2298,25 @@ template DsoRules with
         receiptCids : [ContractId SvRewardMintReceipt]
         svOperator : Party
         svRewardStateCid : ContractId SvRewardState
+        svName : Text -- ^ Rights owner whose receipts are merged
       controller svOperator
       do
-        name <- getAndValidateSvNodeOperatorParty this (Some svOperator)
-        require "There must be at least one receipt" $
-          length receiptCids >= 1
-        svRewardState <- fetchAndArchive (ForSv with dso; svName = name) svRewardStateCid
+        requireOnLedgerSvRightOwners this
+        void $ getAndValidateSvNodeOperatorParty this (Some svOperator)
+        require "There must be at least one receipt" $ not $ null receiptCids
+        svRewardState <- fetchAndArchive (ForSv with dso; svName) svRewardStateCid
 
         receiptAmounts <- forA receiptCids $ \cid -> do
           r <- fetchAndArchive (ForDso with dso) cid
-          TSU.requireMatchExpected ("svRewardState.svName", svRewardState.svName) r.svRightOwnerName
-          return r.amount
+          TSU.requireMatchExpected ("svName", svName) r.svRightOwnerName
+          pure r.amount
 
-        let receiptTotal = sum receiptAmounts
-
-        create SvRewardState with
-          dso
-          svName = svRewardState.svName
-          state = svRewardState.state
-          lifetimeRewardTotal = Some $ receiptTotal + getLifetimeRewardTotal svRewardState
+        create svRewardState with
+          lifetimeRewardTotal = Some $ sum receiptAmounts + getLifetimeRewardTotal svRewardState
 
     nonconsuming choice DsoRules_CreateSvUnderlockInstruction : DsoRules_CreateSvUnderlockInstructionResult
       with
-        svName : Text -- ultimate right owner
+        svName : Text -- right owner
         qualifyingFactor : Decimal -- svLockingWeightFactor result : Either 0.0 or a tier factor
         amuletRulesCid : ContractId AmuletRules
       controller dso

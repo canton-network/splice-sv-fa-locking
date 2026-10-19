@@ -10,7 +10,6 @@ import Splice.DSO.DecentralizedSynchronizer
 import Splice.Util
 
 import DA.List (last)
-import DA.Optional
 import DA.Time
 
 
@@ -148,41 +147,6 @@ defaultRewardAdjustmentState = RewardAdjustmentState with
   permanentWeightFactor = 1.0
   recoverableUnderlocks = []
   lastAdjustedAt = None
-
-updateTemporaryUnderlockState : (CanAssert m) => Decimal -> Time -> Optional RewardAdjustmentState -> m (Optional RewardAdjustmentState)
-updateTemporaryUnderlockState newRewardWeightFactor effectiveTime adjustmentState
-  | newAdjustmentState == adjustmentState = assertFail "Underlock state must change when calling updateTemporaryUnderlockState"
-  | otherwise = do
-      require "newRewardWeightFactor must be nonnegative" $ newRewardWeightFactor >= 0.0
-      require "newRewardWeightFactor must be no greater than permanentWeightFactor" $
-        currentAdjustmentState.permanentWeightFactor <= newRewardWeightFactor
-      pure newAdjustmentState
-  where
-    currentAdjustmentState = fromOptional defaultRewardAdjustmentState adjustmentState
-    stillApplicableUnderlocks = currentAdjustmentState.recoverableUnderlocks
-    newUnderlock = UnderlockEvent with
-      newFactor = newRewardWeightFactor
-      startTime = effectiveTime
-    newRecoverableUnderlocks
-      | newRewardWeightFactor == 1.0 = []
-      | firstUnderlock::_ <- stillApplicableUnderlocks,
-        firstUnderlock.newFactor == newRewardWeightFactor = stillApplicableUnderlocks
-      | otherwise = newUnderlock::stillApplicableUnderlocks
-    newFullAdjustmentState = currentAdjustmentState with
-      recoverableUnderlocks = newRecoverableUnderlocks
-    newAdjustmentState
-      | newFullAdjustmentState == defaultRewardAdjustmentState = None
-      | otherwise = Some newFullAdjustmentState
-
-updatePermanentUnderlockState : (CanAssert m) => Time -> Optional RewardAdjustmentState -> m (Optional RewardAdjustmentState)
-updatePermanentUnderlockState permanentBefore adjustmentState
-  | Some state <- adjustmentState, (recoverableUnderlocks, permanent :: _) <- span isStillTemporary state.recoverableUnderlocks
-    = pure $ Some RewardAdjustmentState with
-          permanentWeightFactor = permanent.newFactor
-          recoverableUnderlocks
-          lastAdjustedAt = state.lastAdjustedAt
-  | otherwise = assertFail "Must make an underlock permanent"
-  where isStillTemporary = (< permanentBefore). startTime
 
 -- | Underlocks older than the permanent grace period become permanent. The newest one has the lowest factor.
 promotePermanent : Time -> RewardAdjustmentState -> RewardAdjustmentState

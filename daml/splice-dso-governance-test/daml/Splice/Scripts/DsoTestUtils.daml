@@ -168,6 +168,7 @@ initDecentralizedSynchronizerWithAmuletPrice isDevNet initialRound amuletPrice o
           rewardNodeOperatorName = svName
           beneficiaries = []
           svLifetimeRewardsAdjustment = 0.0
+          ultimateSvOwner = None
       void $ submit (actAs sv1 <> readAs dso) $ exerciseCmd result.newDsoRules DsoRules_ExecuteAddSvRightOwnerInstruction with
         instructionCid
         openMiningRoundCid = earliestOpenRoundCid
