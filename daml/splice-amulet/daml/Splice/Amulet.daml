@@ -10,7 +10,7 @@ import DA.Assert
 import DA.List (unique)
 import DA.Map as Map
 import DA.TextMap as TextMap
-import DA.Optional (fromOptional, isNone, optionalToList)
+import DA.Optional (fromOptional, isNone, isSome, optionalToList)
 
 import Splice.Api.Token.MetadataV1 as Api.Token.MetadataV1
 import Splice.Api.Token.HoldingV1 qualified as Api.Token.HoldingV1
@@ -112,6 +112,17 @@ data FeaturedAppRight_CancelResult = FeaturedAppRight_CancelResult
 
 data FeaturedAppRight_UpdateConfigResult = FeaturedAppRight_UpdateConfigResult with
   featuredAppRightCid : ContractId FeaturedAppRight
+    deriving (Serializable)
+
+data FeaturedAppRight_SetUnderlockResult = FeaturedAppRight_SetUnderlockResult with
+  featuredAppRightCid : ContractId FeaturedAppRight
+    deriving (Serializable)
+
+data FeaturedAppRight_ClearUnderlockResult = FeaturedAppRight_ClearUnderlockResult with
+  featuredAppRightCid : ContractId FeaturedAppRight
+    deriving (Serializable)
+
+data FeaturedAppRight_EnforcePermanentUnderlockResult = FeaturedAppRight_EnforcePermanentUnderlockResult {}
     deriving (Serializable)
 
 data AppRewardCoupon_DsoExpireResult = AppRewardCoupon_DsoExpireResult with
@@ -330,6 +341,15 @@ data FeaturedAppConfig = FeaturedAppConfig with
       -- as submissions by this featured app.
       --
       -- If not set, use the default value of []
+    lockThresholdOverride : Optional Decimal
+      -- ^ Override of the network-wide minimum lock threshold.
+      -- None means that the default from AmuletConfig applies.
+  deriving (Eq, Show, Serializable)
+
+-- | This holds those fields of FeaturedAppConfig which are not stored directly on the FeaturedAppRight contract.
+-- We would ideally move activityWeight here but SCU won't allow it.
+data FeaturedAppConfigInternal = FeaturedAppConfigInternal with
+    lockThresholdOverride : Optional Decimal
   deriving (Eq, Show, Serializable)
 
 validFeaturedAppRight : FeaturedAppRight -> Bool
@@ -337,6 +357,7 @@ validFeaturedAppRight FeaturedAppRight{..} =
   0.0 <= fromOptional defaultAppActivityWeight activityWeight
   && unique ops
   && provider `notElem` ops
+  && optional True (0.0 <=) (config >>= (.lockThresholdOverride))
   where ops = fromOptional defaultOpsParties opsParties
 
 -- | The right for an application provider to earn featured app rewards.
@@ -357,6 +378,12 @@ template FeaturedAppRight with
       -- as submissions by this featured app.
       --
       -- If not set, use the default value of []
+    config : Optional FeaturedAppConfigInternal
+      -- ^ Additional config values specific to this featured app right.
+    underlockPermanentAt : Optional Time
+      -- ^ If set, indicates that the featured app right is suspended and
+      -- indicates the deadline of when the underlock will be made permanent
+      -- by archiving FeaturedAppRight.
   where
     signatory dso
     observer provider
@@ -399,20 +426,53 @@ template FeaturedAppRight with
         return FeaturedAppRight_UpdateConfigResult with
           featuredAppRightCid
 
+    choice FeaturedAppRight_SetUnderlock : FeaturedAppRight_SetUnderlockResult
+      with
+        permanentAt : Time
+      controller dso
+      do
+        -- To ensure that we don't accidentally extend an existing grace period automatically via this choice,
+        -- we take the minimum of the times when already underlocked.
+        featuredAppRightCid <- case this.underlockPermanentAt of
+          Some permanentAt' -> create this with underlockPermanentAt = Some (min permanentAt permanentAt')
+          None -> create this with underlockPermanentAt = Some permanentAt
+        return FeaturedAppRight_SetUnderlockResult with
+          featuredAppRightCid
+
+    choice FeaturedAppRight_ClearUnderlock : FeaturedAppRight_ClearUnderlockResult
+      controller dso
+      do
+        featuredAppRightCid <- create this with underlockPermanentAt = None
+        return FeaturedAppRight_ClearUnderlockResult with
+          featuredAppRightCid
+
+    choice FeaturedAppRight_EnforcePermanentUnderlock : FeaturedAppRight_EnforcePermanentUnderlockResult
+      controller dso
+      do
+        case underlockPermanentAt of
+          None -> fail "FeaturedAppRight_EnforcePermanentUnderlock: not underlocked"
+          Some permanentAt -> do
+            assertDeadlineExceeded "underlockPermanentAt" permanentAt
+            -- If we get here, the right is archived.
+            return FeaturedAppRight_EnforcePermanentUnderlockResult
+
     interface instance Splice.Api.FeaturedAppRightV1.FeaturedAppRight for FeaturedAppRight where
       view = Splice.Api.FeaturedAppRightV1.FeaturedAppRightView with dso, provider
 
       featuredAppRight_CreateActivityMarkerImpl _self arg = do
         validateAppRewardBeneficiaries arg.beneficiaries
-        let groupedBeneficiaries = Map.fromListWithR (+) (map (\b -> (b.beneficiary, b.weight)) arg.beneficiaries)
-        cids <- forA (Map.toList groupedBeneficiaries) $ \(beneficiary, weight) ->
-          create FeaturedAppActivityMarker
-            with
-              dso
-              provider
-              beneficiary = beneficiary
-              weight = weight
-        pure (Splice.Api.FeaturedAppRightV1.FeaturedAppRight_CreateActivityMarkerResult $ map toInterfaceContractId cids)
+        if isFeaturedAppRightSuspended this
+          then pure (Splice.Api.FeaturedAppRightV1.FeaturedAppRight_CreateActivityMarkerResult [])
+          else do
+            let groupedBeneficiaries = Map.fromListWithR (+) (map (\b -> (b.beneficiary, b.weight)) arg.beneficiaries)
+            cids <- forA (Map.toList groupedBeneficiaries) $ \(beneficiary, weight) ->
+              create FeaturedAppActivityMarker
+                with
+                  dso
+                  provider
+                  beneficiary = beneficiary
+                  weight = weight
+            pure (Splice.Api.FeaturedAppRightV1.FeaturedAppRight_CreateActivityMarkerResult $ map toInterfaceContractId cids)
 
     interface instance Splice.Api.FeaturedAppRightV2.FeaturedAppRight for FeaturedAppRight where
       view = Splice.Api.FeaturedAppRightV2.FeaturedAppRightView with dso, provider
@@ -421,15 +481,19 @@ template FeaturedAppRight with
         validateAppRewardBeneficiariesV2 arg.beneficiaries
         require "Weight >= 1.0" (fromOptional 1.0 arg.weight >= 1.0)
         require "Weight <= 10000.0" (fromOptional 1.0 arg.weight <= 10000.0)
-        let groupedBeneficiaries = Map.fromListWithR (+) (map (\b -> (b.beneficiary, b.weight)) arg.beneficiaries)
-        cids <- forA (Map.toList groupedBeneficiaries) $ \(beneficiary, weight) ->
-          create FeaturedAppActivityMarker
-            with
-              dso
-              provider
-              beneficiary = beneficiary
-              weight = weight * fromOptional 1.0 arg.weight
-        pure (Splice.Api.FeaturedAppRightV2.FeaturedAppRight_CreateActivityMarkerResult $ map toInterfaceContractId cids)
+
+        if isFeaturedAppRightSuspended this
+          then pure (Splice.Api.FeaturedAppRightV2.FeaturedAppRight_CreateActivityMarkerResult [])
+          else do
+            let groupedBeneficiaries = Map.fromListWithR (+) (map (\b -> (b.beneficiary, b.weight)) arg.beneficiaries)
+            cids <- forA (Map.toList groupedBeneficiaries) $ \(beneficiary, weight) ->
+              create FeaturedAppActivityMarker
+                with
+                  dso
+                  provider
+                  beneficiary = beneficiary
+                  weight = weight * fromOptional 1.0 arg.weight
+            pure (Splice.Api.FeaturedAppRightV2.FeaturedAppRight_CreateActivityMarkerResult $ map toInterfaceContractId cids)
 
 validateAppRewardBeneficiaries : [Splice.Api.FeaturedAppRightV1.AppRewardBeneficiary] -> Update ()
 validateAppRewardBeneficiaries beneficiaries = do
@@ -448,12 +512,18 @@ getFeaturedAppConfig right = FeaturedAppConfig with
   activityWeight = right.activityWeight
   appKind = right.appKind
   opsParties = right.opsParties
+  lockThresholdOverride = (.lockThresholdOverride) =<< right.config
 
 setFeaturedAppConfig : FeaturedAppConfig -> FeaturedAppRight -> FeaturedAppRight
 setFeaturedAppConfig newConfig right = right with
   activityWeight = newConfig.activityWeight
   appKind = newConfig.appKind
   opsParties = newConfig.opsParties
+  config = Some $ FeaturedAppConfigInternal with
+    lockThresholdOverride = newConfig.lockThresholdOverride
+
+isFeaturedAppRightSuspended : FeaturedAppRight -> Bool
+isFeaturedAppRightSuspended right = isSome right.underlockPermanentAt
 
 -- | A marker created by a featured application for activity generated from that app. This is used
 -- to record activity other than amulet transfers where regular AppRewardCoupons are not created directly.
@@ -875,3 +945,4 @@ instance Patchable FeaturedAppConfig where
     activityWeight = patchScalar new.activityWeight base.activityWeight current.activityWeight
     appKind = patchScalar new.appKind base.appKind current.appKind
     opsParties = patchScalar new.opsParties base.opsParties current.opsParties
+    lockThresholdOverride = patch new.lockThresholdOverride base.lockThresholdOverride current.lockThresholdOverride

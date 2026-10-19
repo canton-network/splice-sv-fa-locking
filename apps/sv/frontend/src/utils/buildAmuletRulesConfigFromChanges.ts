@@ -220,6 +220,10 @@ export function buildAmuletRulesConfigFromChanges(
       featuredAppLockVestingDuration: wrapMicroseconds(
         getValue('governanceLockConfigFeaturedAppLockVestingDuration', true)
       ),
+      featuredAppLockThreshold: getValue('governanceLockConfigFeaturedAppLockThreshold', true),
+      featuredAppUnderlockGracePeriod: wrapMicroseconds(
+        getValue('governanceLockConfigFeaturedAppUnderlockGracePeriod', true)
+      ),
     }),
   };
 

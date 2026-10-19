@@ -28,5 +28,18 @@ template FeaturedAppConfigUpdateInstruction with
       do assertDeadlineExceeded "expiresAt" expiresAt
          return FeaturedAppConfigUpdateInstruction_ExpireResult
 
+-- | A record of governance consensus that a FeaturedApp provider was underlocked.
+template FeaturedAppUnderlockInstruction with
+    dso : Party
+    provider : Party
+    underlocked : Bool
+      -- ^ True indicates that governance parties observed the given provider to be underlocked.
+      -- False indicates that they observed their recovery from underlock.
+  where
+    signatory dso
+
 instance HasCheckedFetch FeaturedAppConfigUpdateInstruction ForDso where
   contractGroupId FeaturedAppConfigUpdateInstruction {..} = ForDso with dso
+
+instance HasCheckedFetch FeaturedAppUnderlockInstruction ForDso where
+  contractGroupId FeaturedAppUnderlockInstruction {..} = ForDso with dso

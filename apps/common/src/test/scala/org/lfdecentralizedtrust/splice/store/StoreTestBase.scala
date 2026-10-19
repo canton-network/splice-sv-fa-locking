@@ -841,6 +841,8 @@ abstract class StoreTestBase
       activityWeight.map(_.bigDecimal).toJava,
       Optional.empty(),
       Optional.empty(),
+      Optional.empty(),
+      Optional.empty(),
     )
     contract(
       FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID,
