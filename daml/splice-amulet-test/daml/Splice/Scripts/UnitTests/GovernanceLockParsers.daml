@@ -6,7 +6,6 @@ module Splice.Scripts.UnitTests.GovernanceLockParsers where
 
 import DA.Assert
 import DA.Date (Month(..), date)
-import DA.List (dedup)
 import DA.NonEmpty qualified as NonEmpty
 import DA.Optional
 import DA.Text qualified as Text
@@ -224,7 +223,7 @@ expectRequest result check = case result of
 
 expectRequestErrors : [Text] -> Validation Text GovernanceLockRequest -> Script ()
 expectRequestErrors expected result = case result of
-  Errors errors -> dedup (NonEmpty.toList errors) === expected
+  Errors errors -> NonEmpty.toList errors === expected
   Success _ -> fail "Expected errors, but got success"
 
 test_governanceLockRequestTSv1Parser : Script ()
@@ -339,7 +338,7 @@ test_governanceLockRequestTSv1Parser = do
 
   -- Creating, unlocking and transferring a lock needs the lock manager as the receiver
   expectRequestErrors [invalidReceiverError alice] $ run alice (request "create-lock" :: faLock)
-  expectRequestErrors [invalidReceiverError alice, missingMetadataMessage unlockAmountMetaKey, missingMetadataMessage vestingStartTimeMetaKey] $
+  expectRequestErrors [invalidReceiverError alice, missingMetadataMessage unlockAmountMetaKey] $
     run alice (request "unlock-and-start-vesting" :: faLock)
   expectRequestErrors [invalidReceiverError alice, missingMetadataMessage newLockOwnerMetaKey, missingMetadataMessage transferAmountMetaKey] $
     run alice (request "transfer-lock" :: faLock)
@@ -359,7 +358,6 @@ test_governanceLockRequestTSv1Parser = do
     [ invalidReceiverError alice
     , "Invalid provider for fa-lock: " <> invalidParty
     , "Invalid decimal in " <> unlockAmountMetaKey <> " metadata field: 'not-a-decimal'"
-    , missingMetadataMessage vestingStartTimeMetaKey
     ]
     $ run alice
         [ request "unlock-and-start-vesting"

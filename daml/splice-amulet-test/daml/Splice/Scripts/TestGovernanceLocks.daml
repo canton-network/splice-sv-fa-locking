@@ -301,7 +301,7 @@ governanceLocksOf owner = queryFilter @GovernanceLock owner \l -> l.owner == own
 
 -- | The vesting locks of `owner`.
 vestingLocksOf : Party -> Script [(ContractId GovernanceLock, GovernanceLock)]
-vestingLocksOf owner = queryFilter @GovernanceLock owner \l -> l.owner == owner && not (isFullLock l)
+vestingLocksOf owner = queryFilter @GovernanceLock owner \l -> l.owner == owner && isVestingLock l
 
 -- | Polymorphic checkHolding, to avoid repeated toInterfaceContractId when we have a LockedAmulet or Amulet ContractId.
 checkHolding' : Implements a V2.Holding => Party -> ContractId a -> Decimal -> Script ()
@@ -579,6 +579,9 @@ vestingTargetMetaEntries vestingPeriod endTime =
 
 isFullLock : GovernanceLock -> Bool
 isFullLock lock = foldGovernanceLockSpecification (const True) (const False) lock.specification
+
+isVestingLock : GovernanceLock -> Bool
+isVestingLock lock = foldGovernanceLockSpecification (const False) (const True) lock.specification
 
 fullLockSpecification : GovernanceLockKind -> GovernanceLockSpecification
 fullLockSpecification kind = GLS_FullLock FullLockSpecification with kind

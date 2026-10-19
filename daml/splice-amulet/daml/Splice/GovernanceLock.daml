@@ -89,7 +89,6 @@ import DA.Assert
 import DA.ContractKeys (lookupNByKey)
 import DA.Foldable (forA_, toList)
 import DA.Functor (($>))
-import DA.List (dedup)
 import DA.List.Total (head)
 import DA.Map qualified as Map
 import DA.NonEmpty qualified as NonEmpty
@@ -785,9 +784,11 @@ data CreateSubstitutionArgs = CreateSubstitutionArgs with
     inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
     extraArgs : ExtraArgs
     requestedAt : Time -- ^ Time of the request to create the proposal
+    context : ExternalPartyTransferContext
+    state : ExternalPartyConfigState
 
-createSubstitution : CreateSubstitutionArgs -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update (ContractId V1.TransferInstruction, V1.TransferInstruction, Optional (ContractId Amulet))
-createSubstitution CreateSubstitutionArgs {..} context state = do
+createSubstitution : CreateSubstitutionArgs -> Update (ContractId V1.TransferInstruction, V1.TransferInstruction, Optional (ContractId Amulet))
+createSubstitution CreateSubstitutionArgs {..} = do
   assertDeadlineExceeded "requestedAt" requestedAt
   requireMinimumLock state amount
   let lockProperties = LockProperties with
@@ -1421,8 +1422,8 @@ governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{
       inputHoldingCids = transfer.inputHoldingCids
       extraArgs
       requestedAt = transfer.requestedAt
-    context
-    state
+      context
+      state
 
   let substitutionTransfer = (view substitution).transfer
   requireMatchExpected ("substitution transfer", substitutionTransfer) transfer with
@@ -1560,7 +1561,7 @@ assertParsed parser input =
     Success output -> pure output
     Errors (NonEmpty.NonEmpty e []) -> assertFail e
     Errors es -> do
-      let errorsList = dedup $ NonEmpty.toList es
+      let errorsList = NonEmpty.toList es
       let numErrors = length errorsList
       assertFail $ "Found " <> show numErrors <> " parsing error" <> (if numErrors == 1 then "" else "s") <>
         (if length errorsList > 5 then ". First five errors" else  "") <> ":\n\n" <>
@@ -1658,11 +1659,9 @@ glr_createGovernanceLock_parser =
   GLR_CreateGovernanceLock <$> fullLockSpecificationParser
 
 glr_unlockGovernanceLock_parser : Optional GovernanceLockConfig -> Parser Metadata GovernanceLockRequest
-glr_unlockGovernanceLock_parser config = do
-  GLR_UnlockGovernanceLock <$>
-    fullLockSpecificationParser <*>
-    unlockAmountParser <*>
-    vestingStartTimeParser config
+glr_unlockGovernanceLock_parser config =
+  liftA2 (,) fullLockSpecificationParser unlockAmountParser >>= \(spec, unlockAmount) ->
+    GLR_UnlockGovernanceLock spec unlockAmount <$> vestingStartTimeParser spec.kind config
 
 glr_withdrawVestingLock_parser : Parser Metadata GovernanceLockRequest
 glr_withdrawVestingLock_parser =
@@ -1731,14 +1730,11 @@ unlockAmountParser = amountParser unlockAmountMetaKey
 transferAmountParser : Parser Metadata Decimal
 transferAmountParser = amountParser transferAmountMetaKey
 
-vestingStartTimeParser : Optional GovernanceLockConfig -> Parser Metadata (Optional Time)
-vestingStartTimeParser config = do
-  Parser \meta -> case (runParser governanceLockKindParser meta, runParser (iso8601TimeMetadataParser vestingStartTimeMetaKey) meta) of
-    (Errors e1, Errors e2) -> Errors (e1 <> e2)
-    (Errors e, Success _) -> Errors e
-    (Success kind, _) | vestingDurationFor kind config == days 0 -> Success None
-    (Success _, Errors e) -> Errors e
-    (Success _, Success vestingStartTime) -> Success (Some vestingStartTime)
+vestingStartTimeParser : GovernanceLockKind -> Optional GovernanceLockConfig -> Parser Metadata (Optional Time)
+vestingStartTimeParser kind config =
+  if vestingDurationFor kind config == days 0
+    then pure None
+    else Some <$> iso8601TimeMetadataParser vestingStartTimeMetaKey
 
 vestedUntilTimeParser : Parser Metadata Time
 vestedUntilTimeParser = iso8601TimeMetadataParser vestedUntilTimeMetaKey

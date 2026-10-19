@@ -160,7 +160,7 @@ test_example_createLock = do
   checkDisplayedAs a lockCid $ displayedFaLock "A" 5000000.0
   -- The lock subject `X` observes the lock
   Some _ <- queryContractId x (fromInterfaceContractId @GovernanceLock lockCid)
-  WalletClientV2.checkUnlockedBalance a instrId 0.0
+  checkBalances env a (0.0, 5000000.0)
 
 -- Unlocking Locks and Withdrawing from Vesting Locks
 -----------------------------------------------------
@@ -197,7 +197,7 @@ test_example_unlockAndWithdraw = do
   -- The result is a payout of 250,000 to `A` and an updated vesting lock of 750,000
   [payoutCid] <- pure withdrawResult.senderChangeCids
   checkHolding' a ((coerceContractId payoutCid : ContractId Amulet)) 250000.0
-  WalletClientV2.checkUnlockedBalance a instrId 250000.0
+  checkBalances env a (250000.0, 4750000.0)
   newVestingLockCid <- expectTransferPending withdrawResult
   checkDisplayedAs a newVestingLockCid DisplayedTransfer with
     sender = "A"
@@ -236,7 +236,7 @@ test_spec_unlockProvisionalLockWithoutVestingStartTime = do
   remainingLocks === []
   vestingLocks <- vestingLocksOf a
   vestingLocks === []
-  WalletClientV2.checkUnlockedBalance a instrId 5000000.0
+  checkBalances env a (5000000.0, 0.0)
 
 -- | Locks that vest need the vesting start time.
 test_spec_unlockFaLockNeedsVestingStartTime : Script ()
@@ -280,10 +280,10 @@ test_example_substituteLock = do
   acceptResult <- expectSuccess $ acceptInstructionV1 env substitutionCid a
   [payoutCid] <- expectTransferCompleted acceptResult
   checkHolding' a ((coerceContractId payoutCid : ContractId Amulet)) 1000000.0
-  WalletClientV2.checkUnlockedBalance a instrId 1000000.0
+  checkBalances env a (1000000.0, 4000000.0)
   expectSingleFaLock a 4000000.0
   expectSingleFaLock b 1000000.0
-  WalletClientV2.checkUnlockedBalance b instrId 0.0
+  checkBalances env b (0.0, 1000000.0)
 
 -- Transferring Locks
 ---------------------
@@ -314,5 +314,5 @@ test_example_transferLock = do
   [] <- expectTransferCompleted =<< expectSuccess (acceptInstructionV1 env transferCid b)
   expectSingleFaLock a 3000000.0
   expectSingleFaLock b 2000000.0
-  WalletClientV2.checkUnlockedBalance a instrId 0.0
-  WalletClientV2.checkUnlockedBalance b instrId 0.0
+  checkBalances env a (0.0, 3000000.0)
+  checkBalances env b (0.0, 2000000.0)
