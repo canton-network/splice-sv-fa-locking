@@ -57,6 +57,9 @@ testGovernanceLockHappyPathScenario ops = do
   checkLockedHolding alice aliceVesting 80000.0
   [(remainingLockCid, remainingLock)] <- queryFilter @GovernanceLock alice isFullLock
   remainingLock.amount === 100000.0
+  -- The remaining lock continues the lineage of the original lock, and the vesting lock starts a new one.
+  remainingLock.originalLockCid === Some (toAnyContractId aliceLock)
+  vestingLock.originalLockCid === None
   checkLockedHolding alice remainingLockCid 100000.0
 
   -- Check that we can't withdraw before the withdraw time has arrived on-ledger
@@ -88,6 +91,9 @@ testGovernanceLockHappyPathScenario ops = do
   let withdrawTime = unlockTime `addRelTime` (days 45 + hours 15 + minutes 45)
 
   Some newVestingLock <- expectSuccess $ ops.vestingWithdraw env aliceVesting alice (withdrawMeta withdrawTime)
+  -- The remaining vesting lock continues the lineage of the withdrawn vesting lock.
+  Some newVesting <- queryContractId alice newVestingLock
+  newVesting.originalLockCid === Some (toAnyContractId aliceVesting)
 
   -- A second withdrawal up to the same time has nothing left to withdraw.
   actionMustFail (expectMessageContains "'withdraw amount' is not greater than 'zero'") $

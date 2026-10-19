@@ -259,6 +259,7 @@ testDsoRulesConvertProvisionalFeaturedAppLock = do
   -- New GovernanceLock is created and is equivalent to the provisional lock with its kind updated to GLK_FeaturedApp
   let expectedConvertedLock = provisionalLock with
         specification = fullLockSpecification GLK_FeaturedApp with provider = env.alice.primaryParty
+        originalLockCid = Some $ TSU.toAnyContractId env.governanceLockCid
   [(_, actualConvertedLock)] <- query @GovernanceLock env.app.dso
   actualConvertedLock === expectedConvertedLock
 

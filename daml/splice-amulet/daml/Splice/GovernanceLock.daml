@@ -194,6 +194,7 @@ template GovernanceLock
             create this with
               specification = GLS_FullLock fullSpec with
                 kind = GLK_FeaturedApp with provider
+              originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
             pure GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
           kind -> error $ "GovernanceLock_DsoConvertProvisionalFeaturedAppLock: cannot convert lock of kind " <> show kind
 
@@ -428,7 +429,8 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingSt
         governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
           this with
             lockedAmulet
-            amount = stillLockedAmount)
+            amount = stillLockedAmount
+            originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid)
 
         vestingLock <- forA optVestingLockedAmulet (\(lockedAmulet, amount) -> create GovernanceLock with
           dso
@@ -445,7 +447,7 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingSt
           unlockedAmulet
 
 vestingLock_withdrawImpl : ContractId GovernanceLock -> GovernanceLock -> Time -> [Party] -> ExternalPartyTransferContext -> Update VestingLock_WithdrawResult
-vestingLock_withdrawImpl _self this@GovernanceLock{..} vestedUntilTime actors context
+vestingLock_withdrawImpl self this@GovernanceLock{..} vestedUntilTime actors context
     = do
         vestingSpec <- requireVestingLock specification
         checkActors actors [[owner]]
@@ -465,7 +467,8 @@ vestingLock_withdrawImpl _self this@GovernanceLock{..} vestedUntilTime actors co
               lockedAmulet
               specification = GLS_VestingLock vestingSpec with
                 vestingPeriod = vestingSpec.endTime `subTime` vestedUntilTime
-              amount = vestingAmount)
+              amount = vestingAmount
+              originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid)
             pure VestingLock_WithdrawResult with
               vestingLock
               vested = toInterfaceContractId unlocked
