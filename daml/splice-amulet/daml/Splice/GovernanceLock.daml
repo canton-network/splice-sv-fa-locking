@@ -82,6 +82,7 @@ import DA.Action (foldrA, unless)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
 import DA.Functor (($>))
+import DA.List (sortOn)
 import DA.List.Total (head)
 import DA.Map qualified as Map
 import DA.Optional
@@ -314,6 +315,9 @@ fetchAndMergeGovernanceLocks' newFunds key context state =
   let
     defaultNumberToMerge = 20
 
+    sortLocks : [(ContractId GovernanceLock, GovernanceLock)] -> [(ContractId GovernanceLock, GovernanceLock)]
+    sortLocks = sortOn $ negate . (.amount) . snd
+
     merge : Time -> [(ContractId GovernanceLock, GovernanceLock)] -> Update FetchAndMergeLocksResult
     merge requestedAt locks = do
       -- The merged lock continues the lineage of the first existing lock
@@ -359,7 +363,7 @@ fetchAndMergeGovernanceLocks' newFunds key context state =
 
     attemptMerge : Int -> Update FetchAndMergeLocksResult
     attemptMerge numberToMerge = do
-      locks <- lookupNByKey @GovernanceLock numberToMerge key
+      locks <- sortLocks <$> lookupNByKey @GovernanceLock numberToMerge key
       case (newFunds, locks) of
         (None, []) -> assertFail $ "No locks found with key: " <> show key
         (None, [(lockCid, lock)]) -> pure FetchAndMergeLocksResult with
