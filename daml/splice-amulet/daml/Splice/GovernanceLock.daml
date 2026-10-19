@@ -707,7 +707,6 @@ lockAmuletFor forOwner@ForOwner {..} receiver specs holdingInputs context reason
 -- Metadata
 -- ========
 
--- Update this to the implementation CIP once that has a number assigned.
 cipPrefix = "cip-127"
 
 -- | Prefix of the metadata keys used to pass extra choice parameters.
