@@ -11,7 +11,7 @@ import DA.Time
 import Daml.Script
 
 import Splice.Amulet (Amulet, FeaturedAppRight(..), LockedAmulet, LockedAmulet_OwnerExpireLockV2(..))
-import Splice.DsoRules (DsoRules, DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(..), DsoRules_GovernanceLockSubstitution_WithdrawExpired(..), DsoRules_GovernanceLockTransfer_Expire(..), DsoRules_GovernanceLock_DsoExpire(..))
+import Splice.DsoRules (DsoRules, DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(..), DsoRules_GovernanceLockSubstitution_DsoExpire(..), DsoRules_GovernanceLockTransfer_Expire(..), DsoRules_GovernanceLock_DsoExpire(..))
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
@@ -364,7 +364,7 @@ testDsoRulesWithdrawExpiredGovernanceSubstitution = do
   passTime (days 91)
 
   submit (actAs env.sv1 <> readAs env.app.dso) $
-    exerciseCmd env.dsoRulesCid DsoRules_GovernanceLockSubstitution_WithdrawExpired with
+    exerciseCmd env.dsoRulesCid DsoRules_GovernanceLockSubstitution_DsoExpire with
       substitutionCid
       sv = env.sv1
 
@@ -382,7 +382,7 @@ testDsoRulesWithdrawExpiredVestingSubstitution = do
   passTime (days 91)
 
   submit (actAs env.sv1 <> readAs env.app.dso) $
-    exerciseCmd env.dsoRulesCid DsoRules_GovernanceLockSubstitution_WithdrawExpired with
+    exerciseCmd env.dsoRulesCid DsoRules_GovernanceLockSubstitution_DsoExpire with
       substitutionCid
       sv = env.sv1
 
@@ -400,7 +400,7 @@ testDsoRulesWithdrawExpiredGovernanceSubstitutionRejectsNonSv = do
   passTime (days 91)
 
   submitMustFail (actAs env.bob.primaryParty <> readAs env.app.dso) $
-    exerciseCmd env.dsoRulesCid DsoRules_GovernanceLockSubstitution_WithdrawExpired with
+    exerciseCmd env.dsoRulesCid DsoRules_GovernanceLockSubstitution_DsoExpire with
       substitutionCid
       sv = env.bob.primaryParty
 
@@ -414,7 +414,7 @@ testDsoRulesWithdrawExpiredVestingSubstitutionNotYetExpired = do
 
   actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'GovernanceLockSubstitution.expiresAt'") do
     r <- trySubmit (actAs env.sv1 <> readAs env.app.dso) $
-      exerciseCmd env.dsoRulesCid DsoRules_GovernanceLockSubstitution_WithdrawExpired with
+      exerciseCmd env.dsoRulesCid DsoRules_GovernanceLockSubstitution_DsoExpire with
         substitutionCid
         sv = env.sv1
     pure (() <$ r)
