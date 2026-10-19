@@ -508,7 +508,7 @@ transferredGovernanceLock env sender receiver amount kind = do
   AmuletRegistryV2.tapFaucet registry sender amount
   lockForGovernance env.registries registry sender amount kind
   requestedAt <- getTime
-  transferCid <- expectSuccess $ proposeGovernanceLockTransfer' env.registries registry sender LockTransfer with
+  transferCid <- expectSuccess $ proposeGovernanceLockTransfer' env.registries registry sender LockTransferArgs with
     source = GovernanceLockKey with
       dso = env.instrId.admin
       owner = sender
@@ -516,6 +516,7 @@ transferredGovernanceLock env sender receiver amount kind = do
     receiver
     amount
     requestedAt
+    extraArgs = emptyExtraArgs
   locksBefore <- receiverLocks
   expectSuccess $ acceptInstructionV1 env (coerceContractId transferCid) receiver
   locksAfter <- receiverLocks
@@ -625,7 +626,7 @@ proposeSubstitution registries registry proposer substitution amount =
   expectTransferPending =<< expectSuccess (proposeSubstitution' registries registry proposer substitution amount)
 
 -- | The TSv1 request of the owner of the source lock to propose the lock transfer `transfer`.
-lockTransferRequest : AmuletRegistryV2.AmuletRegistry -> LockTransfer -> Script V1.Transfer
+lockTransferRequest : AmuletRegistryV2.AmuletRegistry -> LockTransferArgs -> Script V1.Transfer
 lockTransferRequest registry transfer = do
   let memo = tsv1RequestMemo' GLRT_TransferLock (governanceLockKind transfer.source.specification) $
         [ (newLockOwnerMetaKey, partyToText transfer.receiver)
@@ -636,7 +637,7 @@ lockTransferRequest registry transfer = do
 
 -- | Proposes the lock transfer `transfer`, submitted as `proposer`.
 proposeGovernanceLockTransfer'
-  :  MultiRegistry.MultiRegistry -> AmuletRegistryV2.AmuletRegistry -> Party -> LockTransfer
+  :  MultiRegistry.MultiRegistry -> AmuletRegistryV2.AmuletRegistry -> Party -> LockTransferArgs
   -> Script (Either SubmitError (ContractId GovernanceLockTransfer))
 proposeGovernanceLockTransfer' registries registry proposer transfer = do
   request <- lockTransferRequest registry transfer

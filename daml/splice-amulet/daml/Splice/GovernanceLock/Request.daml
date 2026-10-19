@@ -197,12 +197,12 @@ governanceLock_transferFactoryV1_transferLockImpl
   -> Decimal
   -> Update V1.TransferInstructionResult
 governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{transfer = inputTransfer, extraArgs} source newOwner transferAmount = do
-  let lockTransfer = LockTransfer with
-        source
-        receiver = newOwner
-        amount = transferAmount
-        requestedAt = inputTransfer.requestedAt
-  (transferCid, transfer) <- createGovernanceLockTransfer LockTransferArgs with transfer = lockTransfer; extraArgs
+  (transferCid, transfer) <- createGovernanceLockTransfer LockTransferArgs with
+    source
+    receiver = newOwner
+    amount = transferAmount
+    requestedAt = inputTransfer.requestedAt
+    extraArgs
 
   let outputTransfer = (view $ toInterface @V1.TransferInstruction transfer).transfer
   requireMatchExpected ("transfer", outputTransfer) inputTransfer with

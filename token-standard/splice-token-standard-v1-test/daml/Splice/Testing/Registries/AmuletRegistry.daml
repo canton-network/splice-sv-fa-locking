@@ -330,7 +330,7 @@ registryApi_getTransferInstruction_governanceLockTransfer registry lockTransferC
     transferC <- getExternalPartyConfigStateContext registry
     -- the accept resolves the source locks by key, and the receiver has no visibility into them,
     -- so disclose the locks and their locked amulets
-    let source = lockTransfer.transfer.source
+    let source = lockTransfer.source
     locks <- queryAllByKey @GovernanceLock registry.dso source
     lockD <- case locks of
       [] -> assertFail $ "Failed to find lock with key " <> show source <> " originating from lock transfer " <> show lockTransferCid

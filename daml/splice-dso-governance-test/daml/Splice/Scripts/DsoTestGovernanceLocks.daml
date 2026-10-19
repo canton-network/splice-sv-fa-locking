@@ -21,7 +21,7 @@ import Splice.Scripts.Util
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.MultiRegistry qualified as MultiRegistry
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
-import Splice.Testing.Utils (actionMustFail, expectMessageContains)
+import Splice.Testing.Utils (actionMustFail, emptyExtraArgs, expectMessageContains)
 import Splice.TokenStandard.Utils qualified as TSU
 
 data SharedLockEnv = SharedLockEnv with
@@ -436,7 +436,7 @@ setupGovernanceLockTransfer = do
   bob <- setupUser app "bob" app.dso
 
   now <- getTime
-  transferCid <- errorIfLeft =<< proposeGovernanceLockTransfer' registries registry alice.primaryParty LockTransfer with
+  transferCid <- errorIfLeft =<< proposeGovernanceLockTransfer' registries registry alice.primaryParty LockTransferArgs with
     source = GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty
@@ -444,6 +444,7 @@ setupGovernanceLockTransfer = do
     receiver = bob.primaryParty
     amount = testVestingAmount
     requestedAt = now
+    extraArgs = emptyExtraArgs
   pure (TransferEnv with .., transferCid)
 
 setupVestingLockTransfer : Script (TransferEnv, ContractId GovernanceLockTransfer)
@@ -457,7 +458,7 @@ setupVestingLockTransfer = do
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
 
   now <- getTime
-  transferCid <- errorIfLeft =<< proposeGovernanceLockTransfer' registries registry alice.primaryParty LockTransfer with
+  transferCid <- errorIfLeft =<< proposeGovernanceLockTransfer' registries registry alice.primaryParty LockTransferArgs with
     source = GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty
@@ -465,6 +466,7 @@ setupVestingLockTransfer = do
     receiver = bob.primaryParty
     amount = testVestingAmount
     requestedAt = now
+    extraArgs = emptyExtraArgs
   pure (TransferEnv with .., transferCid)
 
 -- | Happy path: an SV expires a governance lock transfer proposal.
