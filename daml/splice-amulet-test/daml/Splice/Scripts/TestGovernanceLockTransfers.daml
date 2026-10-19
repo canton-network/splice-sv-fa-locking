@@ -52,7 +52,7 @@ lockWithSpec
 lockWithSpec env owner amount specification = do
   let registry = env.registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry owner amount
-  lockCid <- lockForGovernance env.registries registry owner amount $ governanceLockKind specification
+  lockCid <- lockForGovernanceV1 env.registries registry owner amount $ governanceLockKind specification
   Some lock <- queryContractId owner lockCid
   pure (lockCid, lock)
 
@@ -104,8 +104,8 @@ testLockTransfer_governanceLock = do
   inputHoldingCids <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount alice) alice instrId
   assertMsg "alice must have unlocked holdings to pass as inputs" $ not (null inputHoldingCids)
   transfer <- validLockTransfer (key lock) bob 40000.0
-  request <- lockTransferRequest registriesEnv.amuletV2 transfer
-  result <- expectSuccess $ submitLockRequest registries request with
+  request <- lockTransferRequestV1 registriesEnv.amuletV2 transfer
+  result <- expectSuccess $ submitLockRequestV1 registries request with
     inputHoldingCids = map downcast inputHoldingCids
   result.senderChangeCids === []
   transferCid <- fromInterfaceContractId @GovernanceLockTransfer <$> expectTransferPending result
@@ -210,10 +210,10 @@ testLockTransfer_failures = do
   mustFail charlie "requires authorizers alice" transfer
 
   -- The TSv1 request must not have expired, and must name the new owner.
-  request <- lockTransferRequest registriesEnv.amuletV2 transfer
-  expectFailureContaining "transfer.executeBefore" =<< submitLockRequest registries request with
+  request <- lockTransferRequestV1 registriesEnv.amuletV2 transfer
+  expectFailureContaining "transfer.executeBefore" =<< submitLockRequestV1 registries request with
     executeBefore = now `addRelTime` hours (-1)
-  expectFailureContaining (missingMetadataMessage newLockOwnerMetaKey) =<< submitLockRequest registries request with
+  expectFailureContaining (missingMetadataMessage newLockOwnerMetaKey) =<< submitLockRequestV1 registries request with
     meta = reasonToMeta
       (tsv1RequestMemo' GLRT_TransferLock (governanceLockKind lock.specification) [(transferAmountMetaKey, "40000.0")])
       emptyMetadata

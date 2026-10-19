@@ -33,6 +33,7 @@ module Splice.Testing.TokenStandard.WalletClientV2
     listTransferInstructionsV2,
 
     transferV2,
+    tryTransferV2Result,
     acceptTransferInstructionV2,
     rejectTransferInstructionV2,
     withdrawTransferInstructionV2,
@@ -320,6 +321,11 @@ transferV2 : MultiRegistry.MultiRegistry -> Party -> V2.TransferFactory_Transfer
 transferV2 registries actor transferArg = do
   batch <- mkTransferFactory_TransferV2 registries transferArg
   extractPendingTransferInstructionV2 <$> executeSingletonTSABatch registries actor batch
+
+tryTransferV2Result : MultiRegistry.MultiRegistry -> Party -> V2.TransferFactory_Transfer -> Script (Either SubmitError V2.TransferInstructionResult)
+tryTransferV2Result registries actor transferArg = do
+  batch <- mkTransferFactory_TransferV2 registries transferArg
+  fmap extractTransferInstructionResultV2 <$> tryExecuteSingletonTSABatch registries actor batch
 
 acceptTransferInstructionV2 : MultiRegistry.MultiRegistry -> Party -> ContractId V2.TransferInstruction -> Script (Optional (ContractId V2.TransferInstruction))
 acceptTransferInstructionV2 registries actor instrCid = do

@@ -75,8 +75,8 @@ submitMemo env sender amount memo = do
   inputs <- if amount > 0.0
     then WalletClientV2.listUnlockedHoldingCidsFor (basicAccount sender) sender registry.instrumentId
     else pure []
-  request <- lockRequest registry sender amount memo emptyMetadata
-  expectSuccess $ submitLockRequest env.registries request with inputHoldingCids = downcast <$> inputs
+  request <- lockRequestV1 registry sender amount memo emptyMetadata
+  expectSuccess $ submitLockRequestV1 env.registries request with inputHoldingCids = downcast <$> inputs
 
 -- | Creates the 5M FA lock of `A` for `X` with the memo of the "Creating Locks" example.
 createExampleLock : TestEnv -> ExampleParties -> Script (ContractId V1.TransferInstruction)
@@ -247,10 +247,10 @@ test_spec_unlockFaLockNeedsVestingStartTime = do
   lockCid <- createExampleLock env parties
   Some lock <- queryContractId a (fromInterfaceContractId @GovernanceLock lockCid)
 
-  request <- lockRequest registriesEnv.amuletV2 a 0.0
+  request <- lockRequestV1 registriesEnv.amuletV2 a 0.0
     "cip-127/memo:request=unlock-and-start-vesting&unlock-amount=1000000&lock-kind=fa-lock&lock-subject=X"
     emptyMetadata
-  expectFailureContaining (missingMetadataMessage vestingStartTimeMetaKey) =<< submitLockRequest registries request
+  expectFailureContaining (missingMetadataMessage vestingStartTimeMetaKey) =<< submitLockRequestV1 registries request
   checkLockUntouched a (fromInterfaceContractId @GovernanceLock lockCid) lock
 
 -- Substituting Locks

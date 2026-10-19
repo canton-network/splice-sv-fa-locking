@@ -45,7 +45,7 @@ setupSharedLock kind = do
       registries = Map.singleton app.dso (MultiRegistry.mkRegistryApisV1V2 app.registry registry)
   WalletClientV2.createBatchingUtility alice.primaryParty
 
-  governanceLockCid <- lockForGovernance registries registry alice.primaryParty testVestingAmount (kind alice)
+  governanceLockCid <- lockForGovernanceV1 registries registry alice.primaryParty testVestingAmount (kind alice)
 
   pure SharedLockEnv with ..
 
@@ -325,7 +325,7 @@ setupGovernanceSubstitution = do
   tap app bob testVestingAmount
   WalletClientV2.createBatchingUtility bob.primaryParty
 
-  proposeSubstitution registries registry bob.primaryParty
+  proposeSubstitutionV1 registries registry bob.primaryParty
     (GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty
@@ -346,7 +346,7 @@ setupVestingSubstitution = do
     unlockGovernanceLock registries registry governanceLockCid testVestingAmount unlockAt
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
 
-  proposeSubstitution registries registry bob.primaryParty
+  proposeSubstitutionV1 registries registry bob.primaryParty
     (GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty
