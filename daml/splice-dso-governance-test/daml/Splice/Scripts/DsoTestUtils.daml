@@ -14,10 +14,11 @@ import qualified DA.Set as Set
 import qualified DA.Text as T
 import qualified DA.TextMap as TextMap
 import Daml.Script
+import DA.Date (Month(..), datetime)
 import DA.Time
 
 import Splice.Amulet
-import Splice.AmuletConfig (AmuletConfig(..), USD, useTrafficBasedAppRewards)
+import Splice.AmuletConfig (AmuletConfig(..), GovernanceLockConfig(..), USD, useTrafficBasedAppRewards)
 import Splice.AmuletRules
 import Splice.Issuance
 import Splice.Round
@@ -44,6 +45,30 @@ bpsMultiplier = 10000
 initMainNet : Script (AmuletApp, Party, (Party, Party, Party, Party))
 initMainNet = initDecentralizedSynchronizer False None True
 
+
+-- | Like `initMainNet`, but with on-chain SV underlock enforcement active from the start of the test.
+initMainNetWithSvUnderlockEnforcement : Script (AmuletApp, Party, (Party, Party, Party, Party))
+initMainNetWithSvUnderlockEnforcement = initMainNetWithSvUnderlockEnforcementAt (datetime 1970 Jan 1 0 0 0)
+
+-- | Like `initMainNet`, but with on-chain SV underlock enforcement activating at the given time.
+initMainNetWithSvUnderlockEnforcementAt : Time -> Script (AmuletApp, Party, (Party, Party, Party, Party))
+initMainNetWithSvUnderlockEnforcementAt activatesAt =
+  initDecentralizedSynchronizer False (Some (svUnderlockEnforcementAmuletConfig activatesAt)) True
+
+-- | `defaultAmuletConfig` with SV underlock enforcement activating at the given time, with 7 / 30-day grace periods.
+svUnderlockEnforcementAmuletConfig : Time -> AmuletConfig USD
+svUnderlockEnforcementAmuletConfig activatesAt = defaultAmuletConfig with
+  governanceLockConfig = Some GovernanceLockConfig with
+    minimumLockAmount = None
+    superValidatorLockVestingDuration = None
+    featuredAppLockVestingDuration = None
+    searchTimeGranularity = None
+    featuredAppLockThreshold = None
+    featuredAppUnderlockGracePeriod = None
+    superValidatorUnderlockEnforcementActivatesAt = Some activatesAt
+    superValidatorUnderlockTemporaryGracePeriod = Some (days 7)
+    superValidatorUnderlockPermanentGracePeriod = Some (days 30)
+    superValidatorWeightSchedule = None
 
 initMainNetNoOnLedgerSvRightOwners : Script (AmuletApp, Party, (Party, Party, Party, Party))
 initMainNetNoOnLedgerSvRightOwners = initDecentralizedSynchronizer False None False
