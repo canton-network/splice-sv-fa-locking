@@ -235,7 +235,7 @@ template GovernanceLock
             instrumentId = amuletInstrumentId dso
             requestedAt
             executeBefore = governanceLockExpiresAt specification
-            inputHoldingCids = []
+            inputHoldingCids = [toInterfaceContractId lockedAmulet]
             meta = encodeGovernanceLockMetadata this
           status = V1.TransferPendingInternalWorkflow with
             pendingActions = Map.singleton owner $ case specification of
