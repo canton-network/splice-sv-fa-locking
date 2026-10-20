@@ -320,6 +320,7 @@ data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
 
 fetchAndMergeGovernanceLocks'
   :  Optional (Decimal, [ContractId Holding], Time)
+    -- ^ New funds to lock: the amount, inputs, and requestedAt time.
   -> GovernanceLockKey
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
