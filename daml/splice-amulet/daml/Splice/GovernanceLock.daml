@@ -393,7 +393,7 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
 
     (GLS_VestingLock spec, None) -> do
       -- Vesting locks with `endTime` in the past must not be merged
-      -- Doing so would set `expiresAt = endTime` on the resulting transfer, causing an error in `AmuletRules`
+      -- Doing so would set `expiresAt = endTime` on the resulting transfer, causing an error when trying to lock with a lock time in the past
       stillVesting <- isLedgerTimeLT spec.endTime
       attemptMerge $ if stillVesting then defaultNumberToMerge else 1
 
