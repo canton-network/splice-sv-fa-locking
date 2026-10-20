@@ -9,10 +9,8 @@ module Splice.GovernanceLock (
   GovernanceLock_DsoExpireResult(..),
   GovernanceLock_DsoConvertProvisionalFeaturedAppLock(..),
   GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult(..),
-  GovernanceLock_DsoSubstitute(..),
   GovernanceLock_DsoSubstituteResult(..),
   GovernanceLock_DsoSplitForSubstitutionResult(..),
-  GovernanceLock_DsoTransfer(..),
   GovernanceLock_DsoTransferResult(..),
 
   -- * Lock specifications and state
@@ -35,7 +33,9 @@ module Splice.GovernanceLock (
   fetchAndMergeGovernanceLocks,
   governanceLock_unlockImpl,
   vestingLock_withdrawImpl,
+  governanceLock_dsoSubstituteImpl,
   governanceLock_dsoSplitForSubstitutionImpl,
+  governanceLock_dsoTransferImpl,
 
   -- * Lock metadata
   dataFromText,
@@ -200,31 +200,6 @@ template GovernanceLock
             pure GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
           kind -> abort $ "GovernanceLock_DsoConvertProvisionalFeaturedAppLock: cannot convert lock of kind " <> show kind
 
-    choice GovernanceLock_DsoSubstitute : GovernanceLock_DsoSubstituteResult
-      -- ^ Release `substitutedAmount` of the locked funds to the owner as part of an approved
-      -- substitution. Only the accept step of a `GovernanceLockSubstitution` calls this choice.
-      with
-        substitutedAmount : Decimal
-        reason : Text
-          -- ^ Memo of the request being handled, which the transfer legs report as their reason.
-        extraArgs : ExtraArgs
-      controller dso
-      do
-        governanceLock_dsoSubstituteImpl self this substitutedAmount reason extraArgs
-
-    choice GovernanceLock_DsoTransfer : GovernanceLock_DsoTransferResult
-      -- ^ Release `transferredAmount` of the locked funds as part of an approved transfer.
-      -- The accept step of a `GovernanceLockTransfer` calls this choice, and locks the unlocked
-      -- funds again for the receiver, as only that step has the receiver's authority.
-      with
-        transferredAmount : Decimal
-        reason : Text
-          -- ^ Memo of the request being handled, which the transfer legs report as their reason.
-        extraArgs : ExtraArgs
-      controller dso
-      do
-        governanceLock_dsoTransferImpl self this transferredAmount reason extraArgs
-
     interface instance V1.TransferInstruction for GovernanceLock where
       view = V1.TransferInstructionView with
           originalInstructionCid = toInterfaceContractId . (fromAnyContractId @GovernanceLock) <$> originalLockCid
@@ -297,7 +272,6 @@ data GovernanceLock_DsoSubstituteResult = GovernanceLock_DsoSubstituteResult wit
       -- ^ The lock that keeps the funds that were not substituted, if any.
     unlockedAmulet : ContractId Amulet
       -- ^ The substituted funds, returned to the owner.
-  deriving (Serializable)
 
 data GovernanceLock_DsoSplitForSubstitutionResult = GovernanceLock_DsoSplitForSubstitutionResult with
     remainingLockCid : Optional (ContractId GovernanceLock)
@@ -311,7 +285,6 @@ data GovernanceLock_DsoTransferResult
       -- ^ The lock that keeps the funds that were not transferred, if any.
     unlockedAmulet : ContractId Amulet
       -- ^ The transferred funds, returned to the owner of the source lock.
-  deriving (Serializable)
 
 data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
   lockCid : ContractId GovernanceLock
@@ -521,19 +494,22 @@ governanceLock_lockForGovernance_impl dso amount inputs fullSpecification extraA
     reason
   pure (lock, lockCid, changeHolding)
 
-governanceLock_dsoSubstituteImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Text -> ExtraArgs -> Update GovernanceLock_DsoSubstituteResult
-governanceLock_dsoSubstituteImpl self this@GovernanceLock{..} substitutedAmount reason extraArgs = do
+-- | Release `substitutedAmount` of the locked funds to the owner as part of an approved
+-- substitution. Only the accept step of a `GovernanceLockSubstitution` calls this.
+governanceLock_dsoSubstituteImpl : Party -> Party -> ContractId GovernanceLock -> Decimal -> Text -> ExtraArgs -> Update GovernanceLock_DsoSubstituteResult
+governanceLock_dsoSubstituteImpl dso owner lockCid substitutedAmount reason extraArgs = do
   let forOwner = ForOwner with dso; owner
+  lock@GovernanceLock{..} <- fetchAndArchive forOwner lockCid
   case substitutedAmount `compare` amount of
     LT -> do
       (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
       (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet substitutedAmount context reason
       requireMinimumLock state remainingAmount
       requireMinimumLock state substitutedAmount
-      remainingLockCid <- create this with
+      remainingLockCid <- create lock with
         amount = remainingAmount
         lockedAmulet = newLockedAmulet
-        originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
+        originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid
       pure GovernanceLock_DsoSubstituteResult with
         remainingLockCid = Some remainingLockCid
         unlockedAmulet
@@ -547,7 +523,7 @@ governanceLock_dsoSubstituteImpl self this@GovernanceLock{..} substitutedAmount 
 
 -- | Split `splitAmount` of the locked funds off into a `LockedAmulet` for a new lock with
 -- `newSpecification`, as part of an approved substitution proposed by the owner of this lock.
--- Only the accept step of a `GovernanceLockSubstitution` calls this choice.
+-- Only the accept step of a `GovernanceLockSubstitution` calls this.
 governanceLock_dsoSplitForSubstitutionImpl : Party -> Party -> ContractId GovernanceLock -> Decimal -> GovernanceLockSpecification -> Text -> ExtraArgs -> Update GovernanceLock_DsoSplitForSubstitutionResult
 governanceLock_dsoSplitForSubstitutionImpl dso owner lockCid splitAmount newSpecification reason extraArgs = do
   let forOwner = ForOwner with dso; owner
@@ -614,19 +590,23 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
           featuredAppRight = None
        , configState )
 
-governanceLock_dsoTransferImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Text -> ExtraArgs -> Update GovernanceLock_DsoTransferResult
-governanceLock_dsoTransferImpl self this@GovernanceLock{..} transferredAmount reason extraArgs = do
+-- | Release `transferredAmount` of the locked funds as part of an approved transfer.
+-- The accept step of a `GovernanceLockTransfer` calls this, and locks the unlocked
+-- funds again for the receiver, as only that step has the receiver's authority.
+governanceLock_dsoTransferImpl : Party -> Party -> ContractId GovernanceLock -> Decimal -> Text -> ExtraArgs -> Update GovernanceLock_DsoTransferResult
+governanceLock_dsoTransferImpl dso owner lockCid transferredAmount reason extraArgs = do
   let forOwner = ForOwner with dso; owner
+  lock@GovernanceLock{..} <- fetchAndArchive forOwner lockCid
   case transferredAmount `compare` amount of
     LT -> do
       (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
       (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet transferredAmount context reason
       requireMinimumLock state remainingAmount
       requireMinimumLock state transferredAmount
-      remainingLockCid <- create this with
+      remainingLockCid <- create lock with
         amount = remainingAmount
         lockedAmulet = newLockedAmulet
-        originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
+        originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid
       pure GovernanceLock_DsoTransferResult with
         remainingLockCid = Some remainingLockCid
         unlockedAmulet

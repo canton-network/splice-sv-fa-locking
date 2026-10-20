@@ -128,10 +128,7 @@ governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors
   FetchAndMergeLocksResult{lockCid} <- fetchAndMergeGovernanceLocks target context state reason
   (newLockedAmulet, remainingLockCid, unlockedAmulet) <- case lockedAmulet of
     Some proposalLockedAmulet -> do
-      substituteResult <- exercise lockCid GovernanceLock_DsoSubstitute with
-        substitutedAmount = amount
-        reason
-        extraArgs
+      substituteResult <- governanceLock_dsoSubstituteImpl target.dso target.owner lockCid amount reason extraArgs
       pure (proposalLockedAmulet, substituteResult.remainingLockCid, Some substituteResult.unlockedAmulet)
     None -> do
       -- The proposer is the owner of the target lock, so the target lock funds the new lock
