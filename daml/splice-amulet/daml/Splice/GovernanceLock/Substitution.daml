@@ -250,7 +250,12 @@ createSubstitution CreateSubstitutionArgs {..} = do
         context
         reason
       pure (Some lockedAmulet, changeHolding)
-  let expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
+  let maxExpiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
+  expiresAt <- case target.specification of
+    GLS_FullLock _ -> pure maxExpiresAt
+    GLS_VestingLock VestingLockSpecification{endTime} -> do
+      assertWithinDeadline "target lock endTime" endTime
+      pure $ min maxExpiresAt endTime
   let substitution = GovernanceLockSubstitution with
         target
         owner
