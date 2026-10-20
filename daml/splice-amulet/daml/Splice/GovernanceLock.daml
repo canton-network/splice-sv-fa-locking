@@ -198,7 +198,7 @@ template GovernanceLock
                 kind = GLK_FeaturedApp with provider
               originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
             pure GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
-          kind -> error $ "GovernanceLock_DsoConvertProvisionalFeaturedAppLock: cannot convert lock of kind " <> show kind
+          kind -> abort $ "GovernanceLock_DsoConvertProvisionalFeaturedAppLock: cannot convert lock of kind " <> show kind
 
     choice GovernanceLock_DsoSubstitute : GovernanceLock_DsoSubstituteResult
       -- ^ Release `substitutedAmount` of the locked funds to the owner as part of an approved
