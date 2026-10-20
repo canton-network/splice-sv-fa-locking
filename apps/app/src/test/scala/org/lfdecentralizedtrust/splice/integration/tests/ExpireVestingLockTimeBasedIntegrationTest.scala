@@ -63,11 +63,8 @@ class ExpireVestingLockTimeBasedIntegrationTest
   private val vestingDuration = Duration.ofMinutes(5)
   private val totalAdvance = Duration.ofMinutes(7)
 
-  // Same as `defaultGovernanceLockMinimumLockAmount` in Daml.
-  private val governanceLockMinimumLockAmount = BigDecimal(10000.0)
-
   private val lockKind = SuperValidatorLock
-  private val lockAmount = governanceLockMinimumLockAmount
+  private val lockAmount = minimumLockAmount
   private val tapAmount = numLocks * lockAmount
 
   override def environmentDefinition: SpliceEnvironmentDefinition =
@@ -120,22 +117,15 @@ class ExpireVestingLockTimeBasedIntegrationTest
     actAndCheck(
       s"Lock and unlock $numLocks times, vesting until $endTime", {
         (1 to numLocks).map { _ =>
-          val governanceLock = tsv1Operations.createGovernanceLock(
+          tsv1Operations.createAndUnlockGovernanceLock(
             participant,
             owner,
             lockKind,
             lockSubject = sv1Name,
-            amount = lockAmount,
-          )
-          tsv1Operations.unlockGovernanceLock(
-            participant,
-            owner,
-            lockKind,
-            sv1Name,
+            lockAmount = lockAmount,
             unlockAmount = lockAmount,
             vestingStartTime = vestingStartTime,
-            isValid =
-              _.originalInstructionCid.toScala.exists(_.contractId == governanceLock.contractId),
+            isValid = cid => _.originalInstructionCid.toScala.exists(_.contractId == cid.contractId),
           )
         }
       },
