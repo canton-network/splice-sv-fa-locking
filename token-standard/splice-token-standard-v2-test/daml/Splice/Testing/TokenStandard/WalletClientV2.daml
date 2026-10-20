@@ -35,8 +35,11 @@ module Splice.Testing.TokenStandard.WalletClientV2
     transferV2,
     tryTransferV2Result,
     acceptTransferInstructionV2,
+    tryAcceptTransferInstructionV2Result,
     rejectTransferInstructionV2,
+    tryRejectTransferInstructionV2Result,
     withdrawTransferInstructionV2,
+    tryWithdrawTransferInstructionV2Result,
 
     transferV1,
     tryTransferV1Result,
@@ -332,15 +335,30 @@ acceptTransferInstructionV2 registries actor instrCid = do
   batch <- mkTransferInstruction_AcceptV2 registries actor instrCid
   extractPendingTransferInstructionV2 <$> executeSingletonTSABatch registries actor batch
 
+tryAcceptTransferInstructionV2Result : MultiRegistry.MultiRegistry -> Party -> ContractId V2.TransferInstruction -> Script (Either SubmitError V2.TransferInstructionResult)
+tryAcceptTransferInstructionV2Result registries actor instrCid = do
+  batch <- mkTransferInstruction_AcceptV2 registries actor instrCid
+  fmap extractTransferInstructionResultV2 <$> tryExecuteSingletonTSABatch registries actor batch
+
 rejectTransferInstructionV2 : MultiRegistry.MultiRegistry -> Party -> ContractId V2.TransferInstruction -> Script (Optional (ContractId V2.TransferInstruction))
 rejectTransferInstructionV2 registries actor instrCid = do
   batch <- mkTransferInstruction_RejectV2 registries actor instrCid
   extractPendingTransferInstructionV2 <$> executeSingletonTSABatch registries actor batch
 
+tryRejectTransferInstructionV2Result : MultiRegistry.MultiRegistry -> Party -> ContractId V2.TransferInstruction -> Script (Either SubmitError V2.TransferInstructionResult)
+tryRejectTransferInstructionV2Result registries actor instrCid = do
+  batch <- mkTransferInstruction_RejectV2 registries actor instrCid
+  fmap extractTransferInstructionResultV2 <$> tryExecuteSingletonTSABatch registries actor batch
+
 withdrawTransferInstructionV2 : MultiRegistry.MultiRegistry -> Party -> ContractId V2.TransferInstruction -> Script (Optional (ContractId V2.TransferInstruction))
 withdrawTransferInstructionV2 registries actor instrCid = do
   batch <- mkTransferInstruction_WithdrawV2 registries actor instrCid
   extractPendingTransferInstructionV2 <$> executeSingletonTSABatch registries actor batch
+
+tryWithdrawTransferInstructionV2Result : MultiRegistry.MultiRegistry -> Party -> ContractId V2.TransferInstruction -> Script (Either SubmitError V2.TransferInstructionResult)
+tryWithdrawTransferInstructionV2Result registries actor instrCid = do
+  batch <- mkTransferInstruction_WithdrawV2 registries actor instrCid
+  fmap extractTransferInstructionResultV2 <$> tryExecuteSingletonTSABatch registries actor batch
 
 acceptTransferInstructionV1 : MultiRegistry.MultiRegistry -> Party -> ContractId V1.TransferInstruction -> Script (Optional (ContractId V1.TransferInstruction))
 acceptTransferInstructionV1 registries actor instrCid = do
