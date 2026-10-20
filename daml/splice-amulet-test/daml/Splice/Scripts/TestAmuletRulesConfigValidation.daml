@@ -46,23 +46,15 @@ testAmuletRulesSvUnderlockConfigValidation = do
 
   [(amuletRulesCid, amuletRules)] <- query @AmuletRules app.dso
   let currentConfig = amuletRules.configSchedule.initialValue
-      activeLockConfig = GovernanceLockConfig with
-        minimumLockAmount = None
-        superValidatorLockVestingDuration = None
-        featuredAppLockVestingDuration = None
-        featuredAppLockThreshold = None
-        featuredAppUnderlockGracePeriod = None
-        superValidatorUnderlockEnforcementActivatesAt = Some (time (date 2027 Jan 1) 0 0 0)
-        superValidatorUnderlockTemporaryGracePeriod = Some (days 7)
-        superValidatorUnderlockPermanentGracePeriod = Some (days 30)
+      activeLockConfig = (svUnderlockEnforcementLockConfig (time (date 2027 Jan 1) 0 0 0)) with
+        superValidatorUnderlockEnforcementTerminatesAfter = Some (days (365 * 5 + 30))
         superValidatorWeightSchedule = Some defaultSvWeightSchedule
 
-  -- An invalid SV underlock config is rejected: activation without grace periods
+  -- An invalid SV underlock config is rejected: activation without the permanent grace period
   submitMustFail (actAs app.dso <> readAs app.dso) $
     exerciseCmd amuletRulesCid AmuletRules_SetConfig with
       newConfig = currentConfig with
         governanceLockConfig = Some activeLockConfig with
-          superValidatorUnderlockTemporaryGracePeriod = None
           superValidatorUnderlockPermanentGracePeriod = None
       baseConfig = currentConfig
 

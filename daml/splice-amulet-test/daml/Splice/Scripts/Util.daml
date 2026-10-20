@@ -25,7 +25,7 @@ import Splice.TokenStandard.Utils qualified as TSU
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
 import Splice.AmuletRules
-import Splice.AmuletConfig (AmuletConfig(..))
+import Splice.AmuletConfig (AmuletConfig(..), GovernanceLockConfig(..))
 import qualified Splice.AmuletConfig as Unit
 import Splice.ExternalPartyConfigState
 import Splice.Expiry
@@ -121,6 +121,26 @@ genericSetupAppWithConfig config dsoPrefix = do
 -- Replacing AmuletConfig
 --------------------------
 
+
+-- | A `GovernanceLockConfig` with nothing set, so every accessor returns its default.
+emptyGovernanceLockConfig : GovernanceLockConfig
+emptyGovernanceLockConfig = GovernanceLockConfig with
+  minimumLockAmount = None
+  superValidatorLockVestingDuration = None
+  featuredAppLockVestingDuration = None
+  featuredAppLockThreshold = None
+  featuredAppUnderlockGracePeriod = None
+  superValidatorUnderlockEnforcementActivatesAt = None
+  superValidatorUnderlockEnforcementTerminatesAfter = None
+  superValidatorUnderlockPermanentGracePeriod = None
+  superValidatorWeightSchedule = None
+
+-- | SV underlock enforcement activating at the given time, with the 30-day permanent grace period set explicitly
+-- (required once activation is set).
+svUnderlockEnforcementLockConfig : Time -> GovernanceLockConfig
+svUnderlockEnforcementLockConfig activatesAt = emptyGovernanceLockConfig with
+  superValidatorUnderlockEnforcementActivatesAt = Some activatesAt
+  superValidatorUnderlockPermanentGracePeriod = Some (days 30)
 
 replaceDevelopmentFundConfig : AmuletApp -> AmuletConfig Unit.USD -> Optional Party -> Optional Decimal -> Script ()
 replaceDevelopmentFundConfig app baseConfig optDevelopmentFundManager optDevelopmentFundPercentage = do

@@ -10,7 +10,6 @@ import Splice.DSO.DecentralizedSynchronizer
 import Splice.Util
 
 import DA.List (last)
-import DA.Time
 
 
 -- Checked fetches for per-sv state
@@ -60,7 +59,7 @@ data RewardAdjustmentState = RewardAdjustmentState
 data UnderlockEvent = UnderlockEvent
   with
     startTime : Time
-      -- ^ Start time of the underlock event; becomes effective after 7 days, and permanent after 30.
+      -- ^ Start time of the underlock event; becomes effective immediately, and permanent after 30.
     newFactor : Decimal
       -- ^ the new weight factor
   deriving (Eq, Show, Serializable)
@@ -138,10 +137,12 @@ template SvStatusReport with
     signatory dso
 
 
-getAdjustedRewardWeight : RelTime -> Optional RewardAdjustmentState -> Time -> Int -> Int
-getAdjustedRewardWeight _ None _ weight = weight
-getAdjustedRewardWeight temporaryGracePeriod (Some state) now weight
-  = floor $ (effectiveWeightFactor temporaryGracePeriod now state) * intToDecimal weight
+getAdjustedRewardWeight : Optional RewardAdjustmentState -> Int -> Int
+getAdjustedRewardWeight None weight = weight
+getAdjustedRewardWeight (Some state) weight = floor $ (*) (intToDecimal weight)
+  $ case state.recoverableUnderlocks of
+      underlockEvent :: _ -> underlockEvent.newFactor
+      [] -> state.permanentWeightFactor
 
 defaultRewardAdjustmentState = RewardAdjustmentState with
   permanentWeightFactor = 1.0
@@ -170,13 +171,6 @@ applyWarrantedFactor now warranted s
       in case rest of
         underlockEvent :: _ | underlockEvent.newFactor == warranted -> rest
         _ -> (UnderlockEvent with startTime = start; newFactor = warranted) :: rest
-
--- | Factor used for coupon creation, determined by the lowest factor whose temporary grace period has passed.
-effectiveWeightFactor : RelTime -> Time -> RewardAdjustmentState -> Decimal
-effectiveWeightFactor temporaryGracePeriod now s =
-  case dropWhile (\underlockEvent -> underlockEvent.startTime > now `addRelTime` negate temporaryGracePeriod) s.recoverableUnderlocks of
-    underlockEvent :: _ -> underlockEvent.newFactor
-    [] -> s.permanentWeightFactor
 
 -- instances
 ------------

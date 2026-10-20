@@ -240,9 +240,9 @@ data GovernanceLockConfig = GovernanceLockConfig with
     superValidatorUnderlockEnforcementActivatesAt : Optional Time
       -- ^ Time from which SV reward mints are tracked on ledger and SV underlocks are enforced.
       --   Default: None
-    superValidatorUnderlockTemporaryGracePeriod : Optional RelTime
-      -- ^ How long an underlocked sv has to cure before it temporarily drops a reward tier.
-      --   Default: 7 days.
+    superValidatorUnderlockEnforcementTerminatesAfter : Optional RelTime
+      -- ^ Point on the issuance curve from which SV under locks are no longer enforced.
+      --   Default: 5 years and 30 days.
     superValidatorUnderlockPermanentGracePeriod : Optional RelTime
       -- ^ How long an underlocked sv has to cure before it permanently drops a reward tier.
       --   Default: 30 days.
@@ -259,30 +259,21 @@ validGovernanceLockConfig GovernanceLockConfig
     , featuredAppLockVestingDuration
     , featuredAppLockThreshold
     , featuredAppUnderlockGracePeriod
+    , superValidatorUnderlockEnforcementTerminatesAfter
     , superValidatorUnderlockEnforcementActivatesAt
-    , superValidatorUnderlockTemporaryGracePeriod
     , superValidatorUnderlockPermanentGracePeriod
     , superValidatorWeightSchedule
     }
   =
     optional True (> 0.0) minimumLockAmount
-    && optional True
-        (\_ -> isSome superValidatorUnderlockTemporaryGracePeriod
-           && isSome superValidatorUnderlockPermanentGracePeriod
-           && validGracePeriodTimes superValidatorUnderlockTemporaryGracePeriod superValidatorUnderlockPermanentGracePeriod
-        )
-        superValidatorUnderlockEnforcementActivatesAt
+    && optional True (\_ -> isSome superValidatorUnderlockPermanentGracePeriod) superValidatorUnderlockEnforcementActivatesAt
     && optional True validSuperValidatorWeightSchedule superValidatorWeightSchedule
-    && optional True (> days 0) superValidatorUnderlockTemporaryGracePeriod
     && optional True (> days 0) superValidatorUnderlockPermanentGracePeriod
     && optional True (> days 0) superValidatorLockVestingDuration
     && optional True (> days 0) featuredAppLockVestingDuration
     && optional True (> days 0) featuredAppUnderlockGracePeriod
     && optional True (> 0.0) featuredAppLockThreshold
-    where
-      -- Assume first is temp
-      validGracePeriodTimes (Some tempPeriod) (Some permanentPeriod) = tempPeriod <= permanentPeriod
-      validGracePeriodTimes _ _ = False
+    && optional True (> days 0) superValidatorUnderlockEnforcementTerminatesAfter
 
 
 validSuperValidatorWeightSchedule : Schedule RelTime [SvLockingTier] -> Bool
@@ -310,8 +301,8 @@ governanceLockSuperValidatorLockVestingDuration = getGovernanceLockConfigValue (
 governanceLockFeaturedAppLockVestingDuration : Optional GovernanceLockConfig -> RelTime
 governanceLockFeaturedAppLockVestingDuration = getGovernanceLockConfigValue (days 60) (.featuredAppLockVestingDuration)
 
-governanceLockSuperValidatorUnderlockTemporaryGracePeriod : Optional GovernanceLockConfig -> RelTime
-governanceLockSuperValidatorUnderlockTemporaryGracePeriod = getGovernanceLockConfigValue (days 7) (.superValidatorUnderlockTemporaryGracePeriod)
+governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter : Optional GovernanceLockConfig -> RelTime
+governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter = getGovernanceLockConfigValue (days (365 * 5 + 30)) (.superValidatorUnderlockEnforcementTerminatesAfter)
 
 governanceLockSuperValidatorUnderlockPermanentGracePeriod : Optional GovernanceLockConfig -> RelTime
 governanceLockSuperValidatorUnderlockPermanentGracePeriod = getGovernanceLockConfigValue (days 30) (.superValidatorUnderlockPermanentGracePeriod)
@@ -408,8 +399,8 @@ instance Patchable GovernanceLockConfig where
     featuredAppLockVestingDuration = patch new.featuredAppLockVestingDuration base.featuredAppLockVestingDuration current.featuredAppLockVestingDuration
     featuredAppLockThreshold = patch new.featuredAppLockThreshold base.featuredAppLockThreshold current.featuredAppLockThreshold
     featuredAppUnderlockGracePeriod = patch new.featuredAppUnderlockGracePeriod base.featuredAppUnderlockGracePeriod current.featuredAppUnderlockGracePeriod
+    superValidatorUnderlockEnforcementTerminatesAfter = patch new.superValidatorUnderlockEnforcementTerminatesAfter base.superValidatorUnderlockEnforcementTerminatesAfter current.superValidatorUnderlockEnforcementTerminatesAfter
     superValidatorUnderlockEnforcementActivatesAt = patch new.superValidatorUnderlockEnforcementActivatesAt base.superValidatorUnderlockEnforcementActivatesAt current.superValidatorUnderlockEnforcementActivatesAt
-    superValidatorUnderlockTemporaryGracePeriod = patch new.superValidatorUnderlockTemporaryGracePeriod base.superValidatorUnderlockTemporaryGracePeriod current.superValidatorUnderlockTemporaryGracePeriod
     superValidatorUnderlockPermanentGracePeriod = patch new.superValidatorUnderlockPermanentGracePeriod base.superValidatorUnderlockPermanentGracePeriod current.superValidatorUnderlockPermanentGracePeriod
     superValidatorWeightSchedule = patch new.superValidatorWeightSchedule base.superValidatorWeightSchedule current.superValidatorWeightSchedule
 

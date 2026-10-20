@@ -19,7 +19,7 @@ import qualified DA.TextMap as TextMap
 import DA.Time
 
 import Splice.Amulet
-import Splice.AmuletConfig (governanceLockSuperValidatorUnderlockTemporaryGracePeriod, governanceLockSuperValidatorUnderlockPermanentGracePeriod, AmuletConfig(..), USD)
+import Splice.AmuletConfig (governanceLockSuperValidatorUnderlockPermanentGracePeriod, governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter, AmuletConfig(..), USD)
 import Splice.Amulet.RewardAccountingV2 qualified as RewardAccountingV2
 import Splice.AmuletRules
 import Splice.ExternalPartyAmuletRules
@@ -1658,9 +1658,11 @@ template DsoRules with
         now <- getTime
         amuletRules <- fetchReferenceData forDso amuletRulesCid
         let config = getValueAsOf now amuletRules.configSchedule
-            temporaryGracePeriod = governanceLockSuperValidatorUnderlockTemporaryGracePeriod config.governanceLockConfig
         openRound <- fetchReferenceData forDso openRoundCid
         require "OpenRound is open" (openRound.opensAt <= now)
+
+        active <- svUnderlockEnforcementActive config
+        let enforced = active && not (svUnderlockEnforcementTerminated config openRound)
 
         forA_ (TextMap.toList svRewardStates) $ \(svName, (rightOwnerCid, rewardStateCid)) -> do
           let forSv = ForSv with dso, svName
@@ -1668,12 +1670,11 @@ template DsoRules with
           svRightOwner <- fetchChecked forSv rightOwnerCid
           require "Operator matches" (svRightOwner.info.rewardNodeOperatorName == operatorName)
 
-          active <- svUnderlockEnforcementActive config
           let svInfo = svRightOwner.info
-          let state = rewardState.state
+              state = rewardState.state
               beneficiaries = svInfo.beneficiaries
-              effectiveRewardWeight = if active
-                then getAdjustedRewardWeight temporaryGracePeriod state.rewardAdjustmentState now svInfo.rewardWeight
+              effectiveRewardWeight = if enforced
+                then getAdjustedRewardWeight state.rewardAdjustmentState svInfo.rewardWeight
                 else svInfo.rewardWeight
           let (configuredBeneficiaryCouponWeights, remainingWeight) =
                 foldl
@@ -2323,10 +2324,12 @@ template DsoRules with
       do
         amuletRules <- fetchReferenceData (ForDso dso) amuletRulesCid
         now <- getTime
+
         let config = getValueAsOf now amuletRules.configSchedule
         svUnderlockEnforcementActive config >>= require "SV underlock enforcement is active"
         require "qualifyingFactor should be between 0.0 - 1.0 inclusive"
           $ 0.0 <= qualifyingFactor && qualifyingFactor <= 1.0
+
         instructionCid <- create SvUnderlockInstruction with
           dso
           svName
@@ -2340,16 +2343,23 @@ template DsoRules with
         instructionCid : ContractId SvUnderlockInstruction
         svRewardStateCid : ContractId SvRewardState
         sv : Party
+        openMiningRoundCid : ContractId OpenMiningRound
       controller sv
       do
+        let forDso = (ForDso dso)
         requireOnLedgerSvRightOwners this
         void $ getAndValidateSvNodeOperatorParty this (Some sv)
-        amuletRules <- fetchReferenceData (ForDso dso) amuletRulesCid
+
+        amuletRules <- fetchReferenceData forDso amuletRulesCid
         now <- getTime
         let config = getValueAsOf now amuletRules.configSchedule
+        openRound <- fetchReferenceData forDso openMiningRoundCid
+
+        require "SV underlock enforcement has not terminated"
+          $ not $ svUnderlockEnforcementTerminated config openRound
         svUnderlockEnforcementActive config >>= require "SV underlock enforcement is active"
 
-        instruction <- fetchAndArchive (ForDso dso) instructionCid
+        instruction <- fetchAndArchive forDso instructionCid
         svRewardState <- fetchChecked (ForSv with dso; svName = instruction.svName) svRewardStateCid
         let permanentGracePeriod = governanceLockSuperValidatorUnderlockPermanentGracePeriod config.governanceLockConfig
             old = fromOptional defaultRewardAdjustmentState svRewardState.state.rewardAdjustmentState
@@ -2762,3 +2772,7 @@ operatorParties DsoRules{svs} = Map.keys svs
 svUnderlockEnforcementActive : AmuletConfig USD -> Update Bool
 svUnderlockEnforcementActive config = optional (pure False) isLedgerTimeGE
   $ config.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)
+
+svUnderlockEnforcementTerminated : AmuletConfig USD -> OpenMiningRound -> Bool
+svUnderlockEnforcementTerminated config openRound = openRound.issuingFor
+  >= governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter config.governanceLockConfig

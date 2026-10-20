@@ -9,7 +9,6 @@ import DA.Time
 import Daml.Script
 
 import Splice.Amulet
-import Splice.AmuletConfig
 import Splice.AmuletRules
 import Splice.Round
 import Splice.Types
@@ -27,21 +26,14 @@ createSvRewardCoupon app beneficiary svRightOwnerName = submit app.dso $ createC
   round = Round 0
   svRightOwnerName
 
+-- | Set SV underlock enforcement to activate at the given time.
+activateSvUnderlockEnforcementAt : AmuletApp -> Time -> Script ()
+activateSvUnderlockEnforcementAt app activatesAt = updateAmuletConfig app $ \config -> config with
+  governanceLockConfig = Some (svUnderlockEnforcementLockConfig activatesAt)
+
 -- | Activate SV underlock enforcement at the current ledger time.
 activateSvUnderlockEnforcement : AmuletApp -> Script ()
-activateSvUnderlockEnforcement app = do
-  now <- getTime
-  updateAmuletConfig app $ \config -> config with
-    governanceLockConfig = Some GovernanceLockConfig with
-      minimumLockAmount = None
-      superValidatorLockVestingDuration = None
-      featuredAppLockVestingDuration = None
-      featuredAppLockThreshold = None
-      featuredAppUnderlockGracePeriod = None
-      superValidatorUnderlockEnforcementActivatesAt = Some now
-      superValidatorUnderlockTemporaryGracePeriod = Some (days 7)
-      superValidatorUnderlockPermanentGracePeriod = Some (days 30)
-      superValidatorWeightSchedule = None
+activateSvUnderlockEnforcement app = getTime >>= activateSvUnderlockEnforcementAt app
 
 -- | Mint `couponCid` through `AmuletRules_Transfer`.
 mintViaTransfer : AmuletApp -> AmuletUser -> ContractId SvRewardCoupon -> Script ()
@@ -95,17 +87,7 @@ testNoSvRewardMintReceiptsBeforeActivationTime : Script ()
 testNoSvRewardMintReceiptsBeforeActivationTime = do
   DefaultAppWithUsers{..} <- setupDefaultAppWithUsers
   now <- getTime
-  updateAmuletConfig app $ \config -> config with
-    governanceLockConfig = Some GovernanceLockConfig with
-      minimumLockAmount = None
-      superValidatorLockVestingDuration = None
-      featuredAppLockVestingDuration = None
-      featuredAppLockThreshold = None
-      featuredAppUnderlockGracePeriod = None
-      superValidatorUnderlockEnforcementActivatesAt = Some (now `addRelTime` days 30)
-      superValidatorUnderlockTemporaryGracePeriod = Some (days 7)
-      superValidatorUnderlockPermanentGracePeriod = Some (days 30)
-      superValidatorWeightSchedule = None
+  activateSvUnderlockEnforcementAt app (now `addRelTime` days 30)
   couponCid <- createSvRewardCoupon app bob (Some "sv1")
   runNextIssuance app
   runNextIssuance app

@@ -7,7 +7,7 @@ import DA.Action (void)
 import DA.Assert
 import DA.Date (Month(..), datetime)
 import DA.Foldable (forA_)
-import DA.List (head, sort)
+import DA.List (head, last, sort)
 import qualified DA.TextMap as TextMap
 import DA.Time
 import Daml.Script
@@ -20,6 +20,7 @@ import Splice.DSO.Instruction
 import Splice.DSO.SvRightOwner
 import Splice.DSO.SvState
 import Splice.DsoRules
+import Splice.Round
 
 import Splice.Scripts.DsoTestUtils
 import Splice.Scripts.Util
@@ -48,35 +49,48 @@ createUnderlockInstruction app svName qualifyingFactor = do
   [(instructionCid, _)] <- pure $ filter (\(cid, _) -> cid `notElem` before) after
   pure instructionCid
 
--- | Apply an instruction to its right owner's current `SvRewardState`.
-executeUnderlockInstruction : AmuletApp -> Party -> ContractId SvUnderlockInstruction -> Script (Optional (ContractId SvRewardState))
-executeUnderlockInstruction app sv instructionCid = do
-  Some instruction <- queryContractId app.dso instructionCid
-  (svRewardStateCid, _) <- rewardStateOf app instruction.svName
-  [(amuletRulesCid, _)] <- query @AmuletRules app.dso
+-- | The newest open round, which the SV automation would pass when applying an instruction.
+newestOpenRoundCid : AmuletApp -> Script (ContractId OpenMiningRound)
+newestOpenRoundCid app = do
+  rounds <- getActiveOpenRoundsSorted app.dso
+  pure $ fst (last rounds)
 
-  result <- svSubmits app sv $ \dsoRulesCid ->
-    exerciseCmd dsoRulesCid DsoRules_ExecuteSvUnderlockInstruction with
-      amuletRulesCid
-      instructionCid
-      svRewardStateCid
-      sv
-
-  pure result.svRewardStateCid
-
-executeUnderlockInstructionMustFail : AmuletApp -> Party -> ContractId SvUnderlockInstruction -> Script ()
-executeUnderlockInstructionMustFail app sv instructionCid = do
+-- | The command applying an instruction to its right owner's current `SvRewardState`, checked against the given round.
+executeUnderlockInstructionCmd : AmuletApp -> Party -> ContractId OpenMiningRound -> ContractId SvUnderlockInstruction
+  -> Script (Commands DsoRules_ExecuteSvUnderlockInstructionResult)
+executeUnderlockInstructionCmd app sv openMiningRoundCid instructionCid = do
   Some instruction <- queryContractId app.dso instructionCid
   (svRewardStateCid, _) <- rewardStateOf app instruction.svName
   [(amuletRulesCid, _)] <- query @AmuletRules app.dso
   [(dsoRulesCid, _)] <- query @DsoRules app.dso
+  pure $ exerciseCmd dsoRulesCid DsoRules_ExecuteSvUnderlockInstruction with
+    amuletRulesCid
+    instructionCid
+    svRewardStateCid
+    sv
+    openMiningRoundCid
 
-  submitMustFail (actAs sv <> readAs app.dso) $
-    exerciseCmd dsoRulesCid DsoRules_ExecuteSvUnderlockInstruction with
-      amuletRulesCid
-      instructionCid
-      svRewardStateCid
-      sv
+executeUnderlockInstructionInRound : AmuletApp -> Party -> ContractId OpenMiningRound -> ContractId SvUnderlockInstruction
+  -> Script (Optional (ContractId SvRewardState))
+executeUnderlockInstructionInRound app sv openMiningRoundCid instructionCid = do
+  cmd <- executeUnderlockInstructionCmd app sv openMiningRoundCid instructionCid
+  (.svRewardStateCid) <$> submit (actAs sv <> readAs app.dso) cmd
+
+executeUnderlockInstructionInRoundMustFail : AmuletApp -> Party -> ContractId OpenMiningRound -> ContractId SvUnderlockInstruction -> Script ()
+executeUnderlockInstructionInRoundMustFail app sv openMiningRoundCid instructionCid = do
+  cmd <- executeUnderlockInstructionCmd app sv openMiningRoundCid instructionCid
+  submitMustFail (actAs sv <> readAs app.dso) cmd
+
+-- | Apply an instruction using the newest open round.
+executeUnderlockInstruction : AmuletApp -> Party -> ContractId SvUnderlockInstruction -> Script (Optional (ContractId SvRewardState))
+executeUnderlockInstruction app sv instructionCid = do
+  openMiningRoundCid <- newestOpenRoundCid app
+  executeUnderlockInstructionInRound app sv openMiningRoundCid instructionCid
+
+executeUnderlockInstructionMustFail : AmuletApp -> Party -> ContractId SvUnderlockInstruction -> Script ()
+executeUnderlockInstructionMustFail app sv instructionCid = do
+  openMiningRoundCid <- newestOpenRoundCid app
+  executeUnderlockInstructionInRoundMustFail app sv openMiningRoundCid instructionCid
 
 -- | Confirm, then apply. The common case.
 underlock : AmuletApp -> Party -> Text -> Decimal -> Script ()
@@ -91,6 +105,14 @@ rewardStateOf app svName = do
 
 adjustmentStateOf : AmuletApp -> Text -> Script (Optional RewardAdjustmentState)
 adjustmentStateOf app svName = (.state.rewardAdjustmentState) . snd <$> rewardStateOf app svName
+
+-- | Overwrite `svName`'s recorded adjustment state directly as the DSO, to set up a state without going through instructions.
+setAdjustmentState : AmuletApp -> Text -> Optional RewardAdjustmentState -> Script ()
+setAdjustmentState app svName rewardAdjustmentState = do
+  (stateCid, rewardState) <- rewardStateOf app svName
+  submit app.dso $ archiveCmd stateCid
+  void $ submit app.dso $ createCmd rewardState with
+    state = rewardState.state with rewardAdjustmentState
 
 -- | Expected state after applying instructions: no permanent change unless given, `lastAdjustedAt` set.
 expectedState : Decimal -> [(Time, Decimal)] -> Time -> Optional RewardAdjustmentState
@@ -151,37 +173,35 @@ testSvUnderlockInstructionLifecycle = do
   [] <- query @SvUnderlockInstruction app.dso
   pure ()
 
--- | CIP example: Temporary loss and recovery, as seen in the issued coupons.
+-- | CIP example: temporary loss and recovery, as seen in the issued coupons. There is no temporary grace period:
+-- the reduced weight applies to the next coupon.
 testSvUnderlockTemporaryLossAndRecovery : Script ()
 testSvUnderlockTemporaryLossAndRecovery = do
   (app, _, (sv1, _, _, _)) <- initMainNetWithSvUnderlockEnforcement
   underlock app sv1 "sv1" 0.6
 
-  -- Still within the temporary grace period: full weight
   passTime (hours 1)
-  collectCouponWeight app sv1 "sv1" >>= (=== sv1Weight)
-
-  -- After it: reduced weight
-  passTime (days 7)
   collectCouponWeight app sv1 "sv1" >>= (=== 60000)
 
   -- Recovery restores the full weight immediately
   underlock app sv1 "sv1" 1.0
   collectCouponWeight app sv1 "sv1" >>= (=== sv1Weight)
 
-  -- Now let's test non default temporary grace period
-  let config = svUnderlockEnforcementAmuletConfig (datetime 1970 Jan 1 0 0 0)
-      Some lockConfig = config.governanceLockConfig
-  (app, _, (sv1, _, _, _)) <- initDecentralizedSynchronizer False
-    (Some config with governanceLockConfig = Some lockConfig with superValidatorUnderlockTemporaryGracePeriod = Some (days 2))
-    True
+-- | The permanent grace period comes from the current `AmuletConfig`.
+testSvUnderlockNonDefaultPermanentGracePeriod : Script ()
+testSvUnderlockNonDefaultPermanentGracePeriod = do
+  (app, _, (sv1, _, _, _)) <- initMainNetWithSvUnderlockLockConfig
+    ((svUnderlockEnforcementLockConfig scriptStartTime) with superValidatorUnderlockPermanentGracePeriod = Some (days 2))
   underlock app sv1 "sv1" 0.6
 
-  passTime (hours 1)
-  collectCouponWeight app sv1 "sv1" >>= (=== sv1Weight)
-
-  -- 2 days, not the default 7
+  -- Re-observed after 2 days rather than the default 30: the underlock is now permanent
   passTime (days 2)
+  t <- getTime
+  underlock app sv1 "sv1" 0.6
+  adjustmentStateOf app "sv1" >>= (=== expectedState 0.6 [] t)
+
+  -- Recovery can't lift the weight above the permanent 60%
+  underlock app sv1 "sv1" 1.0
   collectCouponWeight app sv1 "sv1" >>= (=== 60000)
 
 -- | CIP example: Staggered 60% / 40% deadlines and a permanent factor surviving recovery.
@@ -210,7 +230,7 @@ testSvUnderlockStaggeredDeadlines = do
   collectCouponWeight app sv1 "sv1" >>= (=== 60000)
 
 -- | CIP example: At an anniversary the schedule drops a tier, so an SV that qualified before gets a new underlock
--- whose grace periods start at the anniversary.
+-- whose permanent grace period starts at the anniversary.
 testSvUnderlockAnniversary : Script ()
 testSvUnderlockAnniversary = do
   let activatesAt = datetime 1970 Jan 1 0 0 0
@@ -416,16 +436,11 @@ testSvUnderlockNotActiveBeforeActivation = do
 -- | Before activation coupons use the full weight, even if an underlock is recorded.
 testSvUnderlockCouponWeightBeforeActivation : Script ()
 testSvUnderlockCouponWeightBeforeActivation = do
-  (app, dso, (sv1, _, _, _)) <- initMainNetWithSvUnderlockEnforcementAt activatesInAMonth
-  (stateCid, rewardState) <- rewardStateOf app "sv1"
-  submit dso $ archiveCmd stateCid
-
-  void $ submit dso $ createCmd rewardState with
-    state = rewardState.state with
-      rewardAdjustmentState = Some RewardAdjustmentState with
-        permanentWeightFactor = 0.5
-        recoverableUnderlocks = []
-        lastAdjustedAt = None
+  (app, _, (sv1, _, _, _)) <- initMainNetWithSvUnderlockEnforcementAt activatesInAMonth
+  setAdjustmentState app "sv1" $ Some RewardAdjustmentState with
+    permanentWeightFactor = 0.5
+    recoverableUnderlocks = []
+    lastAdjustedAt = None
 
   passTime (hours 1)
   collectCouponWeight app sv1 "sv1" >>= (=== sv1Weight)
@@ -472,6 +487,43 @@ testOldSvRewardCouponChoiceRejectedWithOnLedgerRightOwners = do
     rewardStateCid
     beneficiaries = [(sv1, sv1Weight)]
 
+
+-- Termination of the SV lock-up requirement
+---------------------------------------------
+
+-- | Termination 10 minutes into the issuance curve. With the 10-minute test tick the initial rounds 0, 1 and 2
+-- issue for 0, 10 and 20 minutes, so round 0 is before termination and rounds 1 and 2 are at or after it.
+initMainNetTerminatingAfterRound0 : Script (AmuletApp, Party, (Party, Party, Party, Party))
+initMainNetTerminatingAfterRound0 = initMainNetWithSvUnderlockLockConfig
+  ((svUnderlockEnforcementLockConfig scriptStartTime) with superValidatorUnderlockEnforcementTerminatesAfter = Some (minutes 10))
+
+testSvUnderlockTermination : Script ()
+testSvUnderlockTermination = do
+  (app, _, (sv1, _, _, _)) <- initMainNetTerminatingAfterRound0
+  [(round0Cid, round0), (round1Cid, round1), _] <- getActiveOpenRoundsSorted app.dso
+  round0.issuingFor === minutes 0
+  round1.issuingFor === minutes 10
+
+  -- Before termination an underlock is applied and reduces the coupon weight (round 0)
+  first <- createUnderlockInstruction app "sv1" 0.6
+  Some _ <- executeUnderlockInstructionInRound app sv1 round0Cid first
+  passTime (hours 1)
+  collectCouponWeight app sv1 "sv1" >>= (=== 60000)
+
+  -- After termination no adjustment applies, temporary or permanent (round 1)
+  now <- getTime
+  setAdjustmentState app "sv1" $ Some RewardAdjustmentState with
+    permanentWeightFactor = 0.5
+    recoverableUnderlocks = [UnderlockEvent with startTime = now; newFactor = 0.4]
+    lastAdjustedAt = Some now
+  collectCouponWeight app sv1 "sv1" >>= (=== sv1Weight)
+
+  -- An instruction can't be applied with a round at or after termination, only with one before it
+  second <- createUnderlockInstruction app "sv1" 0.0
+  executeUnderlockInstructionInRoundMustFail app sv1 round1Cid second
+
+  Some _ <- executeUnderlockInstructionInRound app sv1 round0Cid second
+  pure ()
 
 -- Ultimate SV rights owner
 ---------------------------
