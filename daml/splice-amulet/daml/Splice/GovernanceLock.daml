@@ -343,6 +343,7 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
 
       (mergedAmount, inputHoldings) <- foldrA
         (\(lockCid, lock) (accAmount, accHoldings) -> do
+          -- Fetched in `attemptMerge` below via `lookupNByKey`
           potentiallyUnsafeArchive lockCid
           (amuletCid, (unlockedAmount, _)) <- unlockAmulet forOwner lock.lockedAmulet
           pure (accAmount + unlockedAmount, toInterfaceContractId amuletCid :: accHoldings))
