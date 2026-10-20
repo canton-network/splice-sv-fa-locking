@@ -775,16 +775,21 @@ vestingTargetMetaEntries vestingPeriod endTime =
   (lockStatusMetaKey, lockStateToText LS_Vesting) :: vestingLockMetaEntries vestingPeriod endTime
 
 isFullLock : GovernanceLock -> Bool
-isFullLock lock = foldGovernanceLockSpecification (const True) (const False) lock.specification
+isFullLock lock = case lock.specification of
+  GLS_FullLock _ -> True
+  GLS_VestingLock _ -> False
 
 isVestingLock : GovernanceLock -> Bool
-isVestingLock lock = foldGovernanceLockSpecification (const False) (const True) lock.specification
+isVestingLock lock = case lock.specification of
+  GLS_FullLock _ -> False
+  GLS_VestingLock _ -> True
 
 fullLockSpecification : GovernanceLockKind -> GovernanceLockSpecification
 fullLockSpecification kind = GLS_FullLock FullLockSpecification with kind
 
 lockTargetMetaEntries : GovernanceLockSpecification -> [(Text, Text)]
-lockTargetMetaEntries = foldGovernanceLockSpecification (const []) \v -> vestingTargetMetaEntries v.vestingPeriod v.endTime
+lockTargetMetaEntries (GLS_FullLock _) = []
+lockTargetMetaEntries (GLS_VestingLock v) = vestingTargetMetaEntries v.vestingPeriod v.endTime
 
 -- | The memo of a request to substitute a lock.
 substitutionMemo : GovernanceLockKey -> Text

@@ -22,7 +22,6 @@ module Splice.GovernanceLock (
   FullLockSpecification(..),
   VestingLockSpecification(..),
   GovernanceLockKey(..),
-  foldGovernanceLockSpecification,
   requireVestingLock,
   governanceLockKind,
   governanceLockObservers,
@@ -130,26 +129,25 @@ data GovernanceLockSpecification
   | GLS_VestingLock VestingLockSpecification
   deriving (Eq, Show, Serializable)
 
-foldGovernanceLockSpecification : (FullLockSpecification -> a) -> (VestingLockSpecification -> a) -> GovernanceLockSpecification -> a
-foldGovernanceLockSpecification f _ (GLS_FullLock s) = f s
-foldGovernanceLockSpecification _ f (GLS_VestingLock s) = f s
-
 validateGovernanceLockSpecification : GovernanceLockSpecification -> Bool
-validateGovernanceLockSpecification = foldGovernanceLockSpecification (const True) \v -> v.vestingPeriod >= aunit
+validateGovernanceLockSpecification (GLS_FullLock _) = True
+validateGovernanceLockSpecification (GLS_VestingLock v) = v.vestingPeriod >= aunit
 
 requireFullLock : CanAssert m => GovernanceLockSpecification -> m FullLockSpecification
-requireFullLock spec =
-  foldGovernanceLockSpecification pure (\_ -> assertFail $ "Expected FullLockSpecification but got: " <> show spec) spec
+requireFullLock (GLS_FullLock spec) = pure spec
+requireFullLock spec@(GLS_VestingLock _) = assertFail $ "Expected FullLockSpecification but got: " <> show spec
 
 requireVestingLock : CanAssert m => GovernanceLockSpecification -> m VestingLockSpecification
-requireVestingLock spec =
-  foldGovernanceLockSpecification (\_ -> assertFail $ "Expected VestingLockSpecification but got: " <> show spec) pure spec
+requireVestingLock spec@(GLS_FullLock _) = assertFail $ "Expected VestingLockSpecification but got: " <> show spec
+requireVestingLock (GLS_VestingLock spec) = pure spec
 
 governanceLockOptExpiresAt : GovernanceLockSpecification -> Optional Time
-governanceLockOptExpiresAt = foldGovernanceLockSpecification (const None) (Some . (.endTime))
+governanceLockOptExpiresAt (GLS_FullLock _) = None
+governanceLockOptExpiresAt (GLS_VestingLock v) = Some v.endTime
 
 governanceLockExpiresAt : GovernanceLockSpecification -> Time
-governanceLockExpiresAt = foldGovernanceLockSpecification (const maxBound) (.endTime)
+governanceLockExpiresAt (GLS_FullLock _) = maxBound
+governanceLockExpiresAt (GLS_VestingLock v) = v.endTime
 
 data GovernanceLockKey = GovernanceLockKey with
     dso : Party
@@ -254,8 +252,9 @@ template GovernanceLock
             inputHoldingCids = []
             meta = encodeGovernanceLockMetadata this
           status = V1.TransferPendingInternalWorkflow with
-            pendingActions = Map.singleton owner $
-              foldGovernanceLockSpecification (const "unlock to start vesting") (const "withdraw vested amounts") specification
+            pendingActions = Map.singleton owner $ case specification of
+              GLS_FullLock _ -> "unlock to start vesting"
+              GLS_VestingLock _ -> "withdraw vested amounts"
           meta = emptyMetadata
       transferInstruction_acceptImpl _ _ = assertFail "Transfers representing governance locks cannot be accepted"
       transferInstruction_rejectImpl _ _ = assertFail "Transfers representing governance locks cannot be rejected"
@@ -268,7 +267,9 @@ template GovernanceLock
         transfer = upcast (view @V1.TransferInstruction (toInterface this)).transfer
         expiresAt = governanceLockOptExpiresAt specification
         availableActions = Map.singleton
-          (V2.TIA_Custom (foldGovernanceLockSpecification (const "unlock to start vesting") (const "withdraw vested amounts") specification))
+          (V2.TIA_Custom $ case specification of
+            GLS_FullLock _ -> "unlock to start vesting"
+            GLS_VestingLock _ -> "withdraw vested amounts")
           [[owner]]
         meta = encodeGovernanceLockMetadata this
 
@@ -584,7 +585,8 @@ governanceLock_dsoSplitForSubstitutionImpl self this@GovernanceLock{..} splitAmo
       fail $ "substituted lock has less funds (" <> show amount <> ") than the amount proposed to be substituted (" <> show splitAmount <> ")"
 
 governanceLockKind : GovernanceLockSpecification -> GovernanceLockKind
-governanceLockKind = foldGovernanceLockSpecification (.kind) (.kind)
+governanceLockKind (GLS_FullLock spec) = spec.kind
+governanceLockKind (GLS_VestingLock spec) = spec.kind
 
 governanceLockObservers : GovernanceLockSpecification -> [Party]
 governanceLockObservers spec = case governanceLockKind spec of
@@ -783,13 +785,13 @@ encodeCommonLockMetadataEntries kind state =
 
 -- | The metadata entries of a lock specification, in the order of the CIP.
 encodeGovernanceLockSpecMetadataEntries : GovernanceLockSpecification -> [(Text, Text)]
-encodeGovernanceLockSpecMetadataEntries = foldGovernanceLockSpecification
-  (\FullLockSpecification{..} -> encodeCommonLockMetadataEntries kind LS_Locked)
-  (\VestingLockSpecification{..} -> encodeCommonLockMetadataEntries kind LS_Vesting <>
+encodeGovernanceLockSpecMetadataEntries (GLS_FullLock spec) = encodeCommonLockMetadataEntries spec.kind LS_Locked
+encodeGovernanceLockSpecMetadataEntries (GLS_VestingLock VestingLockSpecification{..}) =
+  encodeCommonLockMetadataEntries kind LS_Vesting <>
     [ (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
     , (lockVestingEndTimeMetaKey, encodeTime endTime)
     , (lockVestingInfoMetaKey, "\"vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime <> "\"")
-    ])
+    ]
 
 encodeGovernanceLockMetadata : GovernanceLock -> Metadata
 encodeGovernanceLockMetadata GovernanceLock{specification} =

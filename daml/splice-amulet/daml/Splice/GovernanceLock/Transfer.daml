@@ -240,7 +240,9 @@ validateLockTransfer expiresAt LockTransferArgs{..} = do
 -- messages.
 isValidLockTransfer : GovernanceLockTransfer -> Bool
 isValidLockTransfer GovernanceLockTransfer{..} =
-  let validEndTime = foldGovernanceLockSpecification (const True) (\v -> expiresAt <= v.endTime) source.specification
+  let validEndTime = case source.specification of
+        GLS_FullLock _ -> True
+        GLS_VestingLock v -> expiresAt <= v.endTime
   in amount > 0.0 && receiver /= source.owner && validEndTime
 
 -- | When a lock transfer proposal expires
