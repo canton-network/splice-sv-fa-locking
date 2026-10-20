@@ -134,11 +134,7 @@ governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors
       pure (proposalLockedAmulet, substituteResult.remainingLockCid, Some substituteResult.unlockedAmulet)
     None -> do
       -- The proposer is the owner of the target lock, so the target lock funds the new lock
-      splitResult <- exercise lockCid GovernanceLock_DsoSplitForSubstitution with
-        splitAmount = amount
-        newSpecification = target.specification
-        reason
-        extraArgs
+      splitResult <- governanceLock_dsoSplitForSubstitutionImpl target.dso target.owner lockCid amount target.specification reason extraArgs
       pure (splitResult.splitAmulet, splitResult.remainingLockCid, None)
   newLockCid <- create GovernanceLock with
     dso = target.dso

@@ -11,7 +11,6 @@ module Splice.GovernanceLock (
   GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult(..),
   GovernanceLock_DsoSubstitute(..),
   GovernanceLock_DsoSubstituteResult(..),
-  GovernanceLock_DsoSplitForSubstitution(..),
   GovernanceLock_DsoSplitForSubstitutionResult(..),
   GovernanceLock_DsoTransfer(..),
   GovernanceLock_DsoTransferResult(..),
@@ -36,6 +35,7 @@ module Splice.GovernanceLock (
   fetchAndMergeGovernanceLocks,
   governanceLock_unlockImpl,
   vestingLock_withdrawImpl,
+  governanceLock_dsoSplitForSubstitutionImpl,
 
   -- * Lock metadata
   dataFromText,
@@ -212,20 +212,6 @@ template GovernanceLock
       do
         governanceLock_dsoSubstituteImpl self this substitutedAmount reason extraArgs
 
-    choice GovernanceLock_DsoSplitForSubstitution : GovernanceLock_DsoSplitForSubstitutionResult
-      -- ^ Split `splitAmount` of the locked funds off into a `LockedAmulet` for a new lock with
-      -- `newSpecification`, as part of an approved substitution proposed by the owner of this lock.
-      -- Only the accept step of a `GovernanceLockSubstitution` calls this choice.
-      with
-        splitAmount : Decimal
-        newSpecification : GovernanceLockSpecification
-        reason : Text
-          -- ^ Memo of the request being handled, which the transfer legs report as their reason.
-        extraArgs : ExtraArgs
-      controller dso
-      do
-        governanceLock_dsoSplitForSubstitutionImpl self this splitAmount newSpecification reason extraArgs
-
     choice GovernanceLock_DsoTransfer : GovernanceLock_DsoTransferResult
       -- ^ Release `transferredAmount` of the locked funds as part of an approved transfer.
       -- The accept step of a `GovernanceLockTransfer` calls this choice, and locks the unlocked
@@ -318,7 +304,6 @@ data GovernanceLock_DsoSplitForSubstitutionResult = GovernanceLock_DsoSplitForSu
       -- ^ The lock that keeps the funds that were not split off, if any.
     splitAmulet : ContractId LockedAmulet
       -- ^ The funds that were split off, locked for the new lock.
-  deriving (Serializable)
 
 data GovernanceLock_DsoTransferResult
   = GovernanceLock_DsoTransferResult with
@@ -558,21 +543,25 @@ governanceLock_dsoSubstituteImpl self this@GovernanceLock{..} substitutedAmount 
     GT ->
       fail $ "substituted lock has less funds (" <> show amount <> ") than the amount proposed to be substituted (" <> show substitutedAmount <> ")"
 
-governanceLock_dsoSplitForSubstitutionImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> GovernanceLockSpecification -> Text -> ExtraArgs -> Update GovernanceLock_DsoSplitForSubstitutionResult
-governanceLock_dsoSplitForSubstitutionImpl self this@GovernanceLock{..} splitAmount newSpecification reason extraArgs = do
-  requireMatchExpected ("newSpecification", newSpecification) specification
+-- | Split `splitAmount` of the locked funds off into a `LockedAmulet` for a new lock with
+-- `newSpecification`, as part of an approved substitution proposed by the owner of this lock.
+-- Only the accept step of a `GovernanceLockSubstitution` calls this choice.
+governanceLock_dsoSplitForSubstitutionImpl : Party -> Party -> ContractId GovernanceLock -> Decimal -> GovernanceLockSpecification -> Text -> ExtraArgs -> Update GovernanceLock_DsoSplitForSubstitutionResult
+governanceLock_dsoSplitForSubstitutionImpl dso owner lockCid splitAmount newSpecification reason extraArgs = do
   let forOwner = ForOwner with dso; owner
-      splitLockExpiresAt = governanceLockExpiresAt specification
+  lock@GovernanceLock{..} <- fetchAndArchive forOwner lockCid
+  requireMatchExpected ("newSpecification", newSpecification) specification
+  let splitLockExpiresAt = governanceLockExpiresAt specification
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
   case splitAmount `compare` amount of
     LT -> do
       (Some (newLockedAmulet, remainingAmount), (splitAmulet, _)) <- splitLockedAmulet forOwner lockedAmulet (splitAmount, splitLockExpiresAt) context reason
       requireMinimumLock state remainingAmount
       requireMinimumLock state splitAmount
-      remainingLockCid <- create this with
+      remainingLockCid <- create lock with
         amount = remainingAmount
         lockedAmulet = newLockedAmulet
-        originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid
+        originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid
       pure GovernanceLock_DsoSplitForSubstitutionResult with
         remainingLockCid = Some remainingLockCid
         splitAmulet
@@ -866,3 +855,9 @@ lockStateToText LS_Vesting = "vesting"
 
 lockStateFromText : Text -> Optional LockState
 lockStateFromText = dataFromText lockStateToText [minBound .. maxBound]
+
+-- Instances
+------------
+
+instance HasCheckedFetch GovernanceLock ForOwner where
+  contractGroupId GovernanceLock{..} = ForOwner with dso; owner
