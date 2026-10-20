@@ -32,6 +32,7 @@ import Splice.GovernanceLock
 import Splice.ExternalPartyConfigState
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.Types
+import Splice.Util (HasCheckedFetch(..))
 
 -- | A proposal for a substitution of a governance lock.
 template GovernanceLockSubstitution with
@@ -266,3 +267,9 @@ createSubstitution CreateSubstitutionArgs {..} = do
         originalSubstitutionCid = None
   substitutionCid <- create substitution
   pure (toInterfaceContractId substitutionCid, toInterface substitution, changeHolding)
+
+-- Instances
+------------
+
+instance HasCheckedFetch GovernanceLockSubstitution ForDso where
+  contractGroupId GovernanceLockSubstitution{..} = ForDso with dso = target.dso

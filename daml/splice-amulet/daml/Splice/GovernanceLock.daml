@@ -863,3 +863,6 @@ lockStateFromText = dataFromText lockStateToText [minBound .. maxBound]
 
 instance HasCheckedFetch GovernanceLock ForOwner where
   contractGroupId GovernanceLock{..} = ForOwner with dso; owner
+
+instance HasCheckedFetch GovernanceLock ForDso where
+  contractGroupId GovernanceLock{..} = ForDso with dso
