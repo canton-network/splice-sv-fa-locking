@@ -4,9 +4,12 @@
 module Splice.Wallet.MintingDelegation where
 
 import DA.Assert
-import Splice.Amulet (RewardCouponV2(..))
+import Splice.Amulet (RewardCouponV2(..), SvRewardCoupon)
 import Splice.AmuletRules
 import Splice.Api.RewardAssignmentV1 qualified as Api.RewardAssignmentV1
+import Splice.Api.Token.MetadataV1 (ExtraArgs)
+import Splice.GovernanceLock (fetchAndMergeGovernanceLocksWithTopUp, GovernanceLockKey, TopUpFunds(..))
+import Splice.TokenStandard.Utils (requireMatchExpected)
 import Splice.Types (ForOwner(..))
 import Splice.Util
 
@@ -119,6 +122,36 @@ template MintingDelegation
           assignResult
           transferResult
 
+    nonconsuming choice MintingDelegation_TopUpGovernanceLock : MintingDelegation_TopUpGovernanceLockResult
+      with
+        lock : GovernanceLockKey
+          -- ^ The governance lock, owned by the beneficiary, to top up.
+        svRewardCoupons : [ContractId SvRewardCoupon]
+          -- ^ The beneficiary's SV reward coupons to fund the top-up with.
+        svRewardCouponPercentage : Decimal
+          -- ^ Percentage (specified as a number between 0.0 and 1.0) of the SV reward coupons
+          -- minting allowance to top-up the lock with. The remainder is returned as change.
+        requestedAt : Time
+          -- ^ Time of the request to top up the lock.
+        extraArgs : ExtraArgs
+      controller delegate
+      do
+        assertWithinDeadline "expiresAt" expiresAt
+        requireMatchExpected ("lock owner", lock.owner) beneficiary
+
+        let funds = TUF_SvRewardCouponFunds with svRewardCoupons; svRewardCouponPercentage
+        fetchAndMergeGovernanceLocksWithTopUp
+          (Some (funds, requestedAt))
+          lock
+          (error "TODO: ExternalPartyTransferContext")
+          (error "TODO: ExternalPartyConfigState")
+          -- In normal calls to `fetchAndMergeGovernanceLocksWithTopUp`, the reason comes from the `cip-127/memo:...`
+          -- in the `reason` metadata field. What should we use here?
+          "TODO: reason"
+          extraArgs
+
+        pure MintingDelegation_TopUpGovernanceLockResult
+
     choice MintingDelegation_Reject : MintingDelegation_RejectResult
       controller delegate
       do pure MintingDelegation_RejectResult {}
@@ -154,6 +187,9 @@ data MintingDelegation_AssignAndMintResult = MintingDelegation_AssignAndMintResu
     assignResult : Api.RewardAssignmentV1.RewardCoupon_AssignBeneficiariesResult
     transferResult : TransferResult
   deriving (Show, Eq, Serializable)
+
+data MintingDelegation_TopUpGovernanceLockResult = MintingDelegation_TopUpGovernanceLockResult {}
+  deriving (Serializable)
 
 instance HasCheckedFetch MintingDelegation ForOwner where
   contractGroupId MintingDelegation{beneficiary, dso} = ForOwner with owner = beneficiary; dso
