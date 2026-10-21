@@ -275,6 +275,7 @@ test_SvRewards_With_InitialRound_In_SecondIssuanceCurve = do
     runAmuletDepositBots app
     checkSvRewardCouponsDoNotExist round1._2.round
 
+
     [(_, round)] <- queryFilter @IssuingMiningRound app.dso (\r -> r.round == round1._2.round)
     let sv1Balance1 =
             round.issuancePerSvRewardCoupon * sv1Weight - createFee
@@ -341,7 +342,7 @@ testLifetimeSvRewardsTracking = do
   (app, (dso), (sv1, sv2, _, _)) <- initMainNetWithSvUnderlockEnforcement
   [(amuletRulesCid, _)] <- query @AmuletRules dso
 
-  -- Create validator rights for sv1-4, so that runAmuletDepositBots can collect the rewards
+  -- Create validator rights for svs, so that runAmuletDepositBots can collect the rewards
   forA_ [sv1, sv2] $ \sv -> do
     submit sv $ createCmd ValidatorRight with
       dso

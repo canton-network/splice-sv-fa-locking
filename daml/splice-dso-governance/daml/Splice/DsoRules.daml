@@ -474,6 +474,7 @@ data DsoRules_ExpireAmuletAllocationsV2Result = DsoRules_ExpireAmuletAllocations
     result : ExternalPartyAmuletRules_ExpireAmuletAllocationsV2Result
   deriving (Eq, Show, Serializable)
 
+
 -- Workflow templates
 ---------------------
 
@@ -1884,6 +1885,7 @@ template DsoRules with
       controller sv
       do
         _ <- getAndValidateSvNodeOperatorParty this (Some sv)
+        void $ fetchChecked (ForDso with dso) governanceLockCid
         exercise governanceLockCid GovernanceLock_DsoConvertProvisionalFeaturedAppLock with featuredAppRightCid
         pure DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLockResult
 
@@ -1896,6 +1898,7 @@ template DsoRules with
       controller sv
       do
         _ <- getAndValidateSvNodeOperatorParty this (Some sv)
+        void $ fetchChecked (ForDso with dso) governanceLockCid
         exercise governanceLockCid GovernanceLock_DsoExpire
         pure $ DsoRules_GovernanceLock_DsoExpireResult
 
@@ -1908,6 +1911,7 @@ template DsoRules with
       controller sv
       do
         _ <- getAndValidateSvNodeOperatorParty this (Some sv)
+        void $ fetchChecked (ForDso with dso) substitutionCid
         _ <- exercise substitutionCid GovernanceLockSubstitution_DsoExpire
         pure $ DsoRules_GovernanceLockSubstitution_DsoExpireResult
 
@@ -1920,6 +1924,7 @@ template DsoRules with
       controller sv
       do
         _ <- getAndValidateSvNodeOperatorParty this (Some sv)
+        void $ fetchChecked (ForDso with dso) transferCid
         _ <- exercise transferCid GovernanceLockTransfer_DsoExpire
         pure $ DsoRules_GovernanceLockTransfer_DsoExpireResult
 
@@ -2157,7 +2162,7 @@ template DsoRules with
         create this with
           svs = Map.fromList ([(sv, info with svRewardWeight = 0) | (sv, info) <- Map.toList this.svs])
           svRightOwners = Some (map fst $ TextMap.toList rightOwners)
-    
+
     nonconsuming choice DsoRules_UpdateRightOwnerParty : ContractId SvRightOwner
       with
         name : Text
