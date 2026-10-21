@@ -48,7 +48,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
   val emptyExtraArgs =
     org.lfdecentralizedtrust.splice.util.ChoiceContextWithDisclosures.emptyExtraArgs
 
-  def executeTransferViaTokenStandard(
+  def executeTransferViaTokenStandardV1(
       participant: ParticipantClientReference,
       sender: RichPartyId,
       receiver: PartyId,
@@ -64,7 +64,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
   ) = {
     actAndCheck(
       s"Instructing transfer of $amount amulets via token standard from $sender to $receiver", {
-        val (factoryChoice, senderHoldingCids) = transferViaTokenStandardCommands(
+        val (factoryChoice, senderHoldingCids) = transferViaTokenStandardCommandsV1(
           participant,
           sender.partyId,
           receiver,
@@ -100,7 +100,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
     )
   }
 
-  def transferViaTokenStandardCommands(
+  def transferViaTokenStandardCommandsV1(
       participant: ParticipantClientReference,
       sender: PartyId,
       receiver: PartyId,
@@ -357,7 +357,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
     })
   }
 
-  def acceptTransferInstruction(
+  def acceptTransferInstructionV1(
       participant: ParticipantClientReference,
       receiver: RichPartyId,
       instructionCid: transferinstructionv1.TransferInstruction.ContractId,
@@ -409,7 +409,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       )
   }
 
-  def rejectTransferInstruction(
+  def rejectTransferInstructionV1(
       participant: ParticipantClientReference,
       receiver: RichPartyId,
       instructionCid: transferinstructionv1.TransferInstruction.ContractId,
@@ -461,7 +461,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       )
   }
 
-  def withdrawTransferInstruction(
+  def withdrawTransferInstructionV1(
       participant: ParticipantClientReference,
       receiver: RichPartyId,
       instructionCid: transferinstructionv1.TransferInstruction.ContractId,

@@ -393,7 +393,7 @@ trait GovernanceLockTest extends TokenStandardTest {
         description: Option[String],
         wait: Boolean = true,
     )(implicit env: SpliceTestConsoleEnvironment): Unit =
-      executeTransferViaTokenStandard(
+      executeTransferViaTokenStandardV1(
         participant,
         sender,
         receiver,
@@ -408,21 +408,21 @@ trait GovernanceLockTest extends TokenStandardTest {
         receiver: RichPartyId,
         cid: transferinstructionv1.TransferInstruction.ContractId,
     )(implicit env: SpliceTestConsoleEnvironment): Unit =
-      acceptTransferInstruction(participant, receiver, cid)
+      acceptTransferInstructionV1(participant, receiver, cid)
 
     def rejectTransfer(
         participant: ParticipantClientReference,
         receiver: RichPartyId,
         cid: transferinstructionv1.TransferInstruction.ContractId,
     )(implicit env: SpliceTestConsoleEnvironment): Unit =
-      rejectTransferInstruction(participant, receiver, cid)
+      rejectTransferInstructionV1(participant, receiver, cid)
 
     def withdrawTransfer(
         participant: ParticipantClientReference,
         receiver: RichPartyId,
         cid: transferinstructionv1.TransferInstruction.ContractId,
     )(implicit env: SpliceTestConsoleEnvironment): Unit =
-      withdrawTransferInstruction(participant, receiver, cid)
+      withdrawTransferInstructionV1(participant, receiver, cid)
 
     def listTransfers(participant: ParticipantClientReference, party: PartyId) =
       listTransferInstructions(participant, party)
