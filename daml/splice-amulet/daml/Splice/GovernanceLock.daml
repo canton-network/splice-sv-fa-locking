@@ -316,7 +316,7 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
 
       (mergedAmount, inputHoldings) <- foldrA
         (\(lockCid, lock) (accAmount, accHoldings) -> do
-          -- Fetched in `attemptMerge` below via `lookupNByKey`
+          -- Fetched in `lookupWithMerging` below via `lookupNByKey`
           potentiallyUnsafeArchive lockCid
           (amuletCid, (unlockedAmount, _)) <- unlockAmulet forOwner lock.lockedAmulet
           pure (accAmount + unlockedAmount, toInterfaceContractId amuletCid :: accHoldings))
@@ -350,8 +350,8 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
         lock = newLock
         changeHolding
 
-    attemptMerge : Int -> Update FetchAndMergeLocksResult
-    attemptMerge numberToMerge = do
+    lookupWithMerging : Int -> Update FetchAndMergeLocksResult
+    lookupWithMerging numberToMerge = do
       locks <- sortLocks <$> lookupNByKey @GovernanceLock numberToMerge key
       case (newFunds, locks) of
         (None, []) -> assertFail $ "No locks found with key: " <> show key
@@ -370,10 +370,10 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
       -- Vesting locks with `endTime` in the past must not be merged
       -- Doing so would set `expiresAt = endTime` on the resulting transfer, causing an error when trying to lock with a lock time in the past
       stillVesting <- isLedgerTimeLT spec.endTime
-      attemptMerge $ if stillVesting then defaultNumberToMerge else 1
+      lookupWithMerging $ if stillVesting then defaultNumberToMerge else 1
 
-    (GLS_FullLock _, None) -> attemptMerge defaultNumberToMerge
-    (GLS_FullLock _, Some _) -> attemptMerge defaultNumberToMerge
+    (GLS_FullLock _, None) -> lookupWithMerging defaultNumberToMerge
+    (GLS_FullLock _, Some _) -> lookupWithMerging defaultNumberToMerge
 
 fetchAndMergeGovernanceLocks : GovernanceLockKey -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update FetchAndMergeLocksResult
 fetchAndMergeGovernanceLocks key context state reason = do
