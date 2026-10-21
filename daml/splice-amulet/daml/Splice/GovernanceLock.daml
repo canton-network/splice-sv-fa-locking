@@ -31,6 +31,8 @@ module Splice.GovernanceLock (
   governanceLock_lockForGovernance_impl,
   FetchAndMergeLocksResult(..),
   fetchAndMergeGovernanceLocks,
+  TopUpFunds(..),
+  fetchAndMergeGovernanceLocksWithTopUp,
   governanceLock_unlockImpl,
   vestingLock_withdrawImpl,
   governanceLock_dsoSubstituteImpl,
@@ -288,20 +290,35 @@ data GovernanceLock_DsoTransferResult
     unlockedAmulet : ContractId Amulet
       -- ^ The transferred funds, returned to the owner of the source lock.
 
+data TopUpFunds
+  = TUF_LiquidFunds with
+    amount : Decimal
+      -- ^ The amount to lock.
+    holdings : [ContractId Holding]
+      -- ^ The input holdings used to fund the lock.
+  | TUF_SvRewardCouponFunds with
+    svRewardCoupons : [ContractId SvRewardCoupon]
+      -- ^ SV Reward Coupon inputs used to fund the top-up.
+    svRewardCouponPercentage : Decimal
+      -- ^ Percentage (specified as a number between 0.0 and 1.0) of the SV reward coupons
+      -- minting allowance to top-up a governance lock with. The remainder is returned as change.
+  deriving (Show)
+
 data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
   lockCid : ContractId GovernanceLock
   lock : GovernanceLock
   changeHolding : Optional (ContractId Amulet)
 
-fetchAndMergeGovernanceLocks'
-  :  Optional (Decimal, [ContractId Holding], Time)
-    -- ^ New funds to lock: the amount, inputs, and requestedAt time.
+fetchAndMergeGovernanceLocksWithTopUp
+  :  Optional (TopUpFunds, Time)
+    -- ^ New funds to lock and the requestedAt time.
   -> GovernanceLockKey
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Text
+  -> ExtraArgs
   -> Update FetchAndMergeLocksResult
-fetchAndMergeGovernanceLocks' newFunds key context state reason =
+fetchAndMergeGovernanceLocksWithTopUp newFunds key context state reason extraArgs =
   let
     defaultNumberToMerge = 20
 
@@ -317,11 +334,20 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
 
       (initialInputs, initialAmount) <- case newFunds of
         None -> pure ([], 0.0)
-        Some (amount, inputs, _) -> do
+        Some (TUF_LiquidFunds{..}, _) -> do
           -- Allowing amount to be 0 gives the ability to merge existing locks without locking new funds.
           -- Note: this also means that a single existing lock could be cycled by creating a new lock with `amount = 0`.
           require' ("amount", amount) isGreaterOrEqualR ("zero", 0.0)
-          pure (inputs, amount)
+          pure (holdings, amount)
+        Some (TUF_SvRewardCouponFunds{..}, _) -> do
+          require' ("svRewardCouponPercentage", svRewardCouponPercentage) isGreaterOrEqualR ("zero", 0.0)
+          require' ("svRewardCouponPercentage", svRewardCouponPercentage) isLessOrEqualR ("one", 1.0)
+          getSvRewardInputAmuletAndChange
+            svRewardCoupons
+            svRewardCouponPercentage
+            extraArgs
+            forOwner
+            (toInterfaceContractId context.externalPartyConfigState)
 
       (mergedAmount, inputHoldings) <- foldrA
         (\(lockCid, lock) (accAmount, accHoldings) -> do
@@ -369,7 +395,7 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
           lock
           changeHolding = None
         (None, (_, lock) :: _) -> merge lock.requestedAt locks
-        (Some (_, _, requestedAt), _) -> merge requestedAt locks
+        (Some (_, requestedAt), _) -> merge requestedAt locks
 
   in case (key.specification, newFunds) of
     (spec@(GLS_VestingLock _), Some funds) ->
@@ -384,10 +410,10 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
     (GLS_FullLock _, None) -> lookupWithMerging defaultNumberToMerge
     (GLS_FullLock _, Some _) -> lookupWithMerging defaultNumberToMerge
 
-fetchAndMergeGovernanceLocks : GovernanceLockKey -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update FetchAndMergeLocksResult
-fetchAndMergeGovernanceLocks key context state reason = do
+fetchAndMergeGovernanceLocks : GovernanceLockKey -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> ExtraArgs -> Update FetchAndMergeLocksResult
+fetchAndMergeGovernanceLocks key context state reason extraArgs = do
   -- `changeHolding` should always be `None` since no new funds are passed
-  result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
+  result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocksWithTopUp None key context state reason extraArgs
   pure result
 
 -- | Unlocks `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks which have no vesting period.
@@ -495,12 +521,14 @@ governanceLock_lockForGovernance_impl dso amount inputs fullSpecification extraA
   let specification = GLS_FullLock fullSpecification
   assertInPast24Hours "requestedAt" requestedAt
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  FetchAndMergeLocksResult{lock, lockCid, changeHolding} <- fetchAndMergeGovernanceLocks'
-    (Some (amount, inputs, requestedAt))
+  let liquidFunds = TUF_LiquidFunds with amount; holdings = inputs
+  FetchAndMergeLocksResult{lock, lockCid, changeHolding} <- fetchAndMergeGovernanceLocksWithTopUp
+    (Some (liquidFunds, requestedAt))
     (GovernanceLockKey with dso; owner; specification)
     context
     state
     reason
+    extraArgs
   pure (lock, lockCid, changeHolding)
 
 -- | Release `substitutedAmount` of the locked funds to the owner as part of an approved
