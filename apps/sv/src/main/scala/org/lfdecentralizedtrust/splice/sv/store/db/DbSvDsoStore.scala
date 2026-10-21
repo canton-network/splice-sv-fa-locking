@@ -1320,6 +1320,51 @@ class DbSvDsoStore(
       }
     }
 
+  override def listExpiredGovernanceLockSubstitutions(
+      unavailablePartiesStore: Option[UnavailablePartiesStore] = None
+  ): ListExpiredContracts[
+    splice.governancelock.substitution.GovernanceLockSubstitution.ContractId,
+    splice.governancelock.substitution.GovernanceLockSubstitution,
+  ] = (now, limit) =>
+    implicit tc => {
+      waitUntilAcsIngested {
+        for {
+          ignoredParties <- UnavailablePartiesStore.listParties(unavailablePartiesStore)
+          filterClause =
+            if (ignoredParties.nonEmpty) {
+              (sql" and " ++ notInClause(
+                "create_arguments->>'owner'",
+                ignoredParties,
+              ) ++ sql" and " ++ notInClause(
+                "create_arguments->'target'->>'owner'",
+                ignoredParties,
+              )).toActionBuilder
+            } else {
+              sql""
+            }
+          synchronizerId <- getDsoRules().map(_.domain)
+          rows <- storage.query(
+            selectFromAcsTableWithState(
+              DsoTables.acsTableName,
+              acsStoreId,
+              domainMigrationId,
+              splice.governancelock.substitution.GovernanceLockSubstitution.COMPANION,
+              additionalWhere = (sql"""
+                and assigned_domain = $synchronizerId
+                and acs.contract_expires_at < ${now}
+              """ ++ filterClause).toActionBuilder,
+              orderLimit = sql"""limit ${sqlLimit(limit)}""",
+            ),
+            "listExpiredGovernanceLockSubstitutions",
+          )
+        } yield rows.map(
+          assignedContractFromRow(
+            splice.governancelock.substitution.GovernanceLockSubstitution.COMPANION
+          )(_)
+        )
+      }
+    }
+
   override def listExpiredAmuletAllocationsV2(
       unavailablePartiesStore: Option[UnavailablePartiesStore] = None
   ): ListExpiredContracts[

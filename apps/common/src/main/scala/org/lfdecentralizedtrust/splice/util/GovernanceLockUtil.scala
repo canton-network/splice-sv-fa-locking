@@ -7,11 +7,11 @@ import io.grpc.Status
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock as gl
 
 object GovernanceLockUtil {
-  def foldSpecification[A](lock: gl.GovernanceLock)(
+  def foldSpecification[A](specification: gl.GovernanceLockSpecification)(
       onFull: gl.FullLockSpecification => A,
       onVesting: gl.VestingLockSpecification => A,
   ): A =
-    lock.specification match {
+    specification match {
       case s: gl.governancelockspecification.GLS_FullLock => onFull(s.fullLockSpecificationValue)
       case s: gl.governancelockspecification.GLS_VestingLock =>
         onVesting(s.vestingLockSpecificationValue)
@@ -21,15 +21,30 @@ object GovernanceLockUtil {
           .asRuntimeException()
     }
 
+  def getSpecificationKind(
+      specification: gl.GovernanceLockSpecification
+  ): gl.GovernanceLockKind =
+    foldSpecification(specification)(_.kind, _.kind)
+
   def getGovernanceLockKind(lock: gl.GovernanceLock): gl.GovernanceLockKind =
-    foldSpecification(lock)(_.kind, _.kind)
+    getSpecificationKind(lock.specification)
 
   def getVestingLockSpecification(lock: gl.GovernanceLock): Option[gl.VestingLockSpecification] =
-    foldSpecification(lock)(_ => None, Some(_))
+    foldSpecification(lock.specification)(_ => None, Some(_))
+
+  /** Parties observing a lock with this specification, mirroring `governanceLockObservers`
+    * in `Splice.GovernanceLock`.
+    */
+  def governanceLockObservers(specification: gl.GovernanceLockSpecification): Seq[String] =
+    getSpecificationKind(specification) match {
+      case kind: gl.governancelockkind.GLK_FeaturedApp => Seq(kind.provider)
+      case kind: gl.governancelockkind.GLK_ProvisionalFeaturedApp => Seq(kind.provider)
+      case _ => Seq.empty
+    }
 
   /** Encodes a lock as the `governance_lock_type` and `governance_lock_subject` index columns. */
   def governanceLockTypeAndSubject(lock: gl.GovernanceLock): (String, String) = {
-    val lockType = foldSpecification(lock)(_ => "f", _ => "v")
+    val lockType = foldSpecification(lock.specification)(_ => "f", _ => "v")
     val (kindTag, subject) = getGovernanceLockKind(lock) match {
       case kind: gl.governancelockkind.GLK_FeaturedApp => ("fa", kind.provider)
       case kind: gl.governancelockkind.GLK_ProvisionalFeaturedApp => ("pfa", kind.provider)
