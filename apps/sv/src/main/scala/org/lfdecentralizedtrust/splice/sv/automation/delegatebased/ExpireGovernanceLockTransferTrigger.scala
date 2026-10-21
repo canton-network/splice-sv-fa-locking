@@ -54,10 +54,10 @@ class ExpireGovernanceLockTransferTrigger(
   private def completeExpiryTaskAsDsoDelegate(task: Task, controller: String)(implicit
       tc: TraceContext
   ): Future[TaskOutcome] = {
-    val expiredLocks = task.work.expiredContracts
+    val expiredTransfers = task.work.expiredContracts
     for {
       dsoRules <- store.getDsoRules()
-      cmds = expiredLocks.flatMap(co =>
+      cmds = expiredTransfers.flatMap(co =>
         dsoRules
           .exercise(_.exerciseDsoRules_GovernanceLockTransfer_DsoExpire(co.contractId, controller))
           .update
@@ -75,7 +75,7 @@ class ExpireGovernanceLockTransferTrigger(
         .noDedup
         .withSynchronizerId(dsoRules.domain)
         .yieldUnit()
-    } yield TaskSuccess(s"archived ${expiredLocks.size} expired vesting locks")
+    } yield TaskSuccess(s"archived ${expiredTransfers.size} expired transfers")
   }
 }
 
