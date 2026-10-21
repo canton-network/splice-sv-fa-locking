@@ -14,6 +14,7 @@ import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.{
   SpliceTestConsoleEnvironment,
 }
 import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.{
+  ExpireGovernanceLockSubstitutionTrigger,
   ExpireGovernanceLockTransferTrigger,
   ExpireVestingLockTrigger,
 }
@@ -62,12 +63,14 @@ class GovernanceLockTimeBasedIntegrationTest
           _.copy(
             delegatelessAutomationExpiredVestingLockBatchSize = triggerBatchSize,
             delegatelessAutomationExpiredGovernanceLockTransferBatchSize = triggerBatchSize,
+            delegatelessAutomationExpiredGovernanceLockSubstitutionBatchSize = triggerBatchSize,
           )
         )(config)
       )
       .addConfigTransforms((_, config) =>
         ConfigTransforms.updateAutomationConfig(ConfigTransforms.ConfigurableApp.Sv)(
           _.withPausedTrigger[ExpireGovernanceLockTransferTrigger]
+            .withPausedTrigger[ExpireGovernanceLockSubstitutionTrigger]
             // Required for the transfer expiry test to ensure the source vesting lock is kept in
             // place even when it's fully vested
             .withPausedTrigger[ExpireVestingLockTrigger]
@@ -391,6 +394,122 @@ class GovernanceLockTimeBasedIntegrationTest
       listVestingLocks.loneElement.payload shouldBe vestingLock
     }
   }
+
+  "ExpireGovernanceLockSubstitutionTrigger archives expired substitutions in batches" in {
+    implicit env =>
+      val numSubstitutions = 3
+      val trigger =
+        sv1Backend.dsoDelegateBasedAutomation.trigger[ExpireGovernanceLockSubstitutionTrigger]
+
+      val sv1Party = sv1Backend.getDsoInfo().svParty
+      val owner = RichPartyId.local(sv1Party)
+      val participant = sv1Backend.participantClientWithAdminToken
+
+      // Proposed by a party other than the lock owner, so each proposal escrows collateral
+      // that the DSO must return when the proposal expires.
+      val proposerParty = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
+      val proposer = RichPartyId.local(proposerParty)
+      val proposerParticipant = aliceValidatorBackend.participantClientWithAdminToken
+      val collateral = lockAmount * numSubstitutions
+
+      val vestingStartTime = getLedgerTime.plusSeconds(1)
+
+      actAndCheck(
+        s"Tap $lockAmount CC for sv1 and $collateral CC for the proposer", {
+          sv1WalletClient.tap(walletAmuletToUsd(lockAmount))
+          aliceWalletClient.tap(walletAmuletToUsd(collateral))
+        },
+      )(
+        "the tapped amulets are visible",
+        _ => {
+          listHoldings(participant, sv1Party).filter(_._2.lock.isEmpty) should have length 1
+          listHoldings(proposerParticipant, proposerParty).filter(
+            _._2.lock.isEmpty
+          ) should not be empty
+        },
+      )
+
+      val (_, vestingLock) = actAndCheck(
+        "Lock and unlock, so that the lock starts vesting",
+        tsv1Operations.createAndUnlockGovernanceLock(
+          participant,
+          owner,
+          lockKind,
+          lockSubject = lockSubject,
+          lockAmount = lockAmount,
+          unlockAmount = lockAmount,
+          vestingStartTime = vestingStartTime,
+        ),
+      )(
+        "SvDsoStore ingests the VestingLock",
+        _ => listVestingLocks.loneElement.payload,
+      )
+
+      actAndCheck(
+        s"The proposer proposes $numSubstitutions substitutions of the VestingLock",
+        (1 to numSubstitutions).foreach { _ =>
+          tsv1Operations.substituteVestingLock(vestingLock)(
+            proposerParticipant,
+            proposer,
+            lockKind,
+            lockSubject,
+            lockAmount,
+          )
+        },
+      )(
+        "SvDsoStore ingests all GovernanceLockSubstitutions, with the collateral locked",
+        _ => {
+          listLockSubstitutions should have length numSubstitutions.toLong
+          listHoldings(proposerParticipant, proposerParty).filter(
+            _._2.lock.isEmpty
+          ) shouldBe empty
+        },
+      )
+
+      clue("The substitutions are not yet expired, so the trigger has no work") {
+        trigger.runOnce().futureValue shouldBe false
+        listLockSubstitutions should have length numSubstitutions.toLong
+      }
+
+      // `listExpiredGovernanceLockSubstitutions` uses a strict `contract_expires_at < now`, and
+      // the trigger reads `now` 5s behind the clock (`clockSkewAutomationDelay`), so step well
+      // past `endTime`.
+      advanceTime(vestingDuration.plusSeconds(10))
+
+      clue("The substitutions stay put while the trigger is paused") {
+        listLockSubstitutions should have length numSubstitutions.toLong
+      }
+
+      clue(s"First run archives one full batch of $triggerBatchSize") {
+        eventually()(trigger.runOnce().futureValue shouldBe true)
+        listLockSubstitutions should have length (numSubstitutions - triggerBatchSize).toLong
+      }
+
+      clue("Second run archives the remaining partial batch") {
+        trigger.runOnce().futureValue shouldBe true
+        listLockSubstitutions shouldBe empty
+      }
+
+      clue("Expiry returns the proposer's collateral") {
+        // The proposer held no unlocked amulets while the proposals were pending, so any
+        // unlocked holding here is returned collateral. The count is left open because
+        // wallet automation merges amulets.
+        eventually() {
+          listHoldings(proposerParticipant, proposerParty).filter(
+            _._2.lock.isEmpty
+          ) should not be empty
+        }
+      }
+
+      clue("The target VestingLock is left untouched") {
+        listVestingLocks.loneElement.payload shouldBe vestingLock
+      }
+  }
+
+  private def listLockSubstitutions(implicit env: SpliceTestConsoleEnvironment) =
+    sv1Backend.appState.dsoStore.multiDomainAcsStore
+      .listContracts(governancelock.substitution.GovernanceLockSubstitution.COMPANION)
+      .futureValue
 
   private def listLockTransfers(implicit env: SpliceTestConsoleEnvironment) =
     sv1Backend.appState.dsoStore.multiDomainAcsStore
