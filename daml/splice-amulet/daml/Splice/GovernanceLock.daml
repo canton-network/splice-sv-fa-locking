@@ -95,11 +95,13 @@ import Splice.AmuletConfig (GovernanceLockConfig, governanceLockFeaturedAppLockV
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.TransferEventsV2 as TransferEventsV2
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.Expiry hiding (maxTime)
-import Splice.Fees (relTimeToDays, relTimeToSeconds)
 import Splice.ExternalPartyConfigState
+import Splice.Fees (relTimeToDays, relTimeToSeconds)
+import Splice.Round
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
 import Splice.Types
@@ -595,6 +597,12 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
           featuredAppRight = None
        , configState )
 
+getMiningRoundsFromChoiceContext : ChoiceContext -> Update ([ContractId IssuingMiningRound], ContractId OpenMiningRound)
+getMiningRoundsFromChoiceContext choiceContext = do
+  issuingMiningRoundCids <- getFromContextU @([ContractId IssuingMiningRound]) choiceContext issuingMiningRoundContextKey
+  openMiningRoundCid <- getFromContextU @(ContractId OpenMiningRound) choiceContext openMiningRoundContextKey
+  pure (issuingMiningRoundCids, openMiningRoundCid)
+
 -- | Release `transferredAmount` of the locked funds as part of an approved transfer.
 -- The accept step of a `GovernanceLockTransfer` calls this, and locks the unlocked
 -- funds again for the receiver, as only that step has the receiver's authority.
@@ -841,6 +849,59 @@ lockStateToText LS_Vesting = "vesting"
 
 lockStateFromText : Text -> Optional LockState
 lockStateFromText = dataFromText lockStateToText [minBound .. maxBound]
+
+-- SV Reward Coupon Helpers
+---------------------------
+
+fetchAndValidateIssuingMiningRounds : [AnyValue] -> ForDso -> Update (Map.Map Round IssuingMiningRound, Map.Map Round (ContractId IssuingMiningRound))
+fetchAndValidateIssuingMiningRounds vals forDso = do
+  issuingMiningRounds <- forA vals $ \(AV_ContractId cid) -> do
+    let issuingMiningRoundCid = fromAnyContractId cid
+    issuingMiningRound <- fetchReferenceData @IssuingMiningRound forDso issuingMiningRoundCid
+    let round = issuingMiningRound.round
+    assertDeadlineExceeded ("issuingMiningRound[" <> show round.number <> "].opensAt") issuingMiningRound.opensAt
+    pure (round, (issuingMiningRound, issuingMiningRoundCid))
+  let issuingMiningRounds' = [(round, miningRound) | (round, (miningRound, _)) <- issuingMiningRounds]
+      issuingMiningRoundCids = [(round, miningRoundCid) | (round, (_, miningRoundCid)) <- issuingMiningRounds]
+  pure (Map.fromList issuingMiningRounds', Map.fromList issuingMiningRoundCids)
+
+
+getSvRewardInputAmuletAndChange
+  : [ContractId SvRewardCoupon]
+  -> Decimal
+  -> ExtraArgs
+  -> ForOwner
+  -> ContractId TransferEventsV2.EventLog
+  -> Update ([ContractId Holding], Decimal)
+getSvRewardInputAmuletAndChange [] _ _ _ _ = pure ([], 0.0)
+getSvRewardInputAmuletAndChange svRewardCoupons svRewardCouponPercentage extraArgs forOwner transferEventsV2EventLog = do
+  let dso = forOwner.dso
+  (currentIssuingMiningRoundCids, openMiningRoundCid) <- getMiningRoundsFromChoiceContext extraArgs.context
+  (_, issuingMiningRoundCidsMap) <-
+    fetchAndValidateIssuingMiningRounds (toAnyValue <$> currentIssuingMiningRoundCids) $ ForDso with dso
+
+  let transferContext = TransferContext with
+        openMiningRound = openMiningRoundCid
+        issuingMiningRounds = issuingMiningRoundCidsMap
+        validatorRights = Map.empty
+        featuredAppRight = None
+      transfer = Splice.AmuletRules.Transfer with
+        sender = forOwner.owner
+        provider = forOwner.owner -- the sender is serving as its own "app provider"
+        outputs = []
+        inputs = fmap InputSvRewardCoupon svRewardCoupons
+        beneficiaries = None
+      rewardsConfig = RewardsIssuanceConfig with
+        issueAppRewards = False
+        issueValidatorRewards = False
+
+  result <- executeTransfer transferEventsV2EventLog rewardsConfig transferContext dso [] transfer
+  let (Some changeFromSvCouponRewards) : Optional (ContractId Amulet) = result.senderChangeAmulet
+
+  amulet <- fetchChecked forOwner changeFromSvCouponRewards
+  let svRewardMintAllowance = amulet.amount.initialAmount * svRewardCouponPercentage
+
+  pure ([toInterfaceContractId changeFromSvCouponRewards], svRewardMintAllowance)
 
 -- Instances
 ------------
