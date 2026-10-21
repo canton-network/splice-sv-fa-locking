@@ -785,10 +785,8 @@ trait SvDsoStore
 
   /** List substitution proposals that are past their `expiresAt`.
     *
-    * Implemented in `DbSvDsoStore` for the same reason as
-    * `listExpiredGovernanceLockTransfers`: the proposer is at `owner` but the
-    * lock owner is nested at `target.owner`, which `ignoredPartyFields` cannot
-    * reach.
+    * Implemented in `DbSvDsoStore` because the lock owner is nested at
+    * `target.owner`, which `ignoredPartyFields` cannot reach.
     */
   def listExpiredGovernanceLockSubstitutions(
       unavailablePartiesStore: Option[UnavailablePartiesStore] = None

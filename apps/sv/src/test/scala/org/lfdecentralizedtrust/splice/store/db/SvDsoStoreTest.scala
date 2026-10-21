@@ -427,8 +427,7 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
           // can filter them out.
           cidsIgnoring(Set(provider)) should contain theSameElementsAs
             Seq(svSubstitution.contractId)
-          // Ignoring an unrelated party leaves the SV-kind proposal in place, proving the
-          // subject comparison does not drop rows whose subject is an SV name.
+          // An SV name never matches an ignored party, so that row survives.
           cidsIgnoring(Set(userParty(9))) should contain theSameElementsAs
             Seq(faSubstitution.contractId, svSubstitution.contractId)
         }
