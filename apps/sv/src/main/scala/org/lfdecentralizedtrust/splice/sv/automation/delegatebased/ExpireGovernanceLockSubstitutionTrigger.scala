@@ -18,7 +18,12 @@ import org.lfdecentralizedtrust.splice.util.GovernanceLockUtil
 import scala.concurrent.{ExecutionContext, Future}
 import scala.jdk.CollectionConverters.*
 
-import ExpireGovernanceLockSubstitutionTrigger.{Substitution, SubstitutionCid, Task, getStakeholders}
+import ExpireGovernanceLockSubstitutionTrigger.{
+  Substitution,
+  SubstitutionCid,
+  Task,
+  getStakeholders,
+}
 
 /** Garbage-collects expired `GovernanceLockSubstitution`s. */
 class ExpireGovernanceLockSubstitutionTrigger(

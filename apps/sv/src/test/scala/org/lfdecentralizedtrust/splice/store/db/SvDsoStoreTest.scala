@@ -396,6 +396,44 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
         }
       }
 
+      "respects an ignored featured app provider, who observes the target lock" in {
+        val provider = userParty(1)
+        val faSubstitution = governanceLockSubstitution(
+          userParty(2),
+          userParty(3),
+          time(2).toInstant,
+          kind = new splice.governancelock.governancelockkind.GLK_FeaturedApp(
+            provider.toProtoPrimitive
+          ),
+        )
+        // An SV lock has no provider, so its subject never matches an ignored party.
+        val svSubstitution =
+          governanceLockSubstitution(userParty(4), userParty(5), time(2).toInstant)
+        for {
+          store <- mkStore()
+          _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+          _ <- MonadUtil.sequentialTraverse(Seq(faSubstitution, svSubstitution))(
+            dummyDomain.create(_)(store.multiDomainAcsStore)
+          )
+        } yield {
+          def cidsIgnoring(ignored: Set[PartyId]) = store
+            .listExpiredGovernanceLockSubstitutions(
+              Some(new InMemoryUnavailablePartiesStore(ignored))
+            )(time(3), PageLimit.tryCreate(10))(TraceContext.empty)
+            .futureValue
+            .map(_.contract.contractId)
+
+          // The provider is neither proposer nor lock owner, so only the subject column
+          // can filter them out.
+          cidsIgnoring(Set(provider)) should contain theSameElementsAs
+            Seq(svSubstitution.contractId)
+          // Ignoring an unrelated party leaves the SV-kind proposal in place, proving the
+          // subject comparison does not drop rows whose subject is an SV name.
+          cidsIgnoring(Set(userParty(9))) should contain theSameElementsAs
+            Seq(faSubstitution.contractId, svSubstitution.contractId)
+        }
+      }
+
     }
 
     "contractFilter" should {
@@ -2551,6 +2589,8 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
       proposer: PartyId,
       lockOwner: PartyId,
       expiresAt: Instant,
+      kind: splice.governancelock.GovernanceLockKind =
+        new splice.governancelock.governancelockkind.GLK_SuperValidatorRightsOwner("sv1"),
       dso: PartyId = dsoParty,
       contractId: String = nextCid(),
   ): Contract[
@@ -2566,12 +2606,8 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
         new splice.governancelock.GovernanceLockKey(
           dso.toProtoPrimitive,
           lockOwner.toProtoPrimitive,
-          // The kind is always an SV lock here: an FA party observes the proposal but is
-          // not one of the parties the query filters on, so it adds nothing to test.
           new splice.governancelock.governancelockspecification.GLS_FullLock(
-            new splice.governancelock.FullLockSpecification(
-              new splice.governancelock.governancelockkind.GLK_SuperValidatorRightsOwner("sv1")
-            )
+            new splice.governancelock.FullLockSpecification(kind)
           ),
         ),
         proposer.toProtoPrimitive,

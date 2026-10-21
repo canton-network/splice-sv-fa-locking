@@ -1755,8 +1755,15 @@ object SvDsoStore {
           (tc) => pkgVersionSupport.supportsGovernanceLock(Seq(dsoParty), now)(tc)
         },
       ) { contract =>
+        // These describe the lock the proposal targets, not the proposal itself, so that
+        // `listExpiredGovernanceLockSubstitutions` can skip proposals whose lock observers
+        // are unavailable.
+        val (lockType, lockSubject) =
+          GovernanceLockUtil.governanceLockTypeAndSubject(contract.payload.target.specification)
         DsoAcsStoreRowData(
           contract,
+          governanceLockType = Some(lockType),
+          governanceLockSubject = Some(lockSubject),
           contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.expiresAt)),
         )
       },

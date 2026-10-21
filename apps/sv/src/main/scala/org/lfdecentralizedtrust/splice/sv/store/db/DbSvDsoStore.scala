@@ -1338,6 +1338,11 @@ class DbSvDsoStore(
               ) ++ sql" and " ++ notInClause(
                 "create_arguments->'target'->>'owner'",
                 ignoredParties,
+              ) ++ sql" and " ++ notInClause(
+                // Holds the target lock's subject, so this also skips proposals whose
+                // featured app provider is unavailable. Never null, so it cannot drop rows.
+                "governance_lock_subject",
+                ignoredParties,
               )).toActionBuilder
             } else {
               sql""
