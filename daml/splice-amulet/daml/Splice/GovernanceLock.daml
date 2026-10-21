@@ -496,9 +496,8 @@ governanceLock_lockForGovernance_impl dso amount inputs fullSpecification extraA
 
 -- | Release `substitutedAmount` of the locked funds to the owner as part of an approved
 -- substitution. Only the accept step of a `GovernanceLockSubstitution` calls this.
-governanceLock_dsoSubstituteImpl : Party -> Party -> ContractId GovernanceLock -> Decimal -> Text -> ExtraArgs -> Update GovernanceLock_DsoSubstituteResult
-governanceLock_dsoSubstituteImpl dso owner lockCid substitutedAmount reason extraArgs = do
-  let forOwner = ForOwner with dso; owner
+governanceLock_dsoSubstituteImpl : ForOwner -> ContractId GovernanceLock -> Decimal -> Text -> ExtraArgs -> Update GovernanceLock_DsoSubstituteResult
+governanceLock_dsoSubstituteImpl forOwner@ForOwner{..} lockCid substitutedAmount reason extraArgs = do
   lock@GovernanceLock{..} <- fetchAndArchive forOwner lockCid
   case substitutedAmount `compare` amount of
     LT -> do
@@ -524,9 +523,8 @@ governanceLock_dsoSubstituteImpl dso owner lockCid substitutedAmount reason extr
 -- | Split `splitAmount` of the locked funds off into a `LockedAmulet` for a new lock with
 -- `newSpecification`, as part of an approved substitution proposed by the owner of this lock.
 -- Only the accept step of a `GovernanceLockSubstitution` calls this.
-governanceLock_dsoSplitForSubstitutionImpl : Party -> Party -> ContractId GovernanceLock -> Decimal -> GovernanceLockSpecification -> Text -> ExtraArgs -> Update GovernanceLock_DsoSplitForSubstitutionResult
-governanceLock_dsoSplitForSubstitutionImpl dso owner lockCid splitAmount newSpecification reason extraArgs = do
-  let forOwner = ForOwner with dso; owner
+governanceLock_dsoSplitForSubstitutionImpl : ForOwner -> ContractId GovernanceLock -> Decimal -> GovernanceLockSpecification -> Text -> ExtraArgs -> Update GovernanceLock_DsoSplitForSubstitutionResult
+governanceLock_dsoSplitForSubstitutionImpl forOwner@ForOwner{..} lockCid splitAmount newSpecification reason extraArgs = do
   lock@GovernanceLock{..} <- fetchAndArchive forOwner lockCid
   requireMatchExpected ("newSpecification", newSpecification) specification
   let splitLockExpiresAt = governanceLockExpiresAt specification
@@ -593,9 +591,8 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
 -- | Release `transferredAmount` of the locked funds as part of an approved transfer.
 -- The accept step of a `GovernanceLockTransfer` calls this, and locks the unlocked
 -- funds again for the receiver, as only that step has the receiver's authority.
-governanceLock_dsoTransferImpl : Party -> Party -> ContractId GovernanceLock -> Decimal -> Text -> ExtraArgs -> Update GovernanceLock_DsoTransferResult
-governanceLock_dsoTransferImpl dso owner lockCid transferredAmount reason extraArgs = do
-  let forOwner = ForOwner with dso; owner
+governanceLock_dsoTransferImpl : ForOwner -> ContractId GovernanceLock -> Decimal -> Text -> ExtraArgs -> Update GovernanceLock_DsoTransferResult
+governanceLock_dsoTransferImpl forOwner@ForOwner{..} lockCid transferredAmount reason extraArgs = do
   lock@GovernanceLock{..} <- fetchAndArchive forOwner lockCid
   case transferredAmount `compare` amount of
     LT -> do
