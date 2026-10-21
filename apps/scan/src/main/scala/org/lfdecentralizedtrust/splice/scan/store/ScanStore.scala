@@ -491,7 +491,7 @@ object ScanStore {
           },
         ) { contract =>
           val (lockType, lockSubject) =
-            GovernanceLockUtil.governanceLockTypeAndSubject(contract.payload)
+            GovernanceLockUtil.governanceLockTypeAndSubject(contract.payload.specification)
           ScanAcsStoreRowData(
             contract = contract,
             contractExpiresAt = GovernanceLockUtil

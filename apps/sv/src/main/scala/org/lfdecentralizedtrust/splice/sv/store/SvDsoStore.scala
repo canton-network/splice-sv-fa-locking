@@ -1730,7 +1730,7 @@ object SvDsoStore {
           .getVestingLockSpecification(contract.payload)
           .map(v => Timestamp.assertFromInstant(v.endTime))
         val (lockType, lockSubject) =
-          GovernanceLockUtil.governanceLockTypeAndSubject(contract.payload)
+          GovernanceLockUtil.governanceLockTypeAndSubject(contract.payload.specification)
         DsoAcsStoreRowData(
           contract,
           governanceLockType = Some(lockType),

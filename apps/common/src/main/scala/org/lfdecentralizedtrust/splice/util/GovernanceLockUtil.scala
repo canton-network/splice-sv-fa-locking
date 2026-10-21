@@ -21,7 +21,7 @@ object GovernanceLockUtil {
           .asRuntimeException()
     }
 
-  def getSpecificationKind(
+  private def getSpecificationKind(
       specification: gl.GovernanceLockSpecification
   ): gl.GovernanceLockKind =
     foldSpecification(specification)(_.kind, _.kind)
@@ -42,10 +42,14 @@ object GovernanceLockUtil {
       case _ => Seq.empty
     }
 
-  /** Encodes a lock as the `governance_lock_type` and `governance_lock_subject` index columns. */
-  def governanceLockTypeAndSubject(lock: gl.GovernanceLock): (String, String) = {
-    val lockType = foldSpecification(lock.specification)(_ => "f", _ => "v")
-    val (kindTag, subject) = getGovernanceLockKind(lock) match {
+  /** Encodes a lock specification as the `governance_lock_type` and `governance_lock_subject`
+    * index columns.
+    */
+  def governanceLockTypeAndSubject(
+      specification: gl.GovernanceLockSpecification
+  ): (String, String) = {
+    val lockType = foldSpecification(specification)(_ => "f", _ => "v")
+    val (kindTag, subject) = getSpecificationKind(specification) match {
       case kind: gl.governancelockkind.GLK_FeaturedApp => ("fa", kind.provider)
       case kind: gl.governancelockkind.GLK_ProvisionalFeaturedApp => ("pfa", kind.provider)
       case kind: gl.governancelockkind.GLK_SuperValidatorRightsOwner => ("sv", kind.svName)
