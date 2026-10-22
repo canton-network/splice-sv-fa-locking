@@ -8,8 +8,8 @@ import Splice.Amulet (RewardCouponV2(..), SvRewardCoupon)
 import Splice.AmuletRules
 import Splice.Api.RewardAssignmentV1 qualified as Api.RewardAssignmentV1
 import Splice.Api.Token.MetadataV1 (ExtraArgs)
-import Splice.GovernanceLock (fetchAndMergeGovernanceLocksWithTopUp, GovernanceLockKey, TopUpFunds(..))
-import Splice.TokenStandard.Utils (requireMatchExpected)
+import Splice.ExternalPartyAmuletRules (ExternalPartyAmuletRules(..), ExternalPartyAmuletRules_MintSvRewardsIntoLock(..), ExternalPartyAmuletRules_MintSvRewardsIntoLockResult)
+import Splice.GovernanceLock (FullLockSpecification)
 import Splice.Types (ForOwner(..))
 import Splice.Util
 
@@ -124,8 +124,6 @@ template MintingDelegation
 
     nonconsuming choice MintingDelegation_TopUpGovernanceLock : MintingDelegation_TopUpGovernanceLockResult
       with
-        lock : GovernanceLockKey
-          -- ^ The governance lock, owned by the beneficiary, to top up.
         svRewardCoupons : [ContractId SvRewardCoupon]
           -- ^ The beneficiary's SV reward coupons to fund the top-up with.
         svRewardCouponPercentage : Decimal
@@ -133,24 +131,25 @@ template MintingDelegation
           -- minting allowance to top-up the lock with. The remainder is returned as change.
         requestedAt : Time
           -- ^ Time of the request to top up the lock.
+        externalPartyAmuletRulesCid : ContractId ExternalPartyAmuletRules
+        specification : FullLockSpecification
+          -- ^ Specification of the SV lock to mint into.
         extraArgs : ExtraArgs
       controller delegate
       do
         assertWithinDeadline "expiresAt" expiresAt
-        requireMatchExpected ("lock owner", lock.owner) beneficiary
 
-        let funds = TUF_SvRewardCouponFunds with svRewardCoupons; svRewardCouponPercentage
-        fetchAndMergeGovernanceLocksWithTopUp
-          (Some (funds, requestedAt))
-          lock
-          (error "TODO: ExternalPartyTransferContext")
-          (error "TODO: ExternalPartyConfigState")
-          -- In normal calls to `fetchAndMergeGovernanceLocksWithTopUp`, the reason comes from the `cip-127/memo:...`
-          -- in the `reason` metadata field. What should we use here?
-          "TODO: reason"
+        result <- exercise externalPartyAmuletRulesCid ExternalPartyAmuletRules_MintSvRewardsIntoLock with
+          owner = beneficiary
+          specification
+          svRewardCoupons
+          svRewardCouponPercentage
+          requestedAt
+          expectedDso = Some dso
           extraArgs
 
-        pure MintingDelegation_TopUpGovernanceLockResult
+        pure MintingDelegation_TopUpGovernanceLockResult with
+          result
 
     choice MintingDelegation_Reject : MintingDelegation_RejectResult
       controller delegate
@@ -188,7 +187,9 @@ data MintingDelegation_AssignAndMintResult = MintingDelegation_AssignAndMintResu
     transferResult : TransferResult
   deriving (Show, Eq, Serializable)
 
-data MintingDelegation_TopUpGovernanceLockResult = MintingDelegation_TopUpGovernanceLockResult {}
+data MintingDelegation_TopUpGovernanceLockResult = MintingDelegation_TopUpGovernanceLockResult
+  with
+    result : ExternalPartyAmuletRules_MintSvRewardsIntoLockResult
   deriving (Serializable)
 
 instance HasCheckedFetch MintingDelegation ForOwner where
