@@ -6,6 +6,7 @@ module Splice.Scripts.TestGovernanceLockSvRewards where
 
 import DA.Assert ((===))
 import DA.List.Total (last)
+import DA.Map qualified as Map
 import DA.Time
 
 import Daml.Script
@@ -259,7 +260,7 @@ svRewardTopUpArgs rounds svRewardCoupons svRewardCouponPercentage = SvRewardCoup
   svRewardCoupons
   svRewardCouponPercentage
   openingMiningRound = rounds.openRoundCid
-  issuingMiningRounds = [rounds.issuingRoundCid]
+  issuingMiningRounds = Map.singleton rounds.issuingRound.round rounds.issuingRoundCid
 
 -- | Submits `ExternalPartyAmuletRules_MintSvRewardsIntoLock` as the request's owner.
 submitMintSvRewardsIntoLock
