@@ -6,12 +6,10 @@ module Splice.Scripts.TestGovernanceLockSvRewards where
 
 import DA.Assert ((===))
 import DA.List.Total (last)
-import DA.TextMap qualified as TM
 import DA.Time
 
 import Daml.Script
 import Splice.Amulet
-import Splice.Amulet.TokenApiUtils (issuingMiningRoundContextKey, openMiningRoundContextKey)
 import Splice.Api.Token.MetadataV1
 import Splice.ExternalPartyAmuletRules
 import Splice.GovernanceLock
@@ -86,7 +84,7 @@ testMintSvRewardsIntoNewLock = do
   -- The issuance per weight depends on the total weight of the round's coupons,
   -- so pick the percentages from the minted amount.
   let (minted, _) = expectedSvRewardSplit rounds.issuingRound [weight] 1.0
-  require ("The coupon must mint more than 20k CC, but mints " <> show minted) (minted > 20000.0)
+  require ("The coupon must mint more than 20k, but mints " <> show minted) (minted > 20000.0)
 
   -- A new lock below the minimum lock amount is rejected.
   request <- mintSvRewardsRequest env alice svKind [coupon] (1000.0 / minted)
@@ -255,15 +253,13 @@ mintSvRewardsRequest env owner kind coupons percentage = do
     expectedDso = Some env.instrId.admin
     extraDisclosures = mempty
 
--- | Adds the mining rounds to a choice context, as required to mint SV reward coupons.
-svRewardRoundsExtraArgs : ChoiceContext -> SvRewardRounds -> ExtraArgs
-svRewardRoundsExtraArgs context rounds = ExtraArgs with
-  meta = emptyMetadata
-  context = context with
-    values = TM.union context.values $ TM.fromList
-      [ (issuingMiningRoundContextKey, AV_List [AV_ContractId $ toAnyContractId rounds.issuingRoundCid])
-      , (openMiningRoundContextKey, AV_ContractId $ toAnyContractId rounds.openRoundCid)
-      ]
+-- | The arguments to mint `coupons` with the given mining rounds, locking `percentage` of the minted rewards.
+svRewardTopUpArgs : SvRewardRounds -> [ContractId SvRewardCoupon] -> Decimal -> SvRewardCouponTopUpArgs
+svRewardTopUpArgs rounds svRewardCoupons svRewardCouponPercentage = SvRewardCouponTopUpArgs with
+  svRewardCoupons
+  svRewardCouponPercentage
+  openingMiningRound = rounds.openRoundCid
+  issuingMiningRounds = [rounds.issuingRoundCid]
 
 -- | Submits `ExternalPartyAmuletRules_MintSvRewardsIntoLock` as the request's owner.
 submitMintSvRewardsIntoLock
@@ -278,11 +274,10 @@ submitMintSvRewardsIntoLock env rounds MintSvRewardsRequest{..} = do
     exerciseCmd rulesCid ExternalPartyAmuletRules_MintSvRewardsIntoLock with
       owner
       specification = FullLockSpecification with kind
-      svRewardCoupons = coupons
-      svRewardCouponPercentage = percentage
+      topUpArgs = svRewardTopUpArgs rounds coupons percentage
       requestedAt
       expectedDso
-      extraArgs = svRewardRoundsExtraArgs context rounds
+      extraArgs = ExtraArgs with context; meta = emptyMetadata
 
 -- | The `ExternalPartyAmuletRules` contract and its disclosure.
 getExternalPartyAmuletRulesWithDisclosure : AmuletRegistryV2.AmuletRegistry -> Script (ContractId ExternalPartyAmuletRules, Disclosures')

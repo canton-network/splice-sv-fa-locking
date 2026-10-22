@@ -29,7 +29,7 @@ import Splice.AmuletAllocation as AmuletAllocationV1
 import Splice.AmuletAllocationV2 as AmuletAllocationV2
 import Splice.AmuletTransferInstruction
 import Splice.AmuletRules
-import Splice.GovernanceLock (lockManagerParty, TopUpFunds(..), FullLockSpecification, GovernanceLock(..), governanceLock_lockForGovernance_impl)
+import Splice.GovernanceLock (FullLockSpecification, GovernanceLock(..), governanceLock_lockForGovernance_impl, lockManagerParty, SvRewardCouponTopUpArgs, TopUpFunds(..))
 import Splice.GovernanceLock.Request (governanceLock_transferFactoryV1_transferImpl)
 import Splice.DecentralizedSynchronizer (MemberTrafficPurchase(..), parseTrafficPurchaseMemo)
 import Splice.Round (OpenMiningRound(..))
@@ -143,22 +143,17 @@ template ExternalPartyAmuletRules
           -- ^ Lock owner and beneficiary of the Sv reward coupons.
         specification : FullLockSpecification
           -- ^ Specification of the SV lock to mint into.
-        svRewardCoupons : [ContractId SvRewardCoupon]
-        svRewardCouponPercentage : Decimal
-          -- ^ Percentage (specified as a number between 0.0 and 1.0) of the sv reward coupons
-          -- minting allowance to top-up a governance lock with. The remainder is returned as change.
+        topUpArgs : SvRewardCouponTopUpArgs
+          -- ^ SV rewards used to top up the lock.
         requestedAt : Time
         expectedDso : Optional Party
         extraArgs : ExtraArgs
       controller owner
       do
         checkExpectedDso dso expectedDso
-        let funds = TUF_SvRewardCouponFunds with
-              svRewardCoupons
-              svRewardCouponPercentage
         (_, lockCid, changeHolding) <- governanceLock_lockForGovernance_impl
           dso
-          funds
+          (TUF_SvRewardCouponFunds topUpArgs)
           specification
           extraArgs
           owner
