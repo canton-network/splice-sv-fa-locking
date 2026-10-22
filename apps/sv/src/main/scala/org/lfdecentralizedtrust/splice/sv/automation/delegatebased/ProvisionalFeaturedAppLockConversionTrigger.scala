@@ -139,7 +139,7 @@ object ProvisionalFeaturedAppLockConversionTrigger
   ]
 
   override def informees(payload: splice.governancelock.GovernanceLock): Seq[String] =
-    (payload.owner +: GovernanceLockUtil.governanceLockObservers(payload)).distinct
+    GovernanceLockUtil.governanceLockInformees(payload)
 
   override def dso(payload: splice.governancelock.GovernanceLock): String = payload.dso
 }

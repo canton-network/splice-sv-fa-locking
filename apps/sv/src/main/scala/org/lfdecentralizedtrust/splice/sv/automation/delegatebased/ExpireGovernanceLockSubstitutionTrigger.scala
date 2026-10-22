@@ -100,8 +100,7 @@ object ExpireGovernanceLockSubstitutionTrigger
   override def informees(
       payload: substitutionCodegen.GovernanceLockSubstitution
   ): Seq[String] =
-    (payload.owner +: payload.target.owner +:
-      GovernanceLockUtil.specificationObservers(payload.target.specification)).distinct
+    GovernanceLockUtil.substitutionInformees(payload)
 
   override def dso(payload: substitutionCodegen.GovernanceLockSubstitution): String =
     payload.target.dso

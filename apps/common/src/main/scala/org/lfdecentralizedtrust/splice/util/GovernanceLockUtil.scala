@@ -40,8 +40,14 @@ object GovernanceLockUtil {
       case _ => Seq.empty
     }
 
-  def governanceLockObservers(lock: gl.GovernanceLock): Seq[String] =
-    specificationObservers(lock.specification)
+  def governanceLockInformees(lock: gl.GovernanceLock): Seq[String] =
+    (lock.owner +: specificationObservers(lock.specification)).distinct
+
+  def substitutionInformees(
+      substitution: gl.substitution.GovernanceLockSubstitution
+  ): Seq[String] =
+    (substitution.owner +: substitution.target.owner +:
+      specificationObservers(substitution.target.specification)).distinct
 
   /** Encodes a lock as the `governance_lock_type` and `governance_lock_subject` index columns. */
   def specificationTypeAndSubject(

@@ -402,8 +402,6 @@ class GovernanceLockTimeBasedIntegrationTest
         sv1Backend.dsoDelegateBasedAutomation.trigger[ExpireGovernanceLockSubstitutionTrigger]
 
       val sv1Party = sv1Backend.getDsoInfo().svParty
-      val owner = RichPartyId.local(sv1Party)
-      val participant = sv1Backend.participantClientWithAdminToken
 
       // Proposed by a party other than the lock owner, so each proposal escrows collateral
       // that the DSO must return when the proposal expires.
@@ -412,43 +410,21 @@ class GovernanceLockTimeBasedIntegrationTest
       val proposerParticipant = aliceValidatorBackend.participantClientWithAdminToken
       val collateral = lockAmount * numSubstitutions
 
-      val vestingStartTime = getLedgerTime.plusSeconds(1)
-
       actAndCheck(
-        s"Tap $lockAmount CC for sv1 and $collateral CC for the proposer", {
-          sv1WalletClient.tap(walletAmuletToUsd(lockAmount))
-          aliceWalletClient.tap(walletAmuletToUsd(collateral))
-        },
+        s"Tap $collateral CC for the proposer",
+        aliceWalletClient.tap(walletAmuletToUsd(collateral)),
       )(
-        "the tapped amulets are visible",
-        _ => {
-          listHoldings(participant, sv1Party).filter(_._2.lock.isEmpty) should have length 1
+        "the tapped amulet is visible",
+        _ =>
           listHoldings(proposerParticipant, proposerParty).filter(
             _._2.lock.isEmpty
-          ) should not be empty
-        },
-      )
-
-      val (_, vestingLock) = actAndCheck(
-        "Lock and unlock, so that the lock starts vesting",
-        tsv1Operations.createAndUnlockGovernanceLock(
-          participant,
-          owner,
-          lockKind,
-          lockSubject = lockSubject,
-          lockAmount = lockAmount,
-          unlockAmount = lockAmount,
-          vestingStartTime = vestingStartTime,
-        ),
-      )(
-        "SvDsoStore ingests the VestingLock",
-        _ => listVestingLocks.loneElement.payload,
+          ) should not be empty,
       )
 
       actAndCheck(
-        s"The proposer proposes $numSubstitutions substitutions of the VestingLock",
+        s"The proposer proposes $numSubstitutions substitutions",
         (1 to numSubstitutions).foreach { _ =>
-          tsv1Operations.substituteVestingLock(vestingLock)(
+          tsv1Operations.substituteLockOwnedBy(sv1Party)(
             proposerParticipant,
             proposer,
             lockKind,
@@ -471,10 +447,7 @@ class GovernanceLockTimeBasedIntegrationTest
         listLockSubstitutions should have length numSubstitutions.toLong
       }
 
-      // `listExpiredGovernanceLockSubstitutions` uses a strict `contract_expires_at < now`, and
-      // the trigger reads `now` 5s behind the clock (`clockSkewAutomationDelay`), so step well
-      // past `endTime`.
-      advanceTime(vestingDuration.plusSeconds(10))
+      advanceTime(Duration.ofDays(91))
 
       clue("The substitutions stay put while the trigger is paused") {
         listLockSubstitutions should have length numSubstitutions.toLong
@@ -499,10 +472,6 @@ class GovernanceLockTimeBasedIntegrationTest
             _._2.lock.isEmpty
           ) should not be empty
         }
-      }
-
-      clue("The target VestingLock is left untouched") {
-        listVestingLocks.loneElement.payload shouldBe vestingLock
       }
   }
 

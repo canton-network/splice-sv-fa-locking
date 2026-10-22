@@ -420,6 +420,10 @@ trait GovernanceLockTest extends TokenStandardTest {
         )
       )
 
+    /** Propose a substitution of the GovernanceLock owned by `targetOwner` */
+    def substituteLockOwnedBy(targetOwner: PartyId) =
+      new SubstituteLock((Locked, targetOwner, None, None))
+
     final class TransferLock(makeData: (PartyId, BigDecimal) => TransferLockData) {
       final def apply(
           participant: ParticipantClientReference,
