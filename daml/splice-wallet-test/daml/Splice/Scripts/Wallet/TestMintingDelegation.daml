@@ -20,6 +20,14 @@ import Splice.ValidatorLicense
 
 import Splice.Scripts.Util
 
+import Splice.ExternalPartyAmuletRules (ExternalPartyAmuletRules)
+import Splice.GovernanceLock (FullLockSpecification(..), GovernanceLockKind(..))
+import Splice.Scripts.TestGovernanceLocks (expectSuccess, tsv1Operations, testEnvRegistries, submitWithTransferContext, assertFromSome, checkHolding', expectFailureContaining)
+import Splice.Scripts.TestGovernanceLockSvRewards (SvRewardRounds(..), MintSvRewardsRequest(..), createSvRewardCoupons, prepareSvRewardRounds, mintSvRewardsRequest, expectedSvRewardSplit, checkSingleSvLock, getExternalPartyAmuletRulesWithDisclosure, svRewardRoundsExtraArgs)
+import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
+import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
+import Splice.Testing.Utils (discloseMany')
+
 testMintingDelegation : Script ()
 testMintingDelegation = do
   DefaultAppWithUsers{..} <- setupDefaultAppWithUsers
@@ -599,3 +607,123 @@ testMintingDelegation_Mint_rejectsDelegateOwnedInput = do
         context = PaymentTransferContext with context; amuletRules = amuletRulesCid
 
   pure ()
+
+-- Minting SV rewards into SV locks
+-----------------------------------
+
+-- | The delegate mints a share of the beneficiary's SV rewards into the beneficiary's SV lock,
+-- and the rest is paid out to the beneficiary as liquid change.
+testMintingDelegation_TopUpGovernanceLock : Script ()
+testMintingDelegation_TopUpGovernanceLock = do
+  env@(TestEnv {..}) <- setupTest
+  let beneficiary = alice
+      delegate = charlie
+      dso = instrId.admin
+      svKind = GLK_SuperValidatorRightsOwner "TestSV"
+      weight = 1000
+
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 beneficiary 30000.0
+  initialLockCid <- expectSuccess $
+    tsv1Operations.governanceLock (testEnvRegistries env) beneficiary 20000.0 svKind
+
+  now <- getTime
+  delegationCid <- createMintingDelegation dso beneficiary delegate (now `addRelTime` days 30)
+  [coupon] <- createSvRewardCoupons dso provider1 beneficiary [weight]
+  rounds <- prepareSvRewardRounds dso
+
+  request <- mintSvRewardsRequest env beneficiary svKind [coupon] 0.7
+  MintingDelegation_TopUpGovernanceLockResult result <- expectSuccess $
+    submitTopUpGovernanceLock env rounds delegate delegationCid request
+
+  let (locked, change) = expectedSvRewardSplit rounds.issuingRound [weight] 0.7
+  checkSingleSvLock beneficiary result.lockCid (20000.0 + locked)
+  archivedLock <- queryContractId beneficiary initialLockCid
+  require "The initial lock was merged into the topped-up lock" (archivedLock == None)
+  changeCid <- assertFromSome "Expected change for a 70% top-up" result.changeHolding
+  checkHolding' beneficiary changeCid change
+
+-- | The delegate cannot mint into a lock once the delegation has expired.
+testMintingDelegation_TopUpGovernanceLock_checksExpiry : Script ()
+testMintingDelegation_TopUpGovernanceLock_checksExpiry = do
+  env@(TestEnv {..}) <- setupTest
+  let beneficiary = alice
+      delegate = charlie
+      dso = instrId.admin
+      svKind = GLK_SuperValidatorRightsOwner "TestSV"
+
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 beneficiary 30000.0
+  _ <- expectSuccess $
+    tsv1Operations.governanceLock (testEnvRegistries env) beneficiary 20000.0 svKind
+  [coupon] <- createSvRewardCoupons dso provider1 beneficiary [1000]
+  rounds <- prepareSvRewardRounds dso
+
+  now <- getTime
+  delegationCid <- createMintingDelegation dso beneficiary delegate (now `addRelTime` minutes 1)
+  passTime (minutes 2)
+
+  request <- mintSvRewardsRequest env beneficiary svKind [coupon] 0.7
+  expectFailureContaining "Ledger time is at or past deadline 'expiresAt'"
+    =<< submitTopUpGovernanceLock env rounds delegate delegationCid request
+
+-- | Only the delegate can exercise the choice, not even the beneficiary.
+testMintingDelegation_TopUpGovernanceLock_onlyDelegate : Script ()
+testMintingDelegation_TopUpGovernanceLock_onlyDelegate = do
+  env@(TestEnv {..}) <- setupTest
+  let beneficiary = alice
+      delegate = charlie
+      dso = instrId.admin
+      svKind = GLK_SuperValidatorRightsOwner "TestSV"
+
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 beneficiary 30000.0
+  _ <- expectSuccess $
+    tsv1Operations.governanceLock (testEnvRegistries env) beneficiary 20000.0 svKind
+
+  now <- getTime
+  delegationCid <- createMintingDelegation dso beneficiary delegate (now `addRelTime` days 30)
+  [coupon] <- createSvRewardCoupons dso provider1 beneficiary [1000]
+  rounds <- prepareSvRewardRounds dso
+
+  request <- mintSvRewardsRequest env beneficiary svKind [coupon] 0.7
+  result <- submitTopUpGovernanceLock env rounds beneficiary delegationCid request
+  case result of
+    Left _ -> pure ()
+    Right _ -> fail "Expected the beneficiary to be unable to exercise MintingDelegation_TopUpGovernanceLock"
+
+  -- The delegate can still use the coupon.
+  _ <- expectSuccess $ submitTopUpGovernanceLock env rounds delegate delegationCid request
+  pure ()
+
+-- | Creates an accepted minting delegation from `beneficiary` to `delegate`.
+createMintingDelegation : Party -> Party -> Party -> Time -> Script (ContractId MintingDelegation)
+createMintingDelegation dso beneficiary delegate expiresAt = do
+  proposalCid <- submit beneficiary $ createCmd MintingDelegationProposal with
+    delegation = MintingDelegation with
+      dso
+      beneficiary
+      delegate
+      expiresAt
+      amuletMergeLimit = 10
+  MintingDelegationProposal_AcceptResult delegationCid <- submit delegate $ exerciseCmd proposalCid MintingDelegationProposal_Accept with
+    existingDelegationCid = None
+  pure delegationCid
+
+-- | Submits `MintingDelegation_TopUpGovernanceLock` as `submitter`, reading as the request's owner (the beneficiary).
+submitTopUpGovernanceLock
+  :  TestEnv
+  -> SvRewardRounds
+  -> Party
+  -> ContractId MintingDelegation
+  -> MintSvRewardsRequest
+  -> Script (Either SubmitError MintingDelegation_TopUpGovernanceLockResult)
+submitTopUpGovernanceLock env rounds submitter delegationCid request = do
+  let registry = env.registriesEnv.amuletV2
+  (rulesCid : ContractId ExternalPartyAmuletRules, rulesD) <- getExternalPartyAmuletRulesWithDisclosure registry
+  submitWithTransferContext registry
+    (actAs submitter <> readAs request.owner <> discloseMany' (rulesD <> rounds.disclosures <> request.extraDisclosures))
+    \context -> exerciseCmd delegationCid MintingDelegation_TopUpGovernanceLock with
+      svRewardCoupons = request.coupons
+      svRewardCouponPercentage = request.percentage
+      requestedAt = request.requestedAt
+      externalPartyAmuletRulesCid = rulesCid
+      specification = FullLockSpecification with kind = request.kind
+      extraArgs = svRewardRoundsExtraArgs context rounds
