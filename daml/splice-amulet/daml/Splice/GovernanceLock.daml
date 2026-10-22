@@ -513,7 +513,7 @@ calculateUnvestedAmount currentTime vestingAmount VestingLockSpecification{..}
 -- | Create a `GovernanceLock`, used by the core implementation of token standard interfaces.
 governanceLock_lockForGovernance_impl
   : Party
- -> TopUpFunds -- Should this be renamed?
+ -> TopUpFunds
  -> FullLockSpecification
  -> ExtraArgs
  -> Party
