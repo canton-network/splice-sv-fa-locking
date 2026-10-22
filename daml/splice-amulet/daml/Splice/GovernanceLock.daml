@@ -298,7 +298,7 @@ data SvRewardCouponTopUpArgs = SvRewardCouponTopUpArgs with
       -- ^ Percentage (specified as a number between 0.0 and 1.0) of the SV reward coupons
       -- minting allowance to top-up a governance lock with. The remainder is returned as change.
     openingMiningRound : ContractId OpenMiningRound
-    issuingMiningRounds : [ContractId IssuingMiningRound]
+    issuingMiningRounds : Map.Map Round (ContractId IssuingMiningRound)
   deriving (Eq, Show, Serializable)
 
 data TopUpFunds
@@ -876,19 +876,6 @@ lockStateFromText = dataFromText lockStateToText [minBound .. maxBound]
 -- SV Reward Coupon Helpers
 ---------------------------
 
-fetchAndValidateIssuingMiningRounds : [AnyValue] -> ForDso -> Update (Map.Map Round IssuingMiningRound, Map.Map Round (ContractId IssuingMiningRound))
-fetchAndValidateIssuingMiningRounds vals forDso = do
-  issuingMiningRounds <- forA vals $ \(AV_ContractId cid) -> do
-    let issuingMiningRoundCid = fromAnyContractId cid
-    issuingMiningRound <- fetchReferenceData @IssuingMiningRound forDso issuingMiningRoundCid
-    let round = issuingMiningRound.round
-    assertDeadlineExceeded ("issuingMiningRound[" <> show round.number <> "].opensAt") issuingMiningRound.opensAt
-    pure (round, (issuingMiningRound, issuingMiningRoundCid))
-  let issuingMiningRounds' = [(round, miningRound) | (round, (miningRound, _)) <- issuingMiningRounds]
-      issuingMiningRoundCids = [(round, miningRoundCid) | (round, (_, miningRoundCid)) <- issuingMiningRounds]
-  pure (Map.fromList issuingMiningRounds', Map.fromList issuingMiningRoundCids)
-
-
 getSvRewardInputAmuletAndChange
   :  SvRewardCouponTopUpArgs
   -> ForOwner
@@ -897,12 +884,10 @@ getSvRewardInputAmuletAndChange
 getSvRewardInputAmuletAndChange SvRewardCouponTopUpArgs{svRewardCoupons = []} _ _ = pure ([], 0.0)
 getSvRewardInputAmuletAndChange SvRewardCouponTopUpArgs{..} forOwner transferEventsV2EventLog = do
   let dso = forOwner.dso
-  (_, issuingMiningRoundCidsMap) <-
-    fetchAndValidateIssuingMiningRounds (toAnyValue <$> issuingMiningRounds) $ ForDso with dso
 
   let transferContext = TransferContext with
         openMiningRound = openingMiningRound
-        issuingMiningRounds = issuingMiningRoundCidsMap
+        issuingMiningRounds
         validatorRights = Map.empty
         featuredAppRight = None
       transfer = Splice.AmuletRules.Transfer with
