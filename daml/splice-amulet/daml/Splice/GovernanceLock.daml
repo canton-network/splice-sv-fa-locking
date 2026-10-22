@@ -340,6 +340,9 @@ fetchAndMergeGovernanceLocksWithTopUp newFunds key context state reason extraArg
           require' ("amount", amount) isGreaterOrEqualR ("zero", 0.0)
           pure (holdings, amount)
         Some (TUF_SvRewardCouponFunds{..}, _) -> do
+          case key.specification of
+            GLS_FullLock FullLockSpecification{kind = GLK_SuperValidatorRightsOwner _} -> pure ()
+            specification -> assertFail $ "SV reward coupons can only fund SV locks, got: " <> show specification
           require' ("svRewardCouponPercentage", svRewardCouponPercentage) isGreaterOrEqualR ("zero", 0.0)
           require' ("svRewardCouponPercentage", svRewardCouponPercentage) isLessOrEqualR ("one", 1.0)
           getSvRewardInputAmuletAndChange
@@ -509,21 +512,19 @@ calculateUnvestedAmount currentTime vestingAmount VestingLockSpecification{..}
 -- | Create a `GovernanceLock`, used by the core implementation of token standard interfaces.
 governanceLock_lockForGovernance_impl
   : Party
- -> Decimal
- -> [ContractId Holding]
+ -> TopUpFunds -- Should this be renamed?
  -> FullLockSpecification
  -> ExtraArgs
  -> Party
  -> Time
  -> Text
  -> Update (GovernanceLock, ContractId GovernanceLock, Optional (ContractId Amulet))
-governanceLock_lockForGovernance_impl dso amount inputs fullSpecification extraArgs owner requestedAt reason = do
+governanceLock_lockForGovernance_impl dso funds fullSpecification extraArgs owner requestedAt reason = do
   let specification = GLS_FullLock fullSpecification
   assertInPast24Hours "requestedAt" requestedAt
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  let liquidFunds = TUF_LiquidFunds with amount; holdings = inputs
   FetchAndMergeLocksResult{lock, lockCid, changeHolding} <- fetchAndMergeGovernanceLocksWithTopUp
-    (Some (liquidFunds, requestedAt))
+    (Some (funds, requestedAt))
     (GovernanceLockKey with dso; owner; specification)
     context
     state
