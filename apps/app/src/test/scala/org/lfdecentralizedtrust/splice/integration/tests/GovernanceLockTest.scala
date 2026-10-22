@@ -242,8 +242,9 @@ trait GovernanceLockTest extends TokenStandardTest {
         env: SpliceTestConsoleEnvironment
     ): ChoiceContextWithDisclosures
 
-    private def defaultIsValid(receiver: String, existingCids: Set[CId]): (CId, View) => Boolean =
-      (cid, view) => transferValues.receiver(view) == receiver && !existingCids.contains(cid)
+    private def defaultIsValid(receiver: PartyId, existingCids: Set[CId]): (CId, View) => Boolean =
+      (cid, view) =>
+        transferValues.receiver(view) == receiver.toProtoPrimitive && !existingCids.contains(cid)
 
     private def transferAndList(
         actClue: String,
@@ -288,7 +289,7 @@ trait GovernanceLockTest extends TokenStandardTest {
         amount,
         makeInputLockMemo(CreateLock, lockKind, lockSubject)(()),
         wait = true,
-        defaultIsValid(lockManagerParty.toProtoPrimitive, existingCids),
+        defaultIsValid(lockManagerParty, existingCids),
       ).loneElement._1
     }
 
@@ -322,10 +323,7 @@ trait GovernanceLockTest extends TokenStandardTest {
             (unlockAmount, vestingStartTime)
           ),
           wait = false,
-          (cid, view) =>
-            defaultIsValid(lockManagerParty.toProtoPrimitive, existingCids)(cid, view) && isValid(
-              view
-            ),
+          (cid, view) => defaultIsValid(lockManagerParty, existingCids)(cid, view) && isValid(view),
         )
       )
     }
@@ -379,7 +377,7 @@ trait GovernanceLockTest extends TokenStandardTest {
           // A substitution proposed by the owner of the target lock locks no funds,
           // so no input holding is archived
           wait = owner.partyId != targetLockOwner,
-          defaultIsValid(targetLockOwner.toProtoPrimitive, existingCids),
+          defaultIsValid(targetLockOwner, existingCids),
         ).loneElement._1
       }
     }
@@ -426,7 +424,7 @@ trait GovernanceLockTest extends TokenStandardTest {
           ),
           // A lock transfer proposal moves no funds, so no input holding is archived
           wait = false,
-          defaultIsValid(newLockOwner.toProtoPrimitive, existingCids),
+          defaultIsValid(newLockOwner, existingCids),
         ).loneElement._1
       }
     }
