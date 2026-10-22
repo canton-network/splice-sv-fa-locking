@@ -4,12 +4,14 @@
 module Splice.Scripts.TestAmuletRulesConfigValidation where
 
 import DA.Assert
+import DA.Date (Month(..), date)
 import DA.Time
 import Daml.Script
 
 import Splice.AmuletRules
 import Splice.AmuletConfig
 import Splice.Fees
+import Splice.Schedule
 import Splice.Testing.Registries.AmuletRegistry.Parameters
 import Splice.Scripts.Util
 
@@ -35,6 +37,46 @@ testAmuletRulesConfigValidation = do
     exerciseCmd amuletRulesCid AmuletRules_SetConfig with
       newConfig = makeAmuletConfig (negate (minutes 20)) (RatePerRound 0.000020)
       baseConfig = amuletRules.configSchedule.initialValue
+
+  pure ()
+
+testAmuletRulesSvUnderlockConfigValidation : Script ()
+testAmuletRulesSvUnderlockConfigValidation = do
+  DefaultAppWithUsers{..} <- setupDefaultAppWithUsers
+
+  [(amuletRulesCid, amuletRules)] <- query @AmuletRules app.dso
+  let currentConfig = amuletRules.configSchedule.initialValue
+      activeLockConfig = (svUnderlockEnforcementLockConfig (time (date 2027 Jan 1) 0 0 0)) with
+        superValidatorUnderlockEnforcementTerminatesAfter = Some (days (365 * 5 + 30))
+        superValidatorWeightSchedule = Some defaultSvWeightSchedule
+
+  -- An invalid SV underlock config is rejected: activation without the permanent grace period
+  submitMustFail (actAs app.dso <> readAs app.dso) $
+    exerciseCmd amuletRulesCid AmuletRules_SetConfig with
+      newConfig = currentConfig with
+        governanceLockConfig = Some activeLockConfig with
+          superValidatorUnderlockPermanentGracePeriod = None
+      baseConfig = currentConfig
+
+  -- An invalid SV weight schedule is rejected: tiers out of order
+  submitMustFail (actAs app.dso <> readAs app.dso) $
+    exerciseCmd amuletRulesCid AmuletRules_SetConfig with
+      newConfig = currentConfig with
+        governanceLockConfig = Some activeLockConfig with
+          superValidatorWeightSchedule = Some Schedule with
+            initialValue = [SvLockingTier 0.45 0.6, SvLockingTier 0.7 1.0]
+            futureValues = []
+      baseConfig = currentConfig
+
+  -- A valid SV underlock config is accepted
+  submit (actAs app.dso <> readAs app.dso) $
+    exerciseCmd amuletRulesCid AmuletRules_SetConfig with
+      newConfig = currentConfig with
+        governanceLockConfig = Some activeLockConfig
+      baseConfig = currentConfig
+
+  [(_, amuletRules)] <- query @AmuletRules app.dso
+  amuletRules.configSchedule.initialValue.governanceLockConfig === Some activeLockConfig
 
   pure ()
 

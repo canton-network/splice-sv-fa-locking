@@ -27,8 +27,20 @@ template FeaturedAppUnderlockInstruction with
   where
     signatory dso
 
+-- | A record of governance consensus that a SV provider was underlocked.
+template SvUnderlockInstruction with
+    dso : Party
+    svName : Text
+    qualifyingFactor : Decimal
+    observedAt : Time
+  where
+    signatory dso
+
 instance HasCheckedFetch FeaturedAppConfigUpdateInstruction ForDso where
   contractGroupId FeaturedAppConfigUpdateInstruction {..} = ForDso with dso
 
 instance HasCheckedFetch FeaturedAppUnderlockInstruction ForDso where
   contractGroupId FeaturedAppUnderlockInstruction {..} = ForDso with dso
+
+instance HasCheckedFetch SvUnderlockInstruction ForDso where
+  contractGroupId SvUnderlockInstruction {..} = ForDso with dso

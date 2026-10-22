@@ -5,7 +5,7 @@ module Splice.AmuletConfig where
 
 import DA.Optional
 import DA.Time
-import DA.TextMap
+import DA.TextMap hiding (filter, null)
 
 import Splice.Fees
 import Splice.DecentralizedSynchronizer
@@ -153,6 +153,7 @@ validAmuletConfig AmuletConfig
     , featuredAppActivityMarkerAmount
     , rewardConfig
     , minDevelopmentFundMintingDelay
+    , governanceLockConfig
     }
   =
     validTransferConfig transferConfig &&
@@ -164,7 +165,8 @@ validAmuletConfig AmuletConfig
     optional True (>= 0.0) featuredAppActivityMarkerAmount &&
     featuredAppActivityMarkerAmount == Some transferConfig.extraFeaturedAppRewardAmount &&
     optional True validRewardConfig rewardConfig &&
-    optional True (>= days 0) minDevelopmentFundMintingDelay
+    optional True (>= days 0) minDevelopmentFundMintingDelay &&
+    optional True validGovernanceLockConfig governanceLockConfig
 
 validTransferConfig : TransferConfig unit -> Bool
 validTransferConfig TransferConfig
@@ -235,7 +237,57 @@ data GovernanceLockConfig = GovernanceLockConfig with
     featuredAppUnderlockGracePeriod : Optional RelTime
       -- ^ How long an underlocked provider has to cure before its right becomes archivable.
       --   Default: 7 days.
+    superValidatorUnderlockEnforcementActivatesAt : Optional Time
+      -- ^ Time from which SV reward mints are tracked on ledger and SV underlocks are enforced.
+      --   Default: None
+    superValidatorUnderlockEnforcementTerminatesAfter : Optional RelTime
+      -- ^ Point on the issuance curve from which SV under locks are no longer enforced.
+      --   Default: 5 years and 30 days.
+    superValidatorUnderlockPermanentGracePeriod : Optional RelTime
+      -- ^ How long an underlocked sv has to cure before it permanently drops a reward tier.
+      --   Default: 30 days.
+    superValidatorWeightSchedule : Optional (Schedule RelTime [SvLockingTier])
+      -- ^ Tiers in effect, keyed by the time elapsed since `superValidatorUnderlockEnforcementActivatesAt`.
+      -- Tiers are sorted from highest to lowest. An SV below lowest tier earns 0
+      -- Default: Refer to table in CIP-0105 section 5.
   deriving (Show, Eq, Serializable)
+
+validGovernanceLockConfig : GovernanceLockConfig -> Bool
+validGovernanceLockConfig GovernanceLockConfig
+    { minimumLockAmount
+    , superValidatorLockVestingDuration
+    , featuredAppLockVestingDuration
+    , featuredAppLockThreshold
+    , featuredAppUnderlockGracePeriod
+    , superValidatorUnderlockEnforcementTerminatesAfter
+    , superValidatorUnderlockEnforcementActivatesAt
+    , superValidatorUnderlockPermanentGracePeriod
+    , superValidatorWeightSchedule
+    }
+  =
+    optional True (> 0.0) minimumLockAmount
+    && optional True (\_ -> isSome superValidatorUnderlockPermanentGracePeriod) superValidatorUnderlockEnforcementActivatesAt
+    && optional True validSuperValidatorWeightSchedule superValidatorWeightSchedule
+    && optional True (> days 0) superValidatorUnderlockPermanentGracePeriod
+    && optional True (> days 0) superValidatorLockVestingDuration
+    && optional True (> days 0) featuredAppLockVestingDuration
+    && optional True (> days 0) featuredAppUnderlockGracePeriod
+    && optional True (> 0.0) featuredAppLockThreshold
+    && optional True (> days 0) superValidatorUnderlockEnforcementTerminatesAfter
+
+
+validSuperValidatorWeightSchedule : Schedule RelTime [SvLockingTier] -> Bool
+validSuperValidatorWeightSchedule schedule = validSchedule schedule validTierList
+
+validTierList : [SvLockingTier] -> Bool
+validTierList tiers = not (null tiers)
+    && all validTier tiers
+    && isDecreasing (map (.minLockedFraction) tiers)
+    && isDecreasing (map (.rewardWeightFactor) tiers)
+  where
+    validTier t = 0.0 <= t.minLockedFraction && t.minLockedFraction <= 1.0
+      && 0.0 < t.rewardWeightFactor && t.rewardWeightFactor <= 1.0
+    isDecreasing xs = and (zipWith (>) xs $ drop 1 xs)
 
 getGovernanceLockConfigValue : a -> (GovernanceLockConfig -> Optional a) -> Optional GovernanceLockConfig -> a
 getGovernanceLockConfigValue defaultValue getValue config = fromOptional defaultValue $ config >>= getValue
@@ -249,11 +301,45 @@ governanceLockSuperValidatorLockVestingDuration = getGovernanceLockConfigValue (
 governanceLockFeaturedAppLockVestingDuration : Optional GovernanceLockConfig -> RelTime
 governanceLockFeaturedAppLockVestingDuration = getGovernanceLockConfigValue (days 60) (.featuredAppLockVestingDuration)
 
+governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter : Optional GovernanceLockConfig -> RelTime
+governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter = getGovernanceLockConfigValue (days (365 * 5 + 30)) (.superValidatorUnderlockEnforcementTerminatesAfter)
+
+governanceLockSuperValidatorUnderlockPermanentGracePeriod : Optional GovernanceLockConfig -> RelTime
+governanceLockSuperValidatorUnderlockPermanentGracePeriod = getGovernanceLockConfigValue (days 30) (.superValidatorUnderlockPermanentGracePeriod)
+
 governanceLockFeaturedAppUnderlockGracePeriod : Optional GovernanceLockConfig -> RelTime
 governanceLockFeaturedAppUnderlockGracePeriod = getGovernanceLockConfigValue (days 7) (.featuredAppUnderlockGracePeriod)
 
 governanceLockFeaturedAppLockThreshold : Optional GovernanceLockConfig -> Decimal
 governanceLockFeaturedAppLockThreshold = getGovernanceLockConfigValue 5_000_000.0 (.featuredAppLockThreshold)
+
+governanceLockSuperValidatorWeightSchedule : Optional GovernanceLockConfig -> Schedule RelTime [SvLockingTier]
+governanceLockSuperValidatorWeightSchedule = getGovernanceLockConfigValue defaultSvWeightSchedule (.superValidatorWeightSchedule)
+
+-- | Represents a SV locking tier. An SV that has locked at least `minLockedFraction` of its
+-- lifetime SV rewards earns `rewardWeightFactor` of its SV weight.
+data SvLockingTier = SvLockingTier with
+    minLockedFraction : Decimal -- ^ Should be between [0.0, 1.0] inclusive
+    rewardWeightFactor : Decimal -- ^ Should be between (0.0, 1.0] where 0.0 is not inclusive
+  deriving (Eq, Show, Serializable)
+
+defaultSvWeightSchedule : Schedule RelTime [SvLockingTier]
+defaultSvWeightSchedule = Schedule with
+    initialValue = [tier 0.7 1.0, tier 0.45 0.6, tier 0.35 0.4]
+    futureValues =
+      [ (years 1, [tier 0.65 1.0, tier 0.5 0.6])
+      , (years 2, [tier 0.6  1.0])
+      , (years 3, [tier 0.55 1.0])
+      ]
+  where
+    tier = SvLockingTier
+    years n = days (365 * n) + hours (6 * n) -- 365.25 days a year
+
+svLockingWeightFactor : [SvLockingTier] -> Decimal -> Decimal -> Decimal
+svLockingWeightFactor tiers lifetimeRewardTotal lockedAmount =
+  case filter (\t -> lockedAmount >= t.minLockedFraction * lifetimeRewardTotal) tiers of
+    t :: _ -> t.rewardWeightFactor
+    [] -> 0.0
 
 instance Patchable RewardVersion where
   patch = patchScalar
@@ -313,3 +399,10 @@ instance Patchable GovernanceLockConfig where
     featuredAppLockVestingDuration = patch new.featuredAppLockVestingDuration base.featuredAppLockVestingDuration current.featuredAppLockVestingDuration
     featuredAppLockThreshold = patch new.featuredAppLockThreshold base.featuredAppLockThreshold current.featuredAppLockThreshold
     featuredAppUnderlockGracePeriod = patch new.featuredAppUnderlockGracePeriod base.featuredAppUnderlockGracePeriod current.featuredAppUnderlockGracePeriod
+    superValidatorUnderlockEnforcementTerminatesAfter = patch new.superValidatorUnderlockEnforcementTerminatesAfter base.superValidatorUnderlockEnforcementTerminatesAfter current.superValidatorUnderlockEnforcementTerminatesAfter
+    superValidatorUnderlockEnforcementActivatesAt = patch new.superValidatorUnderlockEnforcementActivatesAt base.superValidatorUnderlockEnforcementActivatesAt current.superValidatorUnderlockEnforcementActivatesAt
+    superValidatorUnderlockPermanentGracePeriod = patch new.superValidatorUnderlockPermanentGracePeriod base.superValidatorUnderlockPermanentGracePeriod current.superValidatorUnderlockPermanentGracePeriod
+    superValidatorWeightSchedule = patch new.superValidatorWeightSchedule base.superValidatorWeightSchedule current.superValidatorWeightSchedule
+
+instance Patchable [SvLockingTier] where
+  patch = patchScalar

@@ -1,0 +1,228 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.Scripts.TestSvUnderlockState where
+
+import DA.Action (unless)
+import DA.Assert
+import DA.Date
+import DA.Foldable (forA_)
+import DA.Time
+
+import Daml.Script
+
+import Splice.DSO.SvState
+
+-- Shared values
+----------------
+
+t0 : Time
+t0 = datetime 2027 Jan 1 0 0 0
+
+-- | `n` days after `t0`.
+day : Int -> Time
+day n = t0 `addRelTime` days n
+
+permanentGrace : RelTime
+permanentGrace = days 30
+
+oneMicro : RelTime
+oneMicro = convertMicrosecondsToRelTime 1
+
+event : Time -> Decimal -> UnderlockEvent
+event startTime newFactor = UnderlockEvent with startTime; newFactor
+
+adjState : Decimal -> [UnderlockEvent] -> RewardAdjustmentState
+adjState permanentWeightFactor recoverableUnderlocks = RewardAdjustmentState with
+  permanentWeightFactor
+  recoverableUnderlocks
+  lastAdjustedAt = None
+
+-- | `recoverableUnderlocks` is newest first, factors strictly increase along the list,
+-- and every factor is below `permanentWeightFactor`.
+invariantHolds : RewardAdjustmentState -> Bool
+invariantHolds s =
+  and (zipWith (\newer older -> newer.startTime >= older.startTime && newer.newFactor < older.newFactor) events (drop 1 events))
+  && all (\e -> e.newFactor < s.permanentWeightFactor) events
+  where events = s.recoverableUnderlocks
+
+checkInvariant : RewardAdjustmentState -> Script ()
+checkInvariant s = unless (invariantHolds s) $ abort ("invariant violated: " <> show s)
+
+-- | One apply step as `DsoRules_ExecuteSvUnderlockInstruction` does it: promote, then apply.
+applyAt : Time -> Decimal -> RewardAdjustmentState -> RewardAdjustmentState
+applyAt observedAt warranted =
+  applyWarrantedFactor observedAt warranted . promotePermanent (observedAt `addRelTime` negate permanentGrace)
+
+-- | The factor coupon creation applies, read back through `getAdjustedRewardWeight` with a weight of 10000
+-- (exact for the two-decimal factors used here).
+factorOf : RewardAdjustmentState -> Decimal
+factorOf s = intToDecimal (getAdjustedRewardWeight (Some s) 10000) / 10000.0
+
+-- applyWarrantedFactor
+-----------------------
+
+test_applyWarrantedFactor : Script ()
+test_applyWarrantedFactor = script do
+  let fresh = defaultRewardAdjustmentState
+  applyWarrantedFactor (day 1) 0.6 fresh === adjState 1.0 [event (day 1) 0.6]
+
+  -- Full recovery or no underlock at all: nothing recorded
+  applyWarrantedFactor (day 1) 1.0 fresh === fresh
+  applyWarrantedFactor (day 2) 1.0 (adjState 1.0 [event (day 1) 0.6]) === fresh
+
+  -- Re-observing the same factor keeps the original start time
+  let single = adjState 1.0 [event (day 1) 0.6]
+  applyWarrantedFactor (day 5) 0.6 single === single
+
+  -- A deeper underlock is added in front, the older one stays
+  let staggered = applyWarrantedFactor (day 4) 0.4 single
+  staggered === adjState 1.0 [event (day 4) 0.4, event (day 1) 0.6]
+
+  -- Partial recovery to a level that was recorded before: back to that event and its start time
+  applyWarrantedFactor (day 6) 0.6 staggered === single
+
+  -- Partial recovery to a new level keeps the start time of the oldest recovered event
+  applyWarrantedFactor (day 6) 0.5 staggered === adjState 1.0 [event (day 4) 0.5, event (day 1) 0.6]
+
+  -- Recovery above every recorded event clears them
+  applyWarrantedFactor (day 6) 1.0 staggered === fresh
+  applyWarrantedFactor (day 6) 0.8 staggered === adjState 1.0 [event (day 1) 0.8]
+
+  -- With a permanent factor: anything at or above it clears the recoverable events, below it underlocks
+  let permanent = adjState 0.6 [event (day 40) 0.4]
+  applyWarrantedFactor (day 41) 1.0 permanent === adjState 0.6 []
+  applyWarrantedFactor (day 41) 0.6 permanent === adjState 0.6 []
+  applyWarrantedFactor (day 41) 0.4 permanent === permanent
+  applyWarrantedFactor (day 41) 0.0 permanent === adjState 0.6 [event (day 41) 0.0, event (day 40) 0.4]
+
+  -- LastAdjustedAt is left alone
+  let withLastAdjusted = single with lastAdjustedAt = Some (day 1)
+  (applyWarrantedFactor (day 5) 0.4 withLastAdjusted).lastAdjustedAt === Some (day 1)
+
+  forA_ [single, staggered, permanent] checkInvariant
+
+-- promotePermanent
+-------------------
+
+test_promotePermanent : Script ()
+test_promotePermanent = script do
+  let staggered = adjState 1.0 [event (day 4) 0.4, event (day 1) 0.6]
+
+  -- nothing old enough: unchanged
+  promotePermanent (day 1 `addRelTime` negate oneMicro) staggered === staggered
+  promotePermanent (day 1 `addRelTime` negate oneMicro) defaultRewardAdjustmentState === defaultRewardAdjustmentState
+  -- an event exactly at the cutoff becomes permanent; newer ones stay recoverable
+  promotePermanent (day 1) staggered === adjState 0.6 [event (day 4) 0.4]
+  promotePermanent (day 3) staggered === adjState 0.6 [event (day 4) 0.4]
+  -- both old enough: the newest (lowest) one is the permanent factor
+  promotePermanent (day 4) staggered === adjState 0.4 []
+  -- an existing lower permanent factor is never raised
+  promotePermanent (day 4) (adjState 0.3 [event (day 4) 0.2]) === adjState 0.2 []
+  promotePermanent (day 10) (adjState 0.3 []) === adjState 0.3 []
+
+  -- lastAdjustedAt is left alone
+  let withLastAdjusted = staggered with lastAdjustedAt = Some (day 4)
+  (promotePermanent (day 4) withLastAdjusted).lastAdjustedAt === Some (day 4)
+
+  checkInvariant (promotePermanent (day 1) staggered)
+
+-- Coupon weight
+----------------
+
+-- | Underlocks take effect immediately: the factor is the newest recorded underlock's, otherwise the permanent factor.
+test_couponFactor : Script ()
+test_couponFactor = script do
+  factorOf defaultRewardAdjustmentState === 1.0
+  factorOf (adjState 0.6 []) === 0.6
+  factorOf (adjState 1.0 [event (day 1) 0.6]) === 0.6
+  -- the newest underlock has the lowest factor
+  factorOf (adjState 1.0 [event (day 4) 0.4, event (day 1) 0.6]) === 0.4
+  -- a recoverable underlock below the permanent factor takes precedence
+  factorOf (adjState 0.6 [event (day 40) 0.4]) === 0.4
+
+test_getAdjustedRewardWeight : Script ()
+test_getAdjustedRewardWeight = script do
+  getAdjustedRewardWeight None 30000 === 30000
+  getAdjustedRewardWeight (Some defaultRewardAdjustmentState) 30000 === 30000
+  getAdjustedRewardWeight (Some (adjState 1.0 [event (day 1) 0.6])) 30000 === 18000
+  getAdjustedRewardWeight (Some (adjState 0.0 [])) 30000 === 0
+  -- rounds down
+  getAdjustedRewardWeight (Some (adjState 0.6 [])) 3 === 1
+
+-- CIP-0105 examples, step by step through promote + apply
+-----------------------------------------------------------
+
+-- | Temporary loss and recovery: the factor drops immediately and comes back on recovery.
+test_cipTemporaryLossAndRecovery : Script ()
+test_cipTemporaryLossAndRecovery = script do
+  let s1 = applyAt (day 0) 0.6 defaultRewardAdjustmentState
+  s1 === adjState 1.0 [event (day 0) 0.6]
+  factorOf s1 === 0.6
+
+  let s2 = applyAt (day 10) 1.0 s1
+  s2 === defaultRewardAdjustmentState
+  factorOf s2 === 1.0
+  forA_ [s1, s2] checkInvariant
+
+-- | Staggered 60% / 40% deadlines: each underlock has its own permanent deadline.
+test_cipStaggeredDeadlines : Script ()
+test_cipStaggeredDeadlines = script do
+  let s1 = applyAt (day 0) 0.6 defaultRewardAdjustmentState
+      s2 = applyAt (day 3) 0.4 s1
+  s2 === adjState 1.0 [event (day 3) 0.4, event (day 0) 0.6]
+  factorOf s1 === 0.6
+  factorOf s2 === 0.4
+
+  -- re-observed at day 30: the 60% underlock is now permanent, the 40% one still recoverable
+  let s3 = applyAt (day 30) 0.4 s2
+  s3 === adjState 0.6 [event (day 3) 0.4]
+  -- recovery at day 31 can only get back to the permanent 60%
+  let s4 = applyAt (day 31) 1.0 s3
+  s4 === adjState 0.6 []
+  factorOf s4 === 0.6
+  -- not recovering by day 33 makes 40% permanent too
+  applyAt (day 33) 0.4 s3 === adjState 0.4 []
+  forA_ [s1, s2, s3, s4] checkInvariant
+
+-- | A permanent factor from the past survives any later recovery.
+test_cipPermanentSurvivesRecovery : Script ()
+test_cipPermanentSurvivesRecovery = script do
+  let s1 = applyAt (day 0) 0.6 defaultRewardAdjustmentState
+      s2 = applyAt (day 30) 0.6 s1
+  s2 === adjState 0.6 []
+  let s3 = applyAt (day 100) 1.0 s2
+  s3 === adjState 0.6 []
+  factorOf s3 === 0.6
+  forA_ [s1, s2, s3] checkInvariant
+
+-- | Partial recovery keeps the original start time: [0%@t1] -> [60%@t1].
+test_cipPartialRecoveryKeepsStart : Script ()
+test_cipPartialRecoveryKeepsStart = script do
+  let s1 = applyAt (day 0) 0.0 defaultRewardAdjustmentState
+      s2 = applyAt (day 5) 0.6 s1
+  s2 === adjState 1.0 [event (day 0) 0.6]
+  -- so its deadlines don't move: permanent at day 30
+  applyAt (day 30) 0.6 s2 === adjState 0.6 []
+  forA_ [s1, s2] checkInvariant
+
+-- | A tightening schedule at an anniversary is a new underlock starting at the anniversary.
+test_cipAnniversaryUnderlock : Script ()
+test_cipAnniversaryUnderlock = script do
+  let anniversary = day 365
+      s1 = applyAt (day 0) 0.6 defaultRewardAdjustmentState
+      s2 = applyAt anniversary 0.0 s1
+  s2 === adjState 0.6 [event anniversary 0.0]
+  factorOf s2 === 0.0
+  forA_ [s1, s2] checkInvariant
+
+-- | The invariant holds after every step of a longer mixed sequence.
+test_invariantOverSequence : Script ()
+test_invariantOverSequence = script do
+  let steps =
+        [ (day 0, 0.6), (day 2, 0.4), (day 3, 0.4), (day 5, 0.0), (day 6, 0.5)
+        , (day 20, 1.0), (day 21, 0.6), (day 40, 0.4), (day 52, 0.6), (day 90, 1.0), (day 91, 0.0)
+        ]
+      run (s, acc) (t, f) = let s' = applyAt t f s in (s', s' :: acc)
+      (_, states) = foldl run (defaultRewardAdjustmentState, []) steps
+  forA_ states checkInvariant

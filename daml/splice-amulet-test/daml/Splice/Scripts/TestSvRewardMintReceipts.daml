@@ -1,0 +1,124 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.Scripts.TestSvRewardMintReceipts where
+
+import DA.Action (void)
+import DA.Assert
+import DA.Time
+import Daml.Script
+
+import Splice.Amulet
+import Splice.AmuletRules
+import Splice.Round
+import Splice.Types
+import Splice.Scripts.Util
+
+svWeight : Int
+svWeight = 10000
+
+createSvRewardCoupon : AmuletApp -> AmuletUser -> Optional Text -> Script (ContractId SvRewardCoupon)
+createSvRewardCoupon app beneficiary svRightOwnerName = submit app.dso $ createCmd SvRewardCoupon with
+  dso = app.dso
+  sv = beneficiary.primaryParty
+  beneficiary = beneficiary.primaryParty
+  weight = svWeight
+  round = Round 0
+  svRightOwnerName
+
+-- | Set SV underlock enforcement to activate at the given time.
+activateSvUnderlockEnforcementAt : AmuletApp -> Time -> Script ()
+activateSvUnderlockEnforcementAt app activatesAt = updateAmuletConfig app $ \config -> config with
+  governanceLockConfig = Some (svUnderlockEnforcementLockConfig activatesAt)
+
+-- | Activate SV underlock enforcement at the current ledger time.
+activateSvUnderlockEnforcement : AmuletApp -> Script ()
+activateSvUnderlockEnforcement app = getTime >>= activateSvUnderlockEnforcementAt app
+
+-- | Mint `couponCid` through `AmuletRules_Transfer`.
+mintViaTransfer : AmuletApp -> AmuletUser -> ContractId SvRewardCoupon -> Script ()
+mintViaTransfer app user couponCid = do
+  context <- getPaymentTransferContext app user
+  void $ submit (actAs user.primaryParty <> readAs app.dso) $ exerciseCmd context.amuletRules AmuletRules_Transfer with
+    transfer = Transfer with
+      sender = user.primaryParty
+      provider = user.primaryParty
+      inputs = [InputSvRewardCoupon couponCid]
+      outputs = []
+      beneficiaries = None
+    context = context.context
+    expectedDso = Some app.dso
+
+-- | Mint `couponCid` and burn part of it through `splitAndBurn`, by paying for a long transfer pre-approval.
+mintViaSplitAndBurn : AmuletApp -> AmuletUser -> ContractId SvRewardCoupon -> Script ()
+mintViaSplitAndBurn app user couponCid = do
+  now <- getTime
+  context <- getPaymentTransferContext app user
+  void $ submit (actAs user.primaryParty <> readAs app.dso) $ exerciseCmd context.amuletRules AmuletRules_CreateTransferPreapproval with
+    context
+    inputs = [InputSvRewardCoupon couponCid]
+    receiver = user.primaryParty
+    provider = user.primaryParty
+    expiresAt = now `addRelTime` days 100
+    expectedDso = Some app.dso
+    optCreatedAt = None
+
+expectedMintAmount : AmuletApp -> Script Decimal
+expectedMintAmount app = do
+  [(_, round0)] <- queryFilter @IssuingMiningRound app.dso (\r -> r.round == Round 0)
+  pure $ intToDecimal svWeight * round0.issuancePerSvRewardCoupon
+
+testNoSvRewardMintReceiptsWithoutActivation : Script ()
+testNoSvRewardMintReceiptsWithoutActivation = do
+  DefaultAppWithUsers{..} <- setupDefaultAppWithUsers
+  viaTransfer <- createSvRewardCoupon app bob (Some "sv1")
+  viaSplitAndBurn <- createSvRewardCoupon app charlie (Some "sv1")
+  runNextIssuance app
+  runNextIssuance app
+
+  mintViaTransfer app bob viaTransfer
+  mintViaSplitAndBurn app charlie viaSplitAndBurn
+  -- both coupons were minted, but no receipts
+  [] <- query @SvRewardCoupon app.dso
+  [] <- query @SvRewardMintReceipt app.dso
+  pure ()
+
+testNoSvRewardMintReceiptsBeforeActivationTime : Script ()
+testNoSvRewardMintReceiptsBeforeActivationTime = do
+  DefaultAppWithUsers{..} <- setupDefaultAppWithUsers
+  now <- getTime
+  activateSvUnderlockEnforcementAt app (now `addRelTime` days 30)
+  couponCid <- createSvRewardCoupon app bob (Some "sv1")
+  runNextIssuance app
+  runNextIssuance app
+
+  mintViaTransfer app bob couponCid
+  [] <- query @SvRewardMintReceipt app.dso
+  pure ()
+
+testSvRewardMintReceiptsAfterActivation : Script ()
+testSvRewardMintReceiptsAfterActivation = do
+  DefaultAppWithUsers{..} <- setupDefaultAppWithUsers
+  activateSvUnderlockEnforcement app
+  viaTransfer <- createSvRewardCoupon app bob (Some "sv1")
+  viaSplitAndBurn <- createSvRewardCoupon app charlie (Some "sv2")
+  withoutRightOwner <- createSvRewardCoupon app alice None
+  runNextIssuance app
+  runNextIssuance app
+  amount <- expectedMintAmount app
+
+  mintViaTransfer app bob viaTransfer
+  [(_, receipt)] <- query @SvRewardMintReceipt app.dso
+  receipt === SvRewardMintReceipt with
+    dso = app.dso
+    amount
+    svRightOwnerName = "sv1"
+
+  mintViaSplitAndBurn app charlie viaSplitAndBurn
+  [(_, receipt)] <- queryFilter @SvRewardMintReceipt app.dso (\r -> r.svRightOwnerName == "sv2")
+  receipt.amount === amount
+
+  -- coupons from the old choice carry no right owner name and produce no receipt
+  mintViaTransfer app alice withoutRightOwner
+  receipts <- query @SvRewardMintReceipt app.dso
+  length receipts === 2

@@ -4,18 +4,22 @@
 module Splice.Scripts.TestSvRewards where
 
 import DA.Assert
-import DA.Action (void)
+import DA.Action (void, unless)
 import DA.List (sortOn)
 import DA.Foldable (forA_)
+import DA.Optional
+import qualified DA.TextMap as TextMap
 import DA.Time
 
 import Daml.Script
 
 import Splice.Amulet
+import Splice.AmuletRules
 import Splice.Round
 import Splice.Types
 import Splice.Scripts.Util
 import Splice.DsoRules
+import Splice.DSO.SvRightOwner
 import Splice.DSO.SvState
 import Splice.Scripts.DsoTestUtils
 import Splice.Testing.Registries.AmuletRegistry (getActiveOpenRoundsSorted)
@@ -77,6 +81,7 @@ test_SvRewards_With_InitialRound_In_FirstIssuanceCurve = do
                 beneficiary
                 weight
                 round = round._2.round
+                svRightOwnerName = None
               | (beneficiary, weight) <- [(sv, weight - 1), (extraBeneficiary, 1)]]
 
     [(rulesCid, _)] <- query @DsoRules dso
@@ -152,6 +157,7 @@ test_SvRewards_With_InitialRound_In_FirstIssuanceCurve = do
       numRoundsCollected = 3
       lastRoundCollected = Round (initialRound + 4)
       numCouponsIssued = 6
+      rewardAdjustmentState = None
 
     [(_, sv2State)] <- queryFilter @SvRewardState dso (\s -> s.svName == "sv2")
     sv2State.state === RewardState with
@@ -159,6 +165,7 @@ test_SvRewards_With_InitialRound_In_FirstIssuanceCurve = do
       numRoundsCollected = 2
       lastRoundCollected = Round (initialRound + 4)
       numCouponsIssued = 4
+      rewardAdjustmentState = None
 
     -- round2 can no longer be received
     receiveSvRewardCouponFails sv1 round2 rulesCid
@@ -222,6 +229,7 @@ test_SvRewards_With_InitialRound_In_SecondIssuanceCurve = do
                 beneficiary
                 weight
                 round = round._2.round
+                svRightOwnerName = None
               | (beneficiary, weight) <- [(sv, weight - 1), (extraBeneficiary, 1)]]
 
     [(rulesCid, _)] <- query @DsoRules dso
@@ -267,13 +275,13 @@ test_SvRewards_With_InitialRound_In_SecondIssuanceCurve = do
     runAmuletDepositBots app
     checkSvRewardCouponsDoNotExist round1._2.round
 
+
     [(_, round)] <- queryFilter @IssuingMiningRound app.dso (\r -> r.round == round1._2.round)
     let sv1Balance1 =
             round.issuancePerSvRewardCoupon * sv1Weight - createFee
             + sv1Balance0
     checkBalance sv1 sv1Balance1
     checkBalance sv2 sv2Balance -- no balance change for SV2 as it did not collect round 1
-
 
     -- testing skipping
     -------------------
@@ -297,6 +305,7 @@ test_SvRewards_With_InitialRound_In_SecondIssuanceCurve = do
       numRoundsCollected = 3
       lastRoundCollected = Round (initialRound + 4)
       numCouponsIssued = 6
+      rewardAdjustmentState = None
 
     [(_, sv2State)] <- queryFilter @SvRewardState dso (\s -> s.svName == "sv2")
     sv2State.state === RewardState with
@@ -304,12 +313,11 @@ test_SvRewards_With_InitialRound_In_SecondIssuanceCurve = do
       numRoundsCollected = 2
       lastRoundCollected = Round (initialRound + 4)
       numCouponsIssued = 4
+      rewardAdjustmentState = None
 
     -- round2 can no longer be received
     receiveSvRewardCouponFails sv1 round2 rulesCid
     receiveSvRewardCouponFails sv2 round2 rulesCid
-
-    return ()
 
 test_SvRewardStateMerge = do
   (_, dso, (sv1, _, _, _)) <- initMainNet
@@ -329,37 +337,183 @@ test_SvRewardStateMerge = do
   submitMustFail (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid (DsoRules_MergeSvRewardState "sv1" [sv1RewardStateCid3, sv2RewardStateCid1] (Some sv1))
   pure ()
 
--- FIXME: reenable
-{-
-test_SvRewardUpdatedWeight : Script ()
-test_SvRewardUpdatedWeight = do
-    (app, dso, (sv1, sv2, sv3, sv4)) <- initMainNet
-    (_, unchangedBefore) <- getSvInfoByParty app sv1
-    (beforeName, before) <- getSvInfoByParty app sv2
+testLifetimeSvRewardsTracking : Script ()
+testLifetimeSvRewardsTracking = do
+  (app, (dso), (sv1, sv2, _, _)) <- initMainNetWithSvUnderlockEnforcement
+  [(amuletRulesCid, _)] <- query @AmuletRules dso
 
-    initiateAndAcceptVote app [sv1, sv2, sv3, sv4] $
-        ARC_DsoRules with
-          dsoAction = SRARC_UpdateSvRewardWeight DsoRules_UpdateSvRewardWeight with
-            svParty = sv2
-            newRewardWeight = before.svRewardWeight + 1
+  -- Create validator rights for svs, so that runAmuletDepositBots can collect the rewards
+  forA_ [sv1, sv2] $ \sv -> do
+    submit sv $ createCmd ValidatorRight with
+      dso
+      user = sv
+      validator = sv
 
-    (_, after) <- getSvInfoByParty app sv2
-    after.svRewardWeight === before.svRewardWeight + 1
+  [(svRightOwnerCid, svRightOwner)] <- queryFilter @SvRightOwner dso (\s -> s.rightOwnerName == "sv1")
 
-    (_, unchangedAfter) <- getSvInfoByParty app sv1
-    unchangedAfter.svRewardWeight === unchangedBefore.svRewardWeight
+  let checkSvRewardCouponsDoNotExist round = do
+        [] <- queryFilter @SvRewardCoupon app.dso (\co -> co.round == round)
+        pure ()
+  let checkMintReceiptAmount dso amount = do
+        [(_, receipt)] <- query @SvRewardMintReceipt dso
+        unless (receipt.amount == amount) $ fail
+          $ show receipt.svRightOwnerName
+            <> " balance: expected "
+            <> show amount
+            <> " == "
+            <> show receipt.amount
+  let checkLifetimeRewardTotal : Party -> Party -> Decimal -> Script ()
+      checkLifetimeRewardTotal dso sv amount = do
+        (name, _) <- getSvInfoByParty app sv
+        rewardStates <- queryFilter @SvRewardState dso (\s -> s.svName == name)
+        let lifetimeTotal = sum $ flip map (snd <$> rewardStates) $ \r -> fromOptional 0.0 r.lifetimeRewardTotal
+        require (show name <> " lifetimeRewardTotal: expected " <> show amount <> " == " <> show lifetimeTotal)
+          (lifetimeTotal == amount)
+  let receiveSvRewardCoupon : Party -> (ContractId OpenMiningRound, OpenMiningRound) -> ContractId DsoRules -> Script ()
+      receiveSvRewardCoupon sv round rulesCid = do
+        (name, _) <- getSvInfoByParty app sv
+        [(rewardStateCid, _)] <- queryFilter @SvRewardState dso (\s -> s.svName == name)
+        -- collect reward coupon
+        void $ submit (actAs sv <> readAs dso) $ exerciseCmd rulesCid DsoRules_ReceiveSvRewardCouponV2 with
+          sv = sv
+          openRoundCid = round._1
+          svRewardStates = TextMap.singleton svRightOwner.rightOwnerName (svRightOwnerCid, rewardStateCid)
+          amuletRulesCid
 
-    -- check that coupons are claimed with the new weight
-    [(rulesCid, _)] <- query @DsoRules app.dso
-    [(roundCid, round), _, _] <- getActiveOpenRoundsSorted app.dso
-    [(rewardStateCid, _)] <- queryFilter @SvRewardState dso (\s -> s.svName == beforeName)
-    -- collect reward coupon
-    void $ submit (actAs sv2 <> readAs dso) $ exerciseCmd rulesCid DsoRules_ReceiveSvRewardCoupon with
-      openRoundCid = roundCid
-      rewardStateCid
-      beneficiaries = [(sv2, before.svRewardWeight + 1)]
-      sv = sv2
-    -- check that the coupon exists and has the right weight
-    [(_, coupon)] <- queryFilter @SvRewardCoupon sv2 (\co -> co.round == round.round)
-    coupon.weight === before.svRewardWeight + 1
--}
+  [(rulesCid, _)] <- query @DsoRules dso
+
+  [round0, round1, round2] <- getActiveOpenRoundsSorted app.dso
+
+  -- round0 can be received by both SV1 and SV2
+  passTime (hours 1)
+  receiveSvRewardCoupon sv1 round0 rulesCid
+  receiveSvRewardCoupon sv1 round1 rulesCid
+
+  runNextIssuance app
+  runNextIssuance app
+
+  runAmuletDepositBots app
+  checkSvRewardCouponsDoNotExist round0._2.round
+
+  [(_, round)] <- queryFilter @IssuingMiningRound app.dso (\r -> r.round == round0._2.round)
+  let sv1Weight = 100000.0
+      sv1Balance0 = round.issuancePerSvRewardCoupon * sv1Weight
+
+  checkMintReceiptAmount dso sv1Balance0
+
+  [(rewardReceiptCid, _)] <- query @SvRewardMintReceipt dso
+  [(rewardStateCid, _)] <- queryFilter @SvRewardState dso (\s -> s.svName == "sv1")
+
+  (sv1Name, _) <- getSvInfoByParty app sv1
+  (sv2Name, _) <- getSvInfoByParty app sv2
+  -- Should fail when no receiptCids are supplied
+  submitMustFail (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
+    receiptCids = []
+    svOperator = sv1
+    svRewardStateCid = rewardStateCid
+    svName = sv1Name
+
+  -- Should fail when svName doesn't match the SvRewardState
+  submitMustFail (actAs sv1 <> actAs sv2 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
+    receiptCids = [rewardReceiptCid]
+    svOperator = sv2
+    svRewardStateCid = rewardStateCid
+    svName = sv2Name
+
+  submit (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
+    receiptCids = [rewardReceiptCid]
+    svOperator = sv1
+    svRewardStateCid = rewardStateCid
+    svName = sv1Name
+
+  checkLifetimeRewardTotal dso sv1 sv1Balance0
+
+  receiveSvRewardCoupon sv1 round2 rulesCid
+  runNextIssuance app
+
+  runAmuletDepositBots app
+
+  [(_, round)] <- queryFilter @IssuingMiningRound app.dso (\r -> r.round == round2._2.round)
+  let sv1Weight = 100000.0
+      sv1Balance1 = round.issuancePerSvRewardCoupon * sv1Weight
+
+  checkMintReceiptAmount dso sv1Balance1
+
+  [(rewardReceiptCid, _)] <- query @SvRewardMintReceipt dso
+  [(rewardStateCid, _)] <- queryFilter @SvRewardState dso (\s -> s.svName == "sv1")
+
+  submit (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
+    receiptCids = [rewardReceiptCid]
+    svOperator = sv1
+    svRewardStateCid = rewardStateCid
+    svName = sv1Name
+
+  -- Check aggregated balances
+  checkLifetimeRewardTotal dso sv1 $ sv1Balance1 + sv1Balance0
+
+  pure ()
+
+-- | `DsoRules_MergeSvRewardMintReceipts`: any SV operator can merge any right owner's receipts, and only matching receipts are accepted.
+testMergeSvRewardMintReceipts : Script ()
+testMergeSvRewardMintReceipts = do
+  (_, dso, (sv1, sv2, _, _)) <- initMainNetWithSvUnderlockEnforcement
+  [(rulesCid, _)] <- query @DsoRules dso
+  let receipt name amount = submit dso $
+        createCmd SvRewardMintReceipt with
+          dso
+          amount
+          svRightOwnerName = name
+      stateOf name = do
+        [state] <- queryFilter @SvRewardState dso (\s -> s.svName == name)
+        pure state
+      merge submitter svName receiptCids = do
+        (svRewardStateCid, _) <- stateOf svName
+        pure $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
+          receiptCids
+          svOperator = submitter
+          svRewardStateCid
+          svName
+      lifetimeTotalOf name = (fromOptional 0.0 . (.lifetimeRewardTotal) . snd) <$> stateOf name
+
+  -- Another SV's operator can merge sv1's receipts
+  r1 <- receipt "sv1" 10.0
+  merge sv2 "sv1" [r1] >>= submit (actAs sv2 <> readAs dso)
+  lifetimeTotalOf "sv1" >>= (=== 10.0)
+  None <- queryContractId dso r1
+
+  -- A receipt for another right owner is rejected
+  r2 <- receipt "sv2" 5.0
+  merge sv1 "sv1" [r2] >>= submitMustFail (actAs sv1 <> readAs dso)
+
+  -- A party that isn't an SV operator can't merge
+  alice <- allocateParty "alice"
+  r3 <- receipt "sv1" 1.0
+  merge alice "sv1" [r3] >>= submitMustFail (actAs alice <> readAs dso)
+
+  -- A right owner whose name differs from its node operator's
+  rightOwner <- allocateParty "rightOwnerOnSv1"
+  instructionCid <- submit dso $ exerciseCmd rulesCid DsoRules_AddSvRightOwner with
+    rightOwnerName = "rightOwnerOnSv1"
+    info = SvRightOwnerInfo with
+      rightOwnerParty = rightOwner
+      voteWeight = 1
+      rewardWeight = 1000
+      rewardNodeOperatorName = "sv1"
+      beneficiaries = []
+      svLifetimeRewardsAdjustment = 0.0
+      ultimateSvOwner = None
+  (openMiningRoundCid, _) :: _ <- getActiveOpenRoundsSorted dso
+  rulesCid <- submit (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid DsoRules_ExecuteAddSvRightOwnerInstruction with
+    instructionCid
+    openMiningRoundCid
+    svOperator = sv1
+  r4 <- receipt "rightOwnerOnSv1" 7.0
+  (svRewardStateCid, _) <- stateOf "rightOwnerOnSv1"
+  submit (actAs sv1 <> readAs dso) $ exerciseCmd rulesCid DsoRules_MergeSvRewardMintReceipts with
+    receiptCids = [r4]
+    svOperator = sv1
+    svRewardStateCid
+    svName = "rightOwnerOnSv1"
+  lifetimeTotalOf "rightOwnerOnSv1" >>= (=== 7.0)
+  -- sv1's own total is unaffected
+  lifetimeTotalOf "sv1" >>= (=== 10.0)

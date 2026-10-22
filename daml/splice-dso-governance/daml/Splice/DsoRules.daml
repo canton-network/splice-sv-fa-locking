@@ -19,6 +19,7 @@ import qualified DA.TextMap as TextMap
 import DA.Time
 
 import Splice.Amulet
+import Splice.AmuletConfig (governanceLockSuperValidatorUnderlockPermanentGracePeriod, governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter, AmuletConfig(..), USD)
 import Splice.Amulet.RewardAccountingV2 qualified as RewardAccountingV2
 import Splice.AmuletRules
 import Splice.ExternalPartyAmuletRules
@@ -136,6 +137,7 @@ data DsoRules_ActionRequiringConfirmation
   | SRARC_DsoRules_AddSvRightOwner DsoRules_AddSvRightOwner
   | SRARC_DsoRules_RemoveSvRightOwner DsoRules_RemoveSvRightOwner
   | SRARC_DsoRules_MigrateToOnLedgerSvRightOwners DsoRules_MigrateToOnLedgerSvRightOwners
+  | SRARC_DsoRules_CreateSvUnderlockInstruction DsoRules_CreateSvUnderlockInstruction
   deriving (Eq, Show, Serializable)
 
 data AnsEntryContext_ActionRequiringConfirmation
@@ -273,6 +275,14 @@ data DsoRules_CreateFeaturedAppConfigUpdateInstructionResult = DsoRules_CreateFe
 
 data DsoRules_ExecuteFeaturedAppConfigUpdateInstructionResult = DsoRules_ExecuteFeaturedAppConfigUpdateInstructionResult with
     result : FeaturedAppRight_UpdateConfigResult
+  deriving (Serializable)
+
+data DsoRules_CreateSvUnderlockInstructionResult = DsoRules_CreateSvUnderlockInstructionResult with
+    instructionCid : ContractId SvUnderlockInstruction
+  deriving (Serializable)
+
+data DsoRules_ExecuteSvUnderlockInstructionResult = DsoRules_ExecuteSvUnderlockInstructionResult with
+    svRewardStateCid : Optional (ContractId SvRewardState)
   deriving (Serializable)
 
 data DsoRules_OnboardValidatorResult = DsoRules_OnboardValidatorResult with
@@ -642,6 +652,9 @@ data TrafficState = TrafficState with
 
 getSvRightOwners : DsoRules -> [Text]
 getSvRightOwners DsoRules{..} = fromOptional [] svRightOwners
+
+getLifetimeRewardTotal : SvRewardState -> Decimal
+getLifetimeRewardTotal state = fromOptional 0.0 state.lifetimeRewardTotal
 
 onLedgerSvRightOwners : DsoRules -> Bool
 onLedgerSvRightOwners DsoRules{..} = isSome svRightOwners
@@ -1213,7 +1226,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        void $ getAndValidateSvParty this (Some sv)
+        void $ getAndValidateSvNodeOperatorParty this (Some sv)
         instruction <- fetchAndArchive (ForDso dso) instructionCid
         void $ exercise amuletRulesCid AmuletRules_UpdateFeaturedAppUnderlockState with
           rightCid
@@ -1227,7 +1240,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        void $ getAndValidateSvParty this (Some sv)
+        void $ getAndValidateSvNodeOperatorParty this (Some sv)
         void $ fetchChecked (ForDso with dso) rightCid
         void $ exercise rightCid FeaturedAppRight_EnforcePermanentUnderlock
         pure DsoRules_EnforceFeaturedAppPermanentUnderlockResult
@@ -1250,7 +1263,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        void $ getAndValidateSvParty this (Some sv)
+        void $ getAndValidateSvNodeOperatorParty this (Some sv)
         instruction <- fetchAndArchive (ForDso dso) instructionCid
         void $ fetchChecked (ForOwner with dso; owner = instruction.provider) rightCid
         result <- exercise rightCid instruction.update
@@ -1585,6 +1598,8 @@ template DsoRules with
         beneficiaries : [(Party, Int)]
       controller sv
       do
+        -- TODO: Given that we are not tracking lifetime rewards in this choice, we should ensure
+        -- that this choice cannot be called after the activation of on-ledger SV-locking.
         requireNoOnLedgerSvRightOwners this
         let svOperator = sv
         case Map.lookup svOperator svs of
@@ -1609,6 +1624,7 @@ template DsoRules with
                 numRoundsMissed =
                   state.numRoundsMissed + (openRound.round.number - state.lastRoundCollected.number - 1)
                 numCouponsIssued = state.numCouponsIssued + length beneficiaries
+                rewardAdjustmentState = state.rewardAdjustmentState
 
             -- check weights and issue rewards
             let totalBenficiaryWeight = sum $ map snd beneficiaries
@@ -1622,6 +1638,7 @@ template DsoRules with
                 beneficiary
                 weight
                 round = openRound.round
+                svRightOwnerName = None
 
             return DsoRules_ReceiveSvRewardCouponResult with
                 svRewardState = newRewardStateCid
@@ -1632,28 +1649,40 @@ template DsoRules with
         sv : Party -- ^ sv operator party
         openRoundCid : ContractId OpenMiningRound
         svRewardStates : TextMap.TextMap (ContractId SvRightOwner, ContractId SvRewardState)
+        amuletRulesCid : ContractId AmuletRules
       controller sv
       do
         requireOnLedgerSvRightOwners this
         let svOperator = sv
+            forDso = ForDso with dso
         operatorName <- getAndValidateSvNodeOperatorParty this (Some svOperator)
         now <- getTime
-        openRound <- fetchReferenceData (ForDso with dso) openRoundCid
+        amuletRules <- fetchReferenceData forDso amuletRulesCid
+        let config = getValueAsOf now amuletRules.configSchedule
+        openRound <- fetchReferenceData forDso openRoundCid
         require "OpenRound is open" (openRound.opensAt <= now)
 
+        active <- svUnderlockEnforcementActive config
+        let enforced = active && not (svUnderlockEnforcementTerminated config openRound)
+
         forA_ (TextMap.toList svRewardStates) $ \(svName, (rightOwnerCid, rewardStateCid)) -> do
-          rewardState <- fetchAndArchive (ForSv with dso, svName) rewardStateCid
-          svRightOwner <- fetchChecked (ForSv with dso, svName) rightOwnerCid
+          let forSv = ForSv with dso, svName
+          rewardState <- fetchAndArchive forSv rewardStateCid
+          svRightOwner <- fetchChecked forSv rightOwnerCid
           require "Operator matches" (svRightOwner.info.rewardNodeOperatorName == operatorName)
+
           let svInfo = svRightOwner.info
-          let state = rewardState.state
+              state = rewardState.state
               beneficiaries = svInfo.beneficiaries
+              effectiveRewardWeight = if enforced
+                then getAdjustedRewardWeight state.rewardAdjustmentState svInfo.rewardWeight
+                else svInfo.rewardWeight
           let (configuredBeneficiaryCouponWeights, remainingWeight) =
                 foldl
                   (\(acc, remainingWeight) (beneficiary, weight) ->
-                     let beneficiaryWeight = floor (weight * intToDecimal svInfo.rewardWeight)
+                     let beneficiaryWeight = floor (weight * intToDecimal effectiveRewardWeight)
                      in ((beneficiary, beneficiaryWeight) :: acc, remainingWeight - beneficiaryWeight))
-                  ([], svInfo.rewardWeight)
+                  ([], effectiveRewardWeight)
                   beneficiaries
               beneficiaryCouponWeights =
                 if remainingWeight > 0 then (svInfo.rightOwnerParty, remainingWeight) :: configuredBeneficiaryCouponWeights
@@ -1669,9 +1698,10 @@ template DsoRules with
               numRoundsMissed =
                 state.numRoundsMissed + (openRound.round.number - state.lastRoundCollected.number - 1)
               numCouponsIssued = state.numCouponsIssued + length beneficiaryCouponWeights
+              rewardAdjustmentState = state.rewardAdjustmentState
 
           -- check weights and issue rewards
-          require "Sum of beneficiary weights matches" (svInfo.rewardWeight == sum (map snd beneficiaryCouponWeights))
+          require "Sum of beneficiary weights matches" (effectiveRewardWeight == sum (map snd beneficiaryCouponWeights))
 
           couponCids <- forA beneficiaryCouponWeights $ \(beneficiary, weight) ->
             create SvRewardCoupon with
@@ -1680,6 +1710,7 @@ template DsoRules with
               beneficiary
               weight
               round = openRound.round
+              svRightOwnerName = Some svName
 
           return (svName, (newRewardStateCid, couponCids))
 
@@ -1853,7 +1884,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        _ <- getAndValidateSvParty this (Some sv)
+        _ <- getAndValidateSvNodeOperatorParty this (Some sv)
         void $ fetchChecked (ForDso with dso) governanceLockCid
         exercise governanceLockCid GovernanceLock_DsoConvertProvisionalFeaturedAppLock with featuredAppRightCid
         pure DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLockResult
@@ -1866,7 +1897,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        _ <- getAndValidateSvParty this (Some sv)
+        _ <- getAndValidateSvNodeOperatorParty this (Some sv)
         void $ fetchChecked (ForDso with dso) governanceLockCid
         exercise governanceLockCid GovernanceLock_DsoExpire
         pure $ DsoRules_GovernanceLock_DsoExpireResult
@@ -1879,7 +1910,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        _ <- getAndValidateSvParty this (Some sv)
+        _ <- getAndValidateSvNodeOperatorParty this (Some sv)
         void $ fetchChecked (ForDso with dso) substitutionCid
         _ <- exercise substitutionCid GovernanceLockSubstitution_DsoExpire
         pure $ DsoRules_GovernanceLockSubstitution_DsoExpireResult
@@ -1892,7 +1923,7 @@ template DsoRules with
         sv : Party
       controller sv
       do
-        _ <- getAndValidateSvParty this (Some sv)
+        _ <- getAndValidateSvNodeOperatorParty this (Some sv)
         void $ fetchChecked (ForDso with dso) transferCid
         _ <- exercise transferCid GovernanceLockTransfer_DsoExpire
         pure $ DsoRules_GovernanceLockTransfer_DsoExpireResult
@@ -2019,6 +2050,7 @@ template DsoRules with
         amount : Decimal
         reason : Text
         expiresAt : Time
+        svRightOwnerName : Optional Text
       controller dso
       do
         now <- getTime
@@ -2031,6 +2063,7 @@ template DsoRules with
             amount
             reason
             expiresAt
+            svRightOwnerName
         pure $ DsoRules_CreateUnallocatedUnclaimedActivityRecordResult with ..
 
     nonconsuming choice DsoRules_AllocateUnallocatedUnclaimedActivityRecord : DsoRules_AllocateUnallocatedUnclaimedActivityRecordResult
@@ -2063,6 +2096,7 @@ template DsoRules with
           amount
           reason
           expiresAt
+          svRightOwnerName
 
         pure $ DsoRules_AllocateUnallocatedUnclaimedActivityRecordResult with ..
 
@@ -2265,6 +2299,92 @@ template DsoRules with
         assertDeadlineExceeded "AddSvRightOwnerInstruction.expiresAt" instruction.expiresAt
         pure ()
 
+    nonconsuming choice DsoRules_MergeSvRewardMintReceipts : ContractId SvRewardState
+      with
+        receiptCids : [ContractId SvRewardMintReceipt]
+        svOperator : Party
+        svRewardStateCid : ContractId SvRewardState
+        svName : Text -- ^ Rights owner whose receipts are merged
+      controller svOperator
+      do
+        requireOnLedgerSvRightOwners this
+        void $ getAndValidateSvNodeOperatorParty this (Some svOperator)
+        require "There must be at least one receipt" $ not $ null receiptCids
+        svRewardState <- fetchAndArchive (ForSv with dso; svName) svRewardStateCid
+
+        receiptAmounts <- forA receiptCids $ \cid -> do
+          r <- fetchAndArchive (ForDso with dso) cid
+          TSU.requireMatchExpected ("svName", svName) r.svRightOwnerName
+          pure r.amount
+
+        create svRewardState with
+          lifetimeRewardTotal = Some $ sum receiptAmounts + getLifetimeRewardTotal svRewardState
+
+    nonconsuming choice DsoRules_CreateSvUnderlockInstruction : DsoRules_CreateSvUnderlockInstructionResult
+      with
+        svName : Text -- right owner
+        qualifyingFactor : Decimal -- svLockingWeightFactor result : Either 0.0 or a tier factor
+        amuletRulesCid : ContractId AmuletRules
+      controller dso
+      do
+        amuletRules <- fetchReferenceData (ForDso dso) amuletRulesCid
+        now <- getTime
+
+        let config = getValueAsOf now amuletRules.configSchedule
+        svUnderlockEnforcementActive config >>= require "SV underlock enforcement is active"
+        require "qualifyingFactor should be between 0.0 - 1.0 inclusive"
+          $ 0.0 <= qualifyingFactor && qualifyingFactor <= 1.0
+
+        instructionCid <- create SvUnderlockInstruction with
+          dso
+          svName
+          qualifyingFactor
+          observedAt = now
+        pure DsoRules_CreateSvUnderlockInstructionResult with instructionCid
+
+    nonconsuming choice DsoRules_ExecuteSvUnderlockInstruction : DsoRules_ExecuteSvUnderlockInstructionResult
+      with
+        amuletRulesCid : ContractId AmuletRules
+        instructionCid : ContractId SvUnderlockInstruction
+        svRewardStateCid : ContractId SvRewardState
+        sv : Party
+        openMiningRoundCid : ContractId OpenMiningRound
+      controller sv
+      do
+        let forDso = (ForDso dso)
+        requireOnLedgerSvRightOwners this
+        void $ getAndValidateSvNodeOperatorParty this (Some sv)
+
+        amuletRules <- fetchReferenceData forDso amuletRulesCid
+        now <- getTime
+        let config = getValueAsOf now amuletRules.configSchedule
+        openRound <- fetchReferenceData forDso openMiningRoundCid
+
+        require "SV underlock enforcement has not terminated"
+          $ not $ svUnderlockEnforcementTerminated config openRound
+        svUnderlockEnforcementActive config >>= require "SV underlock enforcement is active"
+
+        instruction <- fetchAndArchive forDso instructionCid
+        svRewardState <- fetchChecked (ForSv with dso; svName = instruction.svName) svRewardStateCid
+        let permanentGracePeriod = governanceLockSuperValidatorUnderlockPermanentGracePeriod config.governanceLockConfig
+            old = fromOptional defaultRewardAdjustmentState svRewardState.state.rewardAdjustmentState
+            observedAt = instruction.observedAt
+            stale = optional False (> observedAt) old.lastAdjustedAt
+            adjusted = applyWarrantedFactor observedAt instruction.qualifyingFactor
+              $ promotePermanent (observedAt `addRelTime` negate permanentGracePeriod) old
+
+        optNewSvRewardStateCid <- if (stale || adjusted == old)
+          then pure None
+          else do
+            archive svRewardStateCid
+            newSvRewardState <- create svRewardState with
+              state = svRewardState.state with
+                rewardAdjustmentState = Some adjusted with
+                  lastAdjustedAt = Some observedAt
+            pure $ Some newSvRewardState
+
+        pure DsoRules_ExecuteSvUnderlockInstructionResult with
+          svRewardStateCid = optNewSvRewardStateCid
 
 template AddSvRightOwnerInstruction
   with
@@ -2357,6 +2477,7 @@ executeActionRequiringConfirmation dso dsoRulesCid amuletRulesCid act = case act
       SRARC_DsoRules_AddSvRightOwner choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_DsoRules_RemoveSvRightOwner choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_DsoRules_MigrateToOnLedgerSvRightOwners choiceArg -> void $ exercise dsoRulesCid choiceArg
+      SRARC_DsoRules_CreateSvUnderlockInstruction choiceArg -> void $ exercise dsoRulesCid choiceArg
   ARC_AnsEntryContext with .. -> do
     void $ fetchChecked (ForDso with dso) ansEntryContextCid
     case ansEntryContextAction of
@@ -2491,6 +2612,8 @@ createSvRightOwnerContracts rules@DsoRules{..} newSvName rightOwnerInfo joinedAs
       numRoundsMissed = 0
       numRoundsCollected = 0
       numCouponsIssued = 0
+      rewardAdjustmentState = None
+    lifetimeRewardTotal = Some 0.0
   case rightOwnerInfo of
     None -> requireNoOnLedgerSvRightOwners rules
     Some info -> do
@@ -2583,6 +2706,7 @@ template UnallocatedUnclaimedActivityRecord
     amount : Decimal -- ^ The amount of `Amulet` to be minted
     reason : Text -- ^ A reason to mint the `Amulet`
     expiresAt : Time -- ^ Selected timestamp defining the lifetime of the UnclaimedActivityRecord contract.
+    svRightOwnerName: Optional Text -- ^ SV right owner whose lifetime rewards increased.
   where
     signatory dso
     ensure amount > 0.0
@@ -2649,3 +2773,11 @@ instance Patchable LogicalSynchronizerUpgradeSchedule where
 
 operatorParties : DsoRules -> [Party]
 operatorParties DsoRules{svs} = Map.keys svs
+
+svUnderlockEnforcementActive : AmuletConfig USD -> Update Bool
+svUnderlockEnforcementActive config = optional (pure False) isLedgerTimeGE
+  $ config.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)
+
+svUnderlockEnforcementTerminated : AmuletConfig USD -> OpenMiningRound -> Bool
+svUnderlockEnforcementTerminated config openRound = openRound.issuingFor
+  >= governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter config.governanceLockConfig

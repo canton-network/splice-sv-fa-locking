@@ -222,7 +222,8 @@ template AmuletRules
               issueAppRewards = True
               issueValidatorRewards = True
         executeTransfer (toInterfaceContractId self) rewardsConfig context dso
-          (getDevelopmentFundManagerBlacklist configUsd) transfer
+          (getDevelopmentFundManagerBlacklist configUsd)
+          (configUsd.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)) transfer
 
     nonconsuming choice AmuletRules_CreateExternalPartySetupProposal : AmuletRules_CreateExternalPartySetupProposalResult
       -- ^ Propose to host an external party
@@ -311,12 +312,13 @@ template AmuletRules
         checkExpectedDso dso expectedDso
         -- validate choice parameters
         configUsd <- getValueAsOfLedgerTime configSchedule
+        let svUnderlockEnforcementActivatesAt = configUsd.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)
         case validateBuyMemberTrafficInputs configUsd synchronizerId trafficAmount of
           Left failureStatus -> failWithStatus failureStatus
           Right _ -> pure ()
         (trafficCostAmulet, trafficCostUsd) <- computeSynchronizerFees dso provider trafficAmount this context
         (transferResult, meta) <- splitAndBurn (toInterfaceContractId self) provider trafficCostAmulet inputs context dso
-          (getDevelopmentFundManagerBlacklist configUsd) "traffic purchase"
+          (getDevelopmentFundManagerBlacklist configUsd) svUnderlockEnforcementActivatesAt "traffic purchase"
         -- create a new MemberTraffic contract for the purchased traffic
         purchasedTraffic <- create MemberTraffic with
           dso
@@ -1192,10 +1194,10 @@ data RewardsIssuanceConfig = RewardsIssuanceConfig with
   deriving (Serializable)
 
 -- | Execute a transfer.
-executeTransfer : ContractId TransferEventsV2.EventLog -> RewardsIssuanceConfig -> TransferContext -> Party -> [Party] -> Transfer -> Update TransferResult
-executeTransfer eventLogCid config context dso developmentFundManagerBlacklist t = do
+executeTransfer : ContractId TransferEventsV2.EventLog -> RewardsIssuanceConfig -> TransferContext -> Party -> [Party] -> Optional Time -> Transfer -> Update TransferResult
+executeTransfer eventLogCid config context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt t = do
   -- compute summaries
-  csum <- summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlacklist t
+  csum <- summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt t
   executeTransfer' config csum dso t
 
 -- | Execute a transfer for external parties so that the prepared tx remains valid for 24h
@@ -1213,6 +1215,17 @@ executeTransfer' config csum dso t = do
   isum <- summarizeAndConsumeInputs csum dso t.sender t.inputs
   osum <- preprocessOutputs csum.config t.outputs
   summary <- summarizeTransfer t.sender csum.openRoundNumber csum.amuletPrice csum.config isum osum
+
+  let mintedSvRewards = optional [] Map.toList isum.mintedSvRewardMap
+  unless (null mintedSvRewards) $ do
+    receiptsActive <- optional (pure False) isLedgerTimeGE csum.svUnderlockEnforcementActivatesAt
+    when receiptsActive $
+      forA_ mintedSvRewards $ \(svRightOwnerName, amount) ->
+        create SvRewardMintReceipt with
+          dso
+          amount
+          svRightOwnerName
+
   -- check that overall transfer constraints are satisfied
   case checkTransferConstraints t summary csum.config of
     Left failureStatus -> failWithStatus failureStatus
@@ -1303,6 +1316,7 @@ data TransferContextSummaryV2 = TransferContextSummaryV2 with
     rewardCalculationVersion : Optional RewardVersion
     eventLogCid : Optional (ContractId TransferEventsV2.EventLog)
     developmentFundManagerBlacklist : Optional [Party]
+    svUnderlockEnforcementActivatesAt : Optional Time
   deriving (Eq, Show, Serializable)
 
 data TransferInputsSummary = TransferInputsSummary with
@@ -1321,6 +1335,9 @@ data TransferInputsSummary = TransferInputsSummary with
     totalDevelopmentFundAmount : Optional Decimal
       -- ^ Note: Same rationale as above — made optional to ensure compatibility with
       -- the upgrade checker on package upload because `TransferInputsSummary` is serializable.
+    mintedSvRewardMap : Optional (Map Text Decimal)
+      -- ^ Note: This is a map from the SV rights owner name of the unclaimed activity records, and reward coupons to
+      -- the amounts minted for them, used to produce receipts.
   deriving (Eq, Show, Serializable)
 
 type TransferOutputsSummary = [PreprocessedTransferOutput]
@@ -1343,8 +1360,8 @@ getUnsuspendedFeaturedAppProvider dso contextFeaturedAppRight tf = do
         then None
         else Some tf.provider
 
-summarizeAndValidateContext : ContractId TransferEventsV2.EventLog -> TransferContext -> Party -> [Party] -> Transfer -> Update TransferContextSummaryV2
-summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlacklist tf = do
+summarizeAndValidateContext : ContractId TransferEventsV2.EventLog -> TransferContext -> Party -> [Party] -> Optional Time -> Transfer -> Update TransferContextSummaryV2
+summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt tf = do
   -- check that the current mining round is open
   openRound <- fetchReferenceData (ForDso with dso) context.openMiningRound
   assertDeadlineExceeded "openRound.opensAt" openRound.opensAt
@@ -1378,6 +1395,7 @@ summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlackl
     rewardCalculationVersion = (.mintingVersion) <$> openRound.rewardConfig
     eventLogCid = Some eventLogCid
     developmentFundManagerBlacklist = Some developmentFundManagerBlacklist
+    svUnderlockEnforcementActivatesAt
 
 
 summarizeAndValidateExternalPartyContext : ExternalPartyTransferContext -> Party -> Transfer -> Update TransferContextSummaryV2
@@ -1406,6 +1424,7 @@ summarizeAndValidateExternalPartyContext context dso tf = do
     -- the blacklist is still enforced in the future once we add support, we set it to `None` here
     -- to show that the list is unknown in the context.
     developmentFundManagerBlacklist = None
+    svUnderlockEnforcementActivatesAt = None
 
 getValidatorRight : TransferContextSummaryV2 -> Party -> Update (ContractId ValidatorRight)
 getValidatorRight csum user =
@@ -1438,6 +1457,11 @@ summarizeAndConsumeInputs csum dso sender inps = do
       changeToHoldingFeesRate = 0.0
       totalUnclaimedActivityRecordAmount = Some 0.0
       totalDevelopmentFundAmount = Some 0.0
+      mintedSvRewardMap = Some Map.empty
+
+    addMintedSvReward : Text -> Decimal -> Optional (Map Text Decimal) -> Optional (Map Text Decimal)
+    addMintedSvReward svRightOwnerName amount None = Some $ Map.singleton svRightOwnerName amount
+    addMintedSvReward svRightOwnerName amount (Some m) = Some $ Map.insertWith (+) svRightOwnerName amount m
 
     summarizeAndConsumeInput _round s (InputAmulet amuletCid) = do
       amulet <- fetchAndArchive forOwner amuletCid
@@ -1455,6 +1479,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
         amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero + getValueAsOfRound0 amulet.amount
         changeToHoldingFeesRate = s.changeToHoldingFeesRate - amulet.amount.ratePerRound.rate
         totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
+        mintedSvRewardMap = s.mintedSvRewardMap
 
     summarizeAndConsumeInput _round s (InputAppRewardCoupon couponCid) = do
       coupon <- fetchAndArchive forOwner couponCid
@@ -1474,6 +1499,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
         amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
         changeToHoldingFeesRate = s.changeToHoldingFeesRate
         totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
+        mintedSvRewardMap = s.mintedSvRewardMap
 
     summarizeAndConsumeInput _round s (InputValidatorRewardCoupon couponCid) = do
       -- we must and do use the validator right to archive the coupon of the user
@@ -1496,6 +1522,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
         amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
         changeToHoldingFeesRate = s.changeToHoldingFeesRate
         totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
+        mintedSvRewardMap = s.mintedSvRewardMap
 
     summarizeAndConsumeInput _round s (InputSvRewardCoupon couponCid) = do
       -- we use the SvRewardCoupon_ArchiveAsBeneficiary choice to signal the archival of the coupon
@@ -1504,17 +1531,22 @@ summarizeAndConsumeInputs csum dso sender inps = do
       exercise couponCid SvRewardCoupon_ArchiveAsBeneficiary
       -- compute balance change
       miningRound <- getIssuingMiningRound csum coupon.round
+      let currentSvRewardCouponAmount = intToDecimal coupon.weight * miningRound.issuancePerSvRewardCoupon
+
       return TransferInputsSummary with
         totalAmuletAmount = s.totalAmuletAmount
         totalAppRewardAmount = s.totalAppRewardAmount
         totalValidatorRewardAmount = s.totalValidatorRewardAmount
         totalUnclaimedActivityRecordAmount = s.totalUnclaimedActivityRecordAmount
         totalValidatorFaucetAmount = s.totalValidatorFaucetAmount
-        totalSvRewardAmount = s.totalSvRewardAmount + intToDecimal coupon.weight * miningRound.issuancePerSvRewardCoupon
+        totalSvRewardAmount = s.totalSvRewardAmount + currentSvRewardCouponAmount
         totalHoldingFees = s.totalHoldingFees
         amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
         changeToHoldingFeesRate = s.changeToHoldingFeesRate
         totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
+        mintedSvRewardMap = case coupon.svRightOwnerName of
+                None -> s.mintedSvRewardMap
+                Some svRightOwnerName -> addMintedSvReward svRightOwnerName currentSvRewardCouponAmount s.mintedSvRewardMap
 
     summarizeAndConsumeInput _round s (InputValidatorLivenessActivityRecord recordCid) = do
       record <- fetchAndArchive forOwner recordCid
@@ -1532,6 +1564,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
         amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
         changeToHoldingFeesRate = s.changeToHoldingFeesRate
         totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
+        mintedSvRewardMap = s.mintedSvRewardMap
 
     summarizeAndConsumeInput _round s (ExtTransferInput _dummyUnitField optInputValidatorFaucetCoupon) = do
       optional (pure s) (summarizeAndConsumeValidatorFaucetInput s) optInputValidatorFaucetCoupon
@@ -1539,18 +1572,33 @@ summarizeAndConsumeInputs csum dso sender inps = do
     summarizeAndConsumeInput _round s (InputUnclaimedActivityRecord unclaimedActivityRecordCid) = do
       unclaimedActivityRecord <- fetchAndArchive forOwner unclaimedActivityRecordCid
       assertWithinDeadline "UnclaimedActivityRecord.expiresAt" unclaimedActivityRecord.expiresAt
-      return TransferInputsSummary with
-        totalAmuletAmount = s.totalAmuletAmount
-        totalAppRewardAmount = s.totalAppRewardAmount
-        totalValidatorRewardAmount = s.totalValidatorRewardAmount
-        totalUnclaimedActivityRecordAmount =
-          (+ unclaimedActivityRecord.amount) <$> s.totalUnclaimedActivityRecordAmount
-        totalValidatorFaucetAmount = s.totalValidatorFaucetAmount
-        totalSvRewardAmount = s.totalSvRewardAmount
-        totalHoldingFees = s.totalHoldingFees
-        amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
-        changeToHoldingFeesRate = s.changeToHoldingFeesRate
-        totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
+
+      return $ case unclaimedActivityRecord.svRightOwnerName of
+        None -> TransferInputsSummary with
+          totalAmuletAmount = s.totalAmuletAmount
+          totalAppRewardAmount = s.totalAppRewardAmount
+          totalValidatorRewardAmount = s.totalValidatorRewardAmount
+          totalUnclaimedActivityRecordAmount =
+            (+ unclaimedActivityRecord.amount) <$> s.totalUnclaimedActivityRecordAmount
+          totalValidatorFaucetAmount = s.totalValidatorFaucetAmount
+          totalSvRewardAmount = s.totalSvRewardAmount
+          totalHoldingFees = s.totalHoldingFees
+          amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
+          changeToHoldingFeesRate = s.changeToHoldingFeesRate
+          totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
+          mintedSvRewardMap = s.mintedSvRewardMap
+        Some svRightOwnerName -> TransferInputsSummary with
+          totalAmuletAmount = s.totalAmuletAmount
+          totalAppRewardAmount = s.totalAppRewardAmount
+          totalValidatorRewardAmount = s.totalValidatorRewardAmount
+          totalUnclaimedActivityRecordAmount = s.totalUnclaimedActivityRecordAmount
+          totalValidatorFaucetAmount = s.totalValidatorFaucetAmount
+          totalSvRewardAmount = unclaimedActivityRecord.amount + s.totalSvRewardAmount
+          totalHoldingFees = s.totalHoldingFees
+          amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
+          changeToHoldingFeesRate = s.changeToHoldingFeesRate
+          totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
+          mintedSvRewardMap = addMintedSvReward svRightOwnerName unclaimedActivityRecord.amount s.mintedSvRewardMap
 
     summarizeAndConsumeInput _round s (InputDevelopmentFundCoupon couponCid) = do
       coupon <- fetchAndArchive forOwner couponCid
@@ -1573,6 +1621,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
         amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
         changeToHoldingFeesRate = s.changeToHoldingFeesRate
         totalDevelopmentFundAmount = (+ coupon.amount) <$> s.totalDevelopmentFundAmount
+        mintedSvRewardMap = s.mintedSvRewardMap
 
     summarizeAndConsumeInput _round s (InputRewardCouponV2 couponCid) = do
       coupon <- fetchAndArchive forOwner couponCid
@@ -1590,6 +1639,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
         amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
         changeToHoldingFeesRate = s.changeToHoldingFeesRate
         totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
+        mintedSvRewardMap = s.mintedSvRewardMap
 
     summarizeAndConsumeValidatorFaucetInput s couponCid = do
       coupon <- fetchAndArchive forOwner couponCid
@@ -1607,6 +1657,7 @@ summarizeAndConsumeInputs csum dso sender inps = do
         amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
         changeToHoldingFeesRate = s.changeToHoldingFeesRate
         totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
+        mintedSvRewardMap = s.mintedSvRewardMap
 
 -- | Deduplicate lock-holders to store them and charge for them at most once
 dedupOutputLockHolders : TransferOutput -> TransferOutput
@@ -2312,13 +2363,13 @@ computeTransferPreapprovalFee duration amuletConfig context dso = do
   let feeAmulet = feeUsd / contextMiningRound.amuletPrice
   pure (feeAmulet, feeUsd)
 
-splitAndBurn : ContractId TransferEventsV2.EventLog -> Party -> Decimal -> [TransferInput] -> TransferContext -> Party -> [Party] -> Text -> Update (TransferResult, Metadata)
-splitAndBurn eventLogCid sender amount inputs context dso developmentFundManagerBlacklist usage = do
+splitAndBurn : ContractId TransferEventsV2.EventLog -> Party -> Decimal -> [TransferInput] -> TransferContext -> Party -> [Party] -> Optional Time -> Text -> Update (TransferResult, Metadata)
+splitAndBurn eventLogCid sender amount inputs context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt usage = do
 -- do not create activity records as part of the transfer. We create a validator activity record for the full burn below.
   let rewardsConfig = RewardsIssuanceConfig with
         issueAppRewards = False
         issueValidatorRewards = False
-  transferResult <- executeTransfer eventLogCid rewardsConfig context dso developmentFundManagerBlacklist Transfer with
+  transferResult <- executeTransfer eventLogCid rewardsConfig context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt Transfer with
     sender
     provider = sender
     inputs
@@ -2369,6 +2420,7 @@ payForTransferPreapproval reason dso provider context inputs expiresAt newExpire
   configUsd <- getValueAsOfLedgerTime amuletRules.configSchedule
   let extension = newExpiresAt `subTime` expiresAt
   let paidExtension = extension - getTransferPreapprovalBaseDuration configUsd
+      svUnderlockEnforcementActivatesAt = configUsd.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)
   if paidExtension <= seconds 0
     then do
       openMiningRound <- fetchChecked (ForDso dso) context.context.openMiningRound
@@ -2397,7 +2449,7 @@ payForTransferPreapproval reason dso provider context inputs expiresAt newExpire
     else do
       (amuletPaid, _) <- computeTransferPreapprovalFee paidExtension configUsd context.context dso
       (transferResult, meta) <- splitAndBurn (toInterfaceContractId context.amuletRules) provider amuletPaid inputs context.context dso
-        (getDevelopmentFundManagerBlacklist configUsd) reason
+        (getDevelopmentFundManagerBlacklist configUsd) svUnderlockEnforcementActivatesAt reason
       pure (amuletPaid, transferResult, meta)
 
 -- Token standard context parsing

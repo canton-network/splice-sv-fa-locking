@@ -1,0 +1,200 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.Scripts.UnitTests.SvLockingConfig where
+
+import DA.Action (unless)
+import DA.Assert
+import DA.Date
+import DA.Foldable (forA_)
+import DA.Time
+
+import Daml.Script
+
+import Splice.AmuletConfig
+import Splice.Schedule
+import Splice.Testing.Registries.AmuletRegistry.Parameters
+import Splice.Scripts.Util (emptyGovernanceLockConfig)
+
+-- Shared values
+----------------
+
+tier : Decimal -> Decimal -> SvLockingTier
+tier = SvLockingTier
+
+-- | 365.25 days, matching `defaultSvWeightSchedule`.
+years : Int -> RelTime
+years n = days (365 * n) + hours (6 * n)
+
+activatesAt : Time
+activatesAt = datetime 2027 Jan 1 0 0 0
+
+
+-- Weight schedule lookups
+--------------------------
+
+test_defaultSvWeightSchedule_lookups : Script ()
+test_defaultSvWeightSchedule_lookups = script do
+    -- Each value applies from its offset (inclusive) until just before the next one
+    check (days 0) year0
+    check (years 1 - oneMicro) year0
+    check (years 1) year1
+    check (years 2 - oneMicro) year1
+    check (years 2) year2
+    check (years 3 - oneMicro) year2
+    check (years 3) year3
+    check (years 10) year3
+
+  where
+    oneMicro = convertMicrosecondsToRelTime 1
+    check offset expected = getValueAsOf offset defaultSvWeightSchedule === expected
+    year0 = [tier 0.7 1.0, tier 0.45 0.6, tier 0.35 0.4]
+    year1 = [tier 0.65 1.0, tier 0.5 0.6]
+    year2 = [tier 0.6 1.0]
+    year3 = [tier 0.55 1.0]
+
+test_governanceLockSuperValidatorWeightSchedule_default : Script ()
+test_governanceLockSuperValidatorWeightSchedule_default = script do
+  governanceLockSuperValidatorWeightSchedule None === defaultSvWeightSchedule
+  governanceLockSuperValidatorWeightSchedule (Some emptyGovernanceLockConfig) === defaultSvWeightSchedule
+
+  let custom = Schedule with initialValue = [tier 0.5 1.0]; futureValues = []
+  governanceLockSuperValidatorWeightSchedule (Some emptyGovernanceLockConfig with superValidatorWeightSchedule = Some custom)
+    === custom
+
+
+-- Tier lookup
+--------------
+
+test_svLockingWeightFactor : Script ()
+test_svLockingWeightFactor = script do
+    -- Top tier, including exactly on the threshold
+    factor 1000.0 1000.0 === 1.0
+    factor 1000.0 700.0 === 1.0
+
+    -- Middle tiers: just below a threshold drops to the next tier
+    factor 1000.0 699.99 === 0.6
+    factor 1000.0 450.0 === 0.6
+    factor 1000.0 449.99 === 0.4
+    factor 1000.0 350.0 === 0.4
+
+    -- Below the lowest tier
+    factor 1000.0 349.99 === 0.0
+    factor 1000.0 0.0 === 0.0
+
+    -- No lifetime rewards yet: every threshold is 0, so the top tier applies
+    factor 0.0 0.0 === 1.0
+
+    -- No tiers: nothing qualifies
+    svLockingWeightFactor [] 1000.0 1000.0 === 0.0
+
+  where
+    factor = svLockingWeightFactor defaultSvWeightSchedule.initialValue
+
+
+-- Weight schedule validation
+-----------------------------
+
+test_validSuperValidatorWeightSchedule : Script ()
+test_validSuperValidatorWeightSchedule = script do
+    assert $ validSuperValidatorWeightSchedule defaultSvWeightSchedule
+    assert $ validSuperValidatorWeightSchedule (single [tier 1.0 1.0])
+    assert $ validSuperValidatorWeightSchedule (single [tier 0.0 0.5])
+
+    forA_ invalidSchedules $ \(description, schedule) ->
+      unless (not $ validSuperValidatorWeightSchedule schedule) $
+        abort ("expected invalid schedule: " <> description)
+
+  where
+    single tiers = Schedule with initialValue = tiers; futureValues = []
+    withFuture futureValues = defaultSvWeightSchedule with futureValues
+    invalidSchedules =
+      [ ("empty initial tier list", single [])
+      , ("empty future tier list", withFuture [(years 1, [])])
+      , ("unsorted offsets", withFuture [(years 2, [tier 0.6 1.0]), (years 1, [tier 0.65 1.0])])
+      , ("duplicate offsets", withFuture [(years 1, [tier 0.65 1.0]), (years 1, [tier 0.6 1.0])])
+      , ("increasing minLockedFraction", single [tier 0.45 1.0, tier 0.7 0.6])
+      , ("equal minLockedFraction", single [tier 0.7 1.0, tier 0.7 0.6])
+      , ("increasing rewardWeightFactor", single [tier 0.7 0.6, tier 0.45 1.0])
+      , ("equal rewardWeightFactor", single [tier 0.7 1.0, tier 0.45 1.0])
+      , ("minLockedFraction above 1", single [tier 1.1 1.0])
+      , ("negative minLockedFraction", single [tier (-0.1) 1.0])
+      , ("zero rewardWeightFactor", single [tier 0.7 0.0])
+      , ("rewardWeightFactor above 1", single [tier 0.7 1.5])
+      , ("invalid tier in a future value", withFuture [(years 1, [tier 0.65 1.5])])
+      ]
+
+
+-- Governance lock config validation
+------------------------------------
+
+test_validGovernanceLockConfig : Script ()
+test_validGovernanceLockConfig = script do
+    -- Nothing set: valid, and all SV defaults apply
+    assert $ validGovernanceLockConfig emptyGovernanceLockConfig
+    governanceLockSuperValidatorUnderlockPermanentGracePeriod (Some emptyGovernanceLockConfig) === days 30
+    -- 30 days after the halving at year 5 of the issuance curve, which uses 365-day years
+    governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter (Some emptyGovernanceLockConfig) === days (5 * 365 + 30)
+    governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter
+      (Some emptyGovernanceLockConfig with superValidatorUnderlockEnforcementTerminatesAfter = Some (days 10))
+      === days 10
+
+    -- Grace periods without activation are fine
+    assert $ validGovernanceLockConfig emptyGovernanceLockConfig with
+      superValidatorUnderlockPermanentGracePeriod = Some (days 7)
+
+    -- Activation with the permanent grace period set
+    assert $ validGovernanceLockConfig activeConfig
+    assert $ validGovernanceLockConfig activeConfig with
+      superValidatorUnderlockPermanentGracePeriod = Some (days 7)
+    assert $ validGovernanceLockConfig activeConfig with
+      superValidatorWeightSchedule = Some defaultSvWeightSchedule
+
+    forA_ invalidConfigs $ \(description, config) ->
+      unless (not $ validGovernanceLockConfig config) $
+        abort ("expected invalid config: " <> description)
+
+  where
+    activeConfig = emptyGovernanceLockConfig with
+      superValidatorUnderlockEnforcementActivatesAt = Some activatesAt
+      superValidatorUnderlockPermanentGracePeriod = Some (days 30)
+    invalidConfigs =
+      [ ("activation without grace periods", emptyGovernanceLockConfig with
+          superValidatorUnderlockEnforcementActivatesAt = Some activatesAt)
+      , ("activation without permanent grace period", activeConfig with
+          superValidatorUnderlockPermanentGracePeriod = None)
+      , ("zero permanent grace period", emptyGovernanceLockConfig with
+          superValidatorUnderlockPermanentGracePeriod = Some (days 0))
+      , ("zero termination time", emptyGovernanceLockConfig with
+          superValidatorUnderlockEnforcementTerminatesAfter = Some (days 0))
+      , ("invalid weight schedule", emptyGovernanceLockConfig with
+          superValidatorWeightSchedule = Some (Schedule with initialValue = []; futureValues = []))
+      , ("non-positive minimumLockAmount", emptyGovernanceLockConfig with minimumLockAmount = Some 0.0)
+      , ("non-positive SV vesting duration", emptyGovernanceLockConfig with superValidatorLockVestingDuration = Some (days 0))
+      , ("non-positive FA vesting duration", emptyGovernanceLockConfig with featuredAppLockVestingDuration = Some (days 0))
+      , ("non-positive FA grace period", emptyGovernanceLockConfig with featuredAppUnderlockGracePeriod = Some (days 0))
+      , ("non-positive FA threshold", emptyGovernanceLockConfig with featuredAppLockThreshold = Some 0.0)
+      ]
+
+
+-- AmuletConfig validation
+--------------------------
+
+test_validAmuletConfig_existingConfigs : Script ()
+test_validAmuletConfig_existingConfigs = script do
+  assert $ validAmuletConfig defaultAmuletConfig
+  assert $ validAmuletConfig defaultAmuletConfig with
+    governanceLockConfig = Some emptyGovernanceLockConfig
+
+  assert $ validAmuletConfig defaultAmuletConfig with
+    governanceLockConfig = Some emptyGovernanceLockConfig with
+      minimumLockAmount = Some 10000.0
+      superValidatorLockVestingDuration = Some (years 1)
+      featuredAppLockVestingDuration = Some (days 60)
+      featuredAppLockThreshold = Some 1000.0
+      featuredAppUnderlockGracePeriod = Some (days 7)
+
+  -- An invalid SV config makes the whole AmuletConfig invalid
+  assert $ not $ validAmuletConfig defaultAmuletConfig with
+    governanceLockConfig = Some emptyGovernanceLockConfig with
+      superValidatorUnderlockEnforcementActivatesAt = Some activatesAt
