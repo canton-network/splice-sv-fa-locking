@@ -12,6 +12,7 @@ import DA.List.Total (head)
 import Splice.Amulet
 import Splice.AmuletRules
 import Splice.Api.RewardAssignmentV1 qualified as Api.RewardAssignmentV1
+import Splice.Api.Token.MetadataV1 (ExtraArgs(..), emptyMetadata)
 import Splice.Testing.Utils (emptyExtraArgs, expectErrorId, expectMessageContains, submitMustFail'')
 import Splice.Round
 import Splice.Util
@@ -23,7 +24,7 @@ import Splice.Scripts.Util
 import Splice.ExternalPartyAmuletRules (ExternalPartyAmuletRules)
 import Splice.GovernanceLock (FullLockSpecification(..), GovernanceLockKind(..))
 import Splice.Scripts.TestGovernanceLocks (expectSuccess, tsv1Operations, testEnvRegistries, submitWithTransferContext, assertFromSome, checkHolding', expectFailureContaining)
-import Splice.Scripts.TestGovernanceLockSvRewards (SvRewardRounds(..), MintSvRewardsRequest(..), createSvRewardCoupons, prepareSvRewardRounds, mintSvRewardsRequest, expectedSvRewardSplit, checkSingleSvLock, getExternalPartyAmuletRulesWithDisclosure, svRewardRoundsExtraArgs)
+import Splice.Scripts.TestGovernanceLockSvRewards (SvRewardRounds(..), MintSvRewardsRequest(..), createSvRewardCoupons, prepareSvRewardRounds, mintSvRewardsRequest, expectedSvRewardSplit, checkSingleSvLock, getExternalPartyAmuletRulesWithDisclosure, svRewardTopUpArgs)
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.Utils (discloseMany')
@@ -721,9 +722,8 @@ submitTopUpGovernanceLock env rounds submitter delegationCid request = do
   submitWithTransferContext registry
     (actAs submitter <> readAs request.owner <> discloseMany' (rulesD <> rounds.disclosures <> request.extraDisclosures))
     \context -> exerciseCmd delegationCid MintingDelegation_TopUpGovernanceLock with
-      svRewardCoupons = request.coupons
-      svRewardCouponPercentage = request.percentage
+      topUpArgs = svRewardTopUpArgs rounds request.coupons request.percentage
       requestedAt = request.requestedAt
       externalPartyAmuletRulesCid = rulesCid
       specification = FullLockSpecification with kind = request.kind
-      extraArgs = svRewardRoundsExtraArgs context rounds
+      extraArgs = ExtraArgs with context; meta = emptyMetadata
