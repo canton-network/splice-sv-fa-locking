@@ -1,0 +1,308 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Tests for minting SV rewards directly into SV locks via `ExternalPartyAmuletRules_MintSvRewardsIntoLock`.
+module Splice.Scripts.TestGovernanceLockSvRewards where
+
+import DA.Assert ((===))
+import DA.List.Total (last)
+import DA.Map qualified as Map
+import DA.Time
+
+import Daml.Script
+import Splice.Amulet
+import Splice.Api.Token.MetadataV1
+import Splice.ExternalPartyAmuletRules
+import Splice.GovernanceLock
+import Splice.Round
+import Splice.Types (Round(..))
+import Splice.Scripts.TestGovernanceLocks
+import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
+import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
+import Splice.Testing.Utils
+import Splice.TokenStandard.Utils (toAnyContractId)
+import Splice.Util (require)
+
+-- | Minting into an existing lock merges the locked share of the rewards into it,
+-- and returns the remainder as liquid change.
+testMintSvRewardsIntoExistingLock : Script ()
+testMintSvRewardsIntoExistingLock = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      dso = instrId.admin
+      svKind = GLK_SuperValidatorRightsOwner "TestSV"
+      weight = 1000
+
+  AmuletRegistryV2.tapFaucet registry alice 30000.0
+  initialLockCid <- expectSuccess $ tsv1Operations.governanceLock (testEnvRegistries env) alice 20000.0 svKind
+
+  [coupon1, coupon2, coupon3, coupon4] <- createSvRewardCoupons dso provider1 alice [weight, weight, weight, weight]
+  rounds <- prepareSvRewardRounds dso
+
+  -- 100%: everything is locked, so there is no change.
+  let (locked1, _) = expectedSvRewardSplit rounds.issuingRound [weight] 1.0
+  request <- mintSvRewardsRequest env alice svKind [coupon1] 1.0
+  result1 <- expectSuccess $ submitMintSvRewardsIntoLock env rounds request
+  result1.changeHolding === None
+  let amount1 = 20000.0 + locked1
+  checkSingleSvLock alice result1.lockCid amount1
+  Some lock1 <- queryContractId alice result1.lockCid
+  -- The merged lock continues the lineage of the original lock.
+  lock1.originalLockCid === Some (toAnyContractId initialLockCid)
+
+  -- 40% of two coupons: the rest is returned as change.
+  let (locked2, change2) = expectedSvRewardSplit rounds.issuingRound [weight, weight] 0.4
+  request <- mintSvRewardsRequest env alice svKind [coupon2, coupon3] 0.4
+  result2 <- expectSuccess $ submitMintSvRewardsIntoLock env rounds request
+  let amount2 = amount1 + locked2
+  checkSingleSvLock alice result2.lockCid amount2
+  changeCid2 <- assertFromSome "Expected change for a 40% top-up" result2.changeHolding
+  checkHolding' alice changeCid2 change2
+
+  -- 0%: the lock amount is unchanged, and all minted rewards are returned as change.
+  let (_, change3) = expectedSvRewardSplit rounds.issuingRound [weight] 0.0
+  request <- mintSvRewardsRequest env alice svKind [coupon4] 0.0
+  result3 <- expectSuccess $ submitMintSvRewardsIntoLock env rounds request
+  checkSingleSvLock alice result3.lockCid amount2
+  changeCid3 <- assertFromSome "Expected change for a 0% top-up" result3.changeHolding
+  checkHolding' alice changeCid3 change3
+
+  -- All coupons were consumed.
+  remainingCoupons <- queryFilter @SvRewardCoupon alice (\c -> c.beneficiary == alice)
+  remainingCoupons === []
+
+-- | Minting into an SV lock that does not exist yet creates it, subject to the minimum lock amount.
+testMintSvRewardsIntoNewLock : Script ()
+testMintSvRewardsIntoNewLock = do
+  env@TestEnv{..} <- setupTest
+  let dso = instrId.admin
+      svKind = GLK_SuperValidatorRightsOwner "TestSV"
+      weight = 1000
+
+  [coupon] <- createSvRewardCoupons dso provider1 alice [weight]
+  rounds <- prepareSvRewardRounds dso
+
+  -- The issuance per weight depends on the total weight of the round's coupons,
+  -- so pick the percentages from the minted amount.
+  let (minted, _) = expectedSvRewardSplit rounds.issuingRound [weight] 1.0
+  require ("The coupon must mint more than 20k, but mints " <> show minted) (minted > 20000.0)
+
+  -- A new lock below the minimum lock amount is rejected.
+  request <- mintSvRewardsRequest env alice svKind [coupon] (1000.0 / minted)
+  expectFailureContaining "'locked amount' is less than 'minimum governance lock amount'"
+    =<< submitMintSvRewardsIntoLock env rounds request
+
+  -- A new lock above the minimum is created from the minted rewards alone.
+  let percentage = 20000.0 / minted
+      (locked, change) = expectedSvRewardSplit rounds.issuingRound [weight] percentage
+  request <- mintSvRewardsRequest env alice svKind [coupon] percentage
+  result <- expectSuccess $ submitMintSvRewardsIntoLock env rounds request
+  checkSingleSvLock alice result.lockCid locked
+  changeCid <- assertFromSome "Expected change for a partial lock" result.changeHolding
+  checkHolding' alice changeCid change
+  Some lock <- queryContractId alice result.lockCid
+  lock.originalLockCid === None
+
+-- | Only locks with the same key (owner, SV name, full lock) are merged; other locks are left untouched.
+testMintSvRewardsOnlyMergesSameKey : Script ()
+testMintSvRewardsOnlyMergesSameKey = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      dso = instrId.admin
+      svKind = GLK_SuperValidatorRightsOwner "TestSV"
+      otherSvKind = GLK_SuperValidatorRightsOwner "OtherSV"
+      weight = 1000
+
+  AmuletRegistryV2.tapFaucet registry alice 60000.0
+  AmuletRegistryV2.tapFaucet registry bob 20000.0
+  targetLockCid <- expectSuccess $ tsv1Operations.governanceLock (testEnvRegistries env) alice 20000.0 svKind
+  otherSvLockCid <- expectSuccess $ tsv1Operations.governanceLock (testEnvRegistries env) alice 20000.0 otherSvKind
+  faLockCid <- expectSuccess $ tsv1Operations.governanceLock (testEnvRegistries env) alice 10000.0 (GLK_FeaturedApp with provider = bob)
+  bobLockCid <- expectSuccess $ tsv1Operations.governanceLock (testEnvRegistries env) bob 20000.0 svKind
+  Some otherSvLock <- queryContractId alice otherSvLockCid
+  Some faLock <- queryContractId alice faLockCid
+  Some bobLock <- queryContractId bob bobLockCid
+
+  [coupon] <- createSvRewardCoupons dso provider1 alice [weight]
+  rounds <- prepareSvRewardRounds dso
+
+  let (locked, _) = expectedSvRewardSplit rounds.issuingRound [weight] 0.5
+  request <- mintSvRewardsRequest env alice svKind [coupon] 0.5
+  result <- expectSuccess $ submitMintSvRewardsIntoLock env rounds request
+
+  Some newLock <- queryContractId alice result.lockCid
+  newLock.amount === 20000.0 + locked
+  newLock.specification === fullLockSpecification svKind
+  newLock.originalLockCid === Some (toAnyContractId targetLockCid)
+  archivedTarget <- queryContractId alice targetLockCid
+  archivedTarget === None
+
+  checkLockUntouched alice otherSvLockCid otherSvLock
+  checkLockUntouched alice faLockCid faLock
+  checkLockUntouched bob bobLockCid bobLock
+
+testMintSvRewardsFailures : Script ()
+testMintSvRewardsFailures = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      dso = instrId.admin
+      svKind = GLK_SuperValidatorRightsOwner "TestSV"
+      weight = 1000
+
+  AmuletRegistryV2.tapFaucet registry alice 60000.0
+  _ <- expectSuccess $ tsv1Operations.governanceLock (testEnvRegistries env) alice 20000.0 svKind
+  _ <- expectSuccess $ tsv1Operations.governanceLock (testEnvRegistries env) alice 10000.0 (GLK_FeaturedApp with provider = bob)
+  _ <- expectSuccess $ tsv1Operations.governanceLock (testEnvRegistries env) alice 10000.0 (GLK_ProvisionalFeaturedApp with provider = bob)
+
+  [aliceCoupon] <- createSvRewardCoupons dso provider1 alice [weight]
+  [bobCoupon] <- createSvRewardCoupons dso provider1 bob [weight]
+  rounds <- prepareSvRewardRounds dso
+  validRequest <- mintSvRewardsRequest env alice svKind [aliceCoupon] 0.5
+
+  -- Only SV locks can be funded from SV reward coupons.
+  expectFailureContaining "SV reward coupons can only fund SV locks"
+    =<< submitMintSvRewardsIntoLock env rounds (validRequest with kind = GLK_FeaturedApp bob)
+  expectFailureContaining "SV reward coupons can only fund SV locks"
+    =<< submitMintSvRewardsIntoLock env rounds (validRequest with kind = GLK_ProvisionalFeaturedApp bob)
+
+  -- The percentage must be between 0.0 and 1.0.
+  expectFailureContaining "'svRewardCouponPercentage' is greater than 'one'"
+    =<< submitMintSvRewardsIntoLock env rounds (validRequest with percentage = 1.5)
+  expectFailureContaining "'svRewardCouponPercentage' is less than 'zero'"
+    =<< submitMintSvRewardsIntoLock env rounds (validRequest with percentage = -0.1)
+
+  -- Coupons of another beneficiary cannot be minted, even when disclosed to the owner.
+  bobCouponD <- queryDisclosure' bob bobCoupon
+  expectFailureContaining "Contract group identifier mismatch"
+    =<< submitMintSvRewardsIntoLock env rounds (validRequest with coupons = [bobCoupon]; extraDisclosures = bobCouponD)
+
+  -- The expected DSO party must be set and match.
+  expectFailureContaining "Expected DSO party not set by caller"
+    =<< submitMintSvRewardsIntoLock env rounds (validRequest with expectedDso = None)
+  expectFailureContaining "does not match actual DSO party"
+    =<< submitMintSvRewardsIntoLock env rounds (validRequest with expectedDso = Some alice)
+
+  -- The request time must be within the past 24 hours.
+  now <- getTime
+  expectFailureContaining "Ledger time is at or past deadline 'requestedAt + 1 day'"
+    =<< submitMintSvRewardsIntoLock env rounds (validRequest with requestedAt = now `addRelTime` days (-2))
+  expectFailureContaining "Ledger time is strictly before deadline 'requestedAt'"
+    =<< submitMintSvRewardsIntoLock env rounds (validRequest with requestedAt = now `addRelTime` hours 1)
+
+  -- None of the failed attempts consumed the coupon, so a valid request still succeeds.
+  _ <- expectSuccess $ submitMintSvRewardsIntoLock env rounds validRequest
+  pure ()
+
+-- Helpers
+----------
+
+-- | The mining rounds needed to mint SV reward coupons of round 0.
+data SvRewardRounds = SvRewardRounds with
+    issuingRoundCid : ContractId IssuingMiningRound
+    issuingRound : IssuingMiningRound
+    openRoundCid : ContractId OpenMiningRound
+    disclosures : Disclosures'
+
+-- | A request to mint SV reward coupons into the SV lock of `owner`.
+-- Use `mintSvRewardsRequest` for a valid request, and override fields to test failures.
+data MintSvRewardsRequest = MintSvRewardsRequest with
+    owner : Party
+    kind : GovernanceLockKind
+    coupons : [ContractId SvRewardCoupon]
+    percentage : Decimal
+    requestedAt : Time
+    expectedDso : Optional Party
+    extraDisclosures : Disclosures'
+
+createSvRewardCoupons : Party -> Party -> Party -> [Int] -> Script [ContractId SvRewardCoupon]
+createSvRewardCoupons dso sv beneficiary weights = forA weights \weight ->
+  submit (actAs dso) $ createCmd SvRewardCoupon with
+    dso
+    sv
+    beneficiary
+    weight
+    round = Round 0
+
+-- | Advances the rounds until round 0 is issuing, and returns the rounds to mint its coupons with.
+prepareSvRewardRounds : Party -> Script SvRewardRounds
+prepareSvRewardRounds dso = do
+  AmuletRegistryV2.runNextIssuance dso 0.5
+  AmuletRegistryV2.runNextIssuance dso 0.5
+  [(issuingRoundCid, issuingRound)] <- queryFilter @IssuingMiningRound dso (\r -> r.round == Round 0)
+  now <- getTime
+  openRounds <- AmuletRegistryV2.getActiveOpenRoundsSorted dso
+  (openRoundCid, _) <- assertFromSome "No open mining round has opened yet" $
+    last $ filter (\(_, r) -> r.opensAt <= now) openRounds
+  issuingRoundD <- queryDisclosure' dso issuingRoundCid
+  openRoundD <- queryDisclosure' dso openRoundCid
+  pure SvRewardRounds with
+    issuingRoundCid
+    issuingRound
+    openRoundCid
+    disclosures = issuingRoundD <> openRoundD
+
+-- | A valid request to mint `coupons` into the SV lock of `owner`, requested now.
+mintSvRewardsRequest : TestEnv -> Party -> GovernanceLockKind -> [ContractId SvRewardCoupon] -> Decimal -> Script MintSvRewardsRequest
+mintSvRewardsRequest env owner kind coupons percentage = do
+  requestedAt <- getTime
+  pure MintSvRewardsRequest with
+    owner
+    kind
+    coupons
+    percentage
+    requestedAt
+    expectedDso = Some env.instrId.admin
+    extraDisclosures = mempty
+
+-- | The arguments to mint `coupons` with the given mining rounds, locking `percentage` of the minted rewards.
+svRewardTopUpArgs : SvRewardRounds -> [ContractId SvRewardCoupon] -> Decimal -> SvRewardCouponTopUpArgs
+svRewardTopUpArgs rounds svRewardCoupons svRewardCouponPercentage = SvRewardCouponTopUpArgs with
+  svRewardCoupons
+  svRewardCouponPercentage
+  openingMiningRound = rounds.openRoundCid
+  issuingMiningRounds = Map.singleton rounds.issuingRound.round rounds.issuingRoundCid
+
+-- | Submits `ExternalPartyAmuletRules_MintSvRewardsIntoLock` as the request's owner.
+submitMintSvRewardsIntoLock
+  :  TestEnv
+  -> SvRewardRounds
+  -> MintSvRewardsRequest
+  -> Script (Either SubmitError ExternalPartyAmuletRules_MintSvRewardsIntoLockResult)
+submitMintSvRewardsIntoLock env rounds MintSvRewardsRequest{..} = do
+  let registry = env.registriesEnv.amuletV2
+  (rulesCid, rulesD) <- getExternalPartyAmuletRulesWithDisclosure registry
+  submitWithTransferContext registry (actAs owner <> discloseMany' (rulesD <> rounds.disclosures <> extraDisclosures)) \context ->
+    exerciseCmd rulesCid ExternalPartyAmuletRules_MintSvRewardsIntoLock with
+      owner
+      specification = FullLockSpecification with kind
+      topUpArgs = svRewardTopUpArgs rounds coupons percentage
+      requestedAt
+      expectedDso
+      extraArgs = ExtraArgs with context; meta = emptyMetadata
+
+-- | The `ExternalPartyAmuletRules` contract and its disclosure.
+getExternalPartyAmuletRulesWithDisclosure : AmuletRegistryV2.AmuletRegistry -> Script (ContractId ExternalPartyAmuletRules, Disclosures')
+getExternalPartyAmuletRulesWithDisclosure registry = do
+  [(rulesCid, _)] <- query @ExternalPartyAmuletRules registry.dso
+  rulesD <- queryDisclosure' registry.dso rulesCid
+  pure (rulesCid, rulesD)
+
+-- | The locked amount and the liquid change from minting coupons of the given weights at `percentage`.
+-- Computed in the same order as the implementation, to match its rounding.
+expectedSvRewardSplit : IssuingMiningRound -> [Int] -> Decimal -> (Decimal, Decimal)
+expectedSvRewardSplit issuingRound weights percentage =
+  let minted = sum [intToDecimal w * issuingRound.issuancePerSvRewardCoupon | w <- weights]
+      locked = minted * percentage
+  in (locked, minted - locked)
+
+-- | Checks that `owner` has exactly one SV full lock, with the given contract id and amount.
+checkSingleSvLock : Party -> ContractId GovernanceLock -> Decimal -> Script ()
+checkSingleSvLock owner lockCid amount = do
+  svLocks <- filter (\(_, l) -> isSvLock l) <$> governanceLocksOf owner
+  map fst svLocks === [lockCid]
+  checkLockedHolding owner lockCid amount
+  where
+    isSvLock l = case governanceLockKind l.specification of
+      GLK_SuperValidatorRightsOwner _ -> True
+      _ -> False
+
