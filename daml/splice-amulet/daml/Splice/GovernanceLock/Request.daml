@@ -148,8 +148,12 @@ governanceLock_transferFactoryV1_lockImpl
   -> FullLockSpecification
   -> Update V1.TransferInstructionResult
 governanceLock_transferFactoryV1_lockImpl dso V1.TransferFactory_Transfer{transfer, extraArgs} specification = do
+  let funds = TUF_LiquidFunds with
+        amount = transfer.amount
+        holdings = transfer.inputHoldingCids
+
   (lock, lockCid, changeCid) <- governanceLock_lockForGovernance_impl
-    dso transfer.amount transfer.inputHoldingCids specification extraArgs transfer.sender transfer.requestedAt (reasonFromMeta transfer.meta)
+    dso funds specification extraArgs transfer.sender transfer.requestedAt (reasonFromMeta transfer.meta)
 
   -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
   let lockTransfer = (view $ toInterface @V1.TransferInstruction lock).transfer
