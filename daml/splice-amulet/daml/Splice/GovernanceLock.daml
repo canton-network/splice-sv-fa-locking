@@ -32,6 +32,7 @@ module Splice.GovernanceLock (
   FetchAndMergeLocksResult(..),
   fetchAndMergeGovernanceLocks,
   TopUpFunds(..),
+  SvRewardCouponTopUpArgs(..),
   fetchAndMergeGovernanceLocksWithTopUp,
   governanceLock_unlockImpl,
   vestingLock_withdrawImpl,
@@ -290,6 +291,16 @@ data GovernanceLock_DsoTransferResult
     unlockedAmulet : ContractId Amulet
       -- ^ The transferred funds, returned to the owner of the source lock.
 
+data SvRewardCouponTopUpArgs = SvRewardCouponTopUpArgs with
+    svRewardCoupons : [ContractId SvRewardCoupon]
+      -- ^ SV Reward Coupon inputs used to fund the top-up.
+    svRewardCouponPercentage : Decimal
+      -- ^ Percentage (specified as a number between 0.0 and 1.0) of the SV reward coupons
+      -- minting allowance to top-up a governance lock with. The remainder is returned as change.
+    openingMiningRound : ContractId OpenMiningRound
+    issuingMiningRounds : [ContractId IssuingMiningRound]
+  deriving (Eq, Show, Serializable)
+
 data TopUpFunds
   = TUF_LiquidFunds with
     amount : Decimal
@@ -297,11 +308,7 @@ data TopUpFunds
     holdings : [ContractId Holding]
       -- ^ The input holdings used to fund the lock.
   | TUF_SvRewardCouponFunds with
-    svRewardCoupons : [ContractId SvRewardCoupon]
-      -- ^ SV Reward Coupon inputs used to fund the top-up.
-    svRewardCouponPercentage : Decimal
-      -- ^ Percentage (specified as a number between 0.0 and 1.0) of the SV reward coupons
-      -- minting allowance to top-up a governance lock with. The remainder is returned as change.
+    topUpArgs: SvRewardCouponTopUpArgs
   deriving (Show)
 
 data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
@@ -316,9 +323,8 @@ fetchAndMergeGovernanceLocksWithTopUp
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Text
-  -> ExtraArgs
   -> Update FetchAndMergeLocksResult
-fetchAndMergeGovernanceLocksWithTopUp newFunds key context state reason extraArgs =
+fetchAndMergeGovernanceLocksWithTopUp newFunds key context state reason =
   let
     defaultNumberToMerge = 20
 
@@ -339,18 +345,13 @@ fetchAndMergeGovernanceLocksWithTopUp newFunds key context state reason extraArg
           -- Note: this also means that a single existing lock could be cycled by creating a new lock with `amount = 0`.
           require' ("amount", amount) isGreaterOrEqualR ("zero", 0.0)
           pure (holdings, amount)
-        Some (TUF_SvRewardCouponFunds{..}, _) -> do
+        Some (TUF_SvRewardCouponFunds args, _) -> do
           case key.specification of
             GLS_FullLock FullLockSpecification{kind = GLK_SuperValidatorRightsOwner _} -> pure ()
             specification -> assertFail $ "SV reward coupons can only fund SV locks, got: " <> show specification
-          require' ("svRewardCouponPercentage", svRewardCouponPercentage) isGreaterOrEqualR ("zero", 0.0)
-          require' ("svRewardCouponPercentage", svRewardCouponPercentage) isLessOrEqualR ("one", 1.0)
-          getSvRewardInputAmuletAndChange
-            svRewardCoupons
-            svRewardCouponPercentage
-            extraArgs
-            forOwner
-            (toInterfaceContractId context.externalPartyConfigState)
+          require' ("svRewardCouponPercentage", args.svRewardCouponPercentage) isGreaterOrEqualR ("zero", 0.0)
+          require' ("svRewardCouponPercentage", args.svRewardCouponPercentage) isLessOrEqualR ("one", 1.0)
+          getSvRewardInputAmuletAndChange args forOwner (toInterfaceContractId context.externalPartyConfigState)
 
       (mergedAmount, inputHoldings) <- foldrA
         (\(lockCid, lock) (accAmount, accHoldings) -> do
@@ -413,10 +414,10 @@ fetchAndMergeGovernanceLocksWithTopUp newFunds key context state reason extraArg
     (GLS_FullLock _, None) -> lookupWithMerging defaultNumberToMerge
     (GLS_FullLock _, Some _) -> lookupWithMerging defaultNumberToMerge
 
-fetchAndMergeGovernanceLocks : GovernanceLockKey -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> ExtraArgs -> Update FetchAndMergeLocksResult
-fetchAndMergeGovernanceLocks key context state reason extraArgs = do
+fetchAndMergeGovernanceLocks : GovernanceLockKey -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update FetchAndMergeLocksResult
+fetchAndMergeGovernanceLocks key context state reason = do
   -- `changeHolding` should always be `None` since no new funds are passed
-  result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocksWithTopUp None key context state reason extraArgs
+  result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocksWithTopUp None key context state reason
   pure result
 
 -- | Unlocks `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks which have no vesting period.
@@ -529,7 +530,6 @@ governanceLock_lockForGovernance_impl dso funds fullSpecification extraArgs owne
     context
     state
     reason
-    extraArgs
   pure (lock, lockCid, changeHolding)
 
 -- | Release `substitutedAmount` of the locked funds to the owner as part of an approved
@@ -625,12 +625,6 @@ unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
           externalPartyConfigState = configStateCid
           featuredAppRight = None
        , configState )
-
-getMiningRoundsFromChoiceContext : ChoiceContext -> Update ([ContractId IssuingMiningRound], ContractId OpenMiningRound)
-getMiningRoundsFromChoiceContext choiceContext = do
-  issuingMiningRoundCids <- getFromContextU @([ContractId IssuingMiningRound]) choiceContext issuingMiningRoundContextKey
-  openMiningRoundCid <- getFromContextU @(ContractId OpenMiningRound) choiceContext openMiningRoundContextKey
-  pure (issuingMiningRoundCids, openMiningRoundCid)
 
 -- | Release `transferredAmount` of the locked funds as part of an approved transfer.
 -- The accept step of a `GovernanceLockTransfer` calls this, and locks the unlocked
@@ -896,21 +890,18 @@ fetchAndValidateIssuingMiningRounds vals forDso = do
 
 
 getSvRewardInputAmuletAndChange
-  : [ContractId SvRewardCoupon]
-  -> Decimal
-  -> ExtraArgs
+  :  SvRewardCouponTopUpArgs
   -> ForOwner
   -> ContractId TransferEventsV2.EventLog
   -> Update ([ContractId Holding], Decimal)
-getSvRewardInputAmuletAndChange [] _ _ _ _ = pure ([], 0.0)
-getSvRewardInputAmuletAndChange svRewardCoupons svRewardCouponPercentage extraArgs forOwner transferEventsV2EventLog = do
+getSvRewardInputAmuletAndChange SvRewardCouponTopUpArgs{svRewardCoupons = []} _ _ = pure ([], 0.0)
+getSvRewardInputAmuletAndChange SvRewardCouponTopUpArgs{..} forOwner transferEventsV2EventLog = do
   let dso = forOwner.dso
-  (currentIssuingMiningRoundCids, openMiningRoundCid) <- getMiningRoundsFromChoiceContext extraArgs.context
   (_, issuingMiningRoundCidsMap) <-
-    fetchAndValidateIssuingMiningRounds (toAnyValue <$> currentIssuingMiningRoundCids) $ ForDso with dso
+    fetchAndValidateIssuingMiningRounds (toAnyValue <$> issuingMiningRounds) $ ForDso with dso
 
   let transferContext = TransferContext with
-        openMiningRound = openMiningRoundCid
+        openMiningRound = openingMiningRound
         issuingMiningRounds = issuingMiningRoundCidsMap
         validatorRights = Map.empty
         featuredAppRight = None

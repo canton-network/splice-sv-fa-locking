@@ -4,12 +4,12 @@
 module Splice.Wallet.MintingDelegation where
 
 import DA.Assert
-import Splice.Amulet (RewardCouponV2(..), SvRewardCoupon)
+import Splice.Amulet (RewardCouponV2(..))
 import Splice.AmuletRules
 import Splice.Api.RewardAssignmentV1 qualified as Api.RewardAssignmentV1
 import Splice.Api.Token.MetadataV1 (ExtraArgs)
 import Splice.ExternalPartyAmuletRules (ExternalPartyAmuletRules(..), ExternalPartyAmuletRules_MintSvRewardsIntoLock(..), ExternalPartyAmuletRules_MintSvRewardsIntoLockResult)
-import Splice.GovernanceLock (FullLockSpecification)
+import Splice.GovernanceLock (FullLockSpecification, SvRewardCouponTopUpArgs)
 import Splice.Types (ForOwner(..))
 import Splice.Util
 
@@ -124,11 +124,8 @@ template MintingDelegation
 
     nonconsuming choice MintingDelegation_TopUpGovernanceLock : MintingDelegation_TopUpGovernanceLockResult
       with
-        svRewardCoupons : [ContractId SvRewardCoupon]
-          -- ^ The beneficiary's SV reward coupons to fund the top-up with.
-        svRewardCouponPercentage : Decimal
-          -- ^ Percentage (specified as a number between 0.0 and 1.0) of the SV reward coupons
-          -- minting allowance to top-up the lock with. The remainder is returned as change.
+        topUpArgs : SvRewardCouponTopUpArgs
+          -- ^ SV rewards used to top up the lock.
         requestedAt : Time
           -- ^ Time of the request to top up the lock.
         externalPartyAmuletRulesCid : ContractId ExternalPartyAmuletRules
@@ -142,8 +139,7 @@ template MintingDelegation
         result <- exercise externalPartyAmuletRulesCid ExternalPartyAmuletRules_MintSvRewardsIntoLock with
           owner = beneficiary
           specification
-          svRewardCoupons
-          svRewardCouponPercentage
+          topUpArgs
           requestedAt
           expectedDso = Some dso
           extraArgs
