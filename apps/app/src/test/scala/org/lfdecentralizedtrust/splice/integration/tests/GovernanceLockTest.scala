@@ -15,9 +15,10 @@ import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.SpliceTestC
 import org.lfdecentralizedtrust.splice.util.{ChoiceContextWithDisclosures, GovernanceLockUtil}
 import org.lfdecentralizedtrust.tokenstandard.transferinstruction
 
-import java.time.Instant
+import java.time.{Duration, Instant}
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
+import java.util.concurrent.TimeUnit
 import scala.jdk.OptionConverters.*
 
 trait GovernanceLockTest extends TokenStandardTest {
@@ -329,28 +330,6 @@ trait GovernanceLockTest extends TokenStandardTest {
       )
     }
 
-    final def createAndUnlockGovernanceLock(
-        participant: ParticipantClientReference,
-        owner: RichPartyId,
-        lockKind: LockKind,
-        lockSubject: String,
-        lockAmount: BigDecimal,
-        unlockAmount: BigDecimal,
-        vestingStartTime: CantonTimestamp,
-        isValid: CId => View => Boolean = _ => _ => true,
-    )(implicit env: SpliceTestConsoleEnvironment): Unit = {
-      val cid = createGovernanceLock(participant, owner, lockKind, lockSubject, lockAmount)
-      unlockGovernanceLock(
-        participant,
-        owner,
-        lockKind,
-        lockSubject,
-        unlockAmount,
-        vestingStartTime,
-        isValid(cid),
-      )
-    }
-
     final def withdrawVestingLock(
         participant: ParticipantClientReference,
         owner: RichPartyId,
@@ -452,15 +431,21 @@ trait GovernanceLockTest extends TokenStandardTest {
       }
     }
 
+    /** Propose a transfer of a GovernanceLock */
+    final def transferGovernanceLock =
+      new TransferLock((newLockOwner, transferAmount) =>
+        (Locked, newLockOwner, transferAmount, None, None)
+      )
+
     /** Propose a transfer of a vesting GovernanceLock */
-    final def transferVestingLock(lock: governancelock.GovernanceLock) =
+    final def transferVestingLock(vestingPeriod: Duration, vestingEndTime: Instant) =
       new TransferLock((newLockOwner, transferAmount) =>
         (
           Vesting,
           newLockOwner,
           transferAmount,
-          Some(vestingLockSpecification(lock).vestingPeriod),
-          Some(vestingLockSpecification(lock).endTime),
+          Some(new RelTime(TimeUnit.NANOSECONDS.toMicros(vestingPeriod.toNanos))),
+          Some(vestingEndTime),
         )
       )
   }

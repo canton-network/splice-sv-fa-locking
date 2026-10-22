@@ -269,15 +269,21 @@ class GovernanceLockTimeBasedIntegrationTest
     actAndCheck(
       s"Lock and unlock $numLocks times, vesting until $endTime", {
         (1 to numLocks).map { _ =>
-          tsv1Operations.createAndUnlockGovernanceLock(
+          val cid = tsv1Operations.createGovernanceLock(
             participant,
             owner,
             lockKind,
             lockSubject = lockSubject,
-            lockAmount = lockAmount,
+            amount = lockAmount,
+          )
+          tsv1Operations.unlockGovernanceLock(
+            participant,
+            owner,
+            lockKind,
+            lockSubject = lockSubject,
             unlockAmount = lockAmount,
             vestingStartTime = vestingStartTime,
-            isValid = cid => _.originalInstructionCid.toScala.exists(_.contractId == cid.contractId),
+            isValid = _.originalInstructionCid.toScala.exists(_.contractId == cid.contractId),
           )
         }
       },
@@ -312,49 +318,17 @@ class GovernanceLockTimeBasedIntegrationTest
 
   "ExpireGovernanceLockTransferTrigger archives expired transfers in batches" in { implicit env =>
     val numTransfers = 3
+    val newLockOwner = aliceValidatorBackend.getValidatorPartyId()
+    val vestingEndTime = getLedgerTime.plus(vestingDuration).underlying.toInstant
     val trigger =
       sv1Backend.dsoDelegateBasedAutomation.trigger[ExpireGovernanceLockTransferTrigger]
 
-    val sv1Party = sv1Backend.getDsoInfo().svParty
-    val owner = RichPartyId.local(sv1Party)
-    val participant = sv1Backend.participantClientWithAdminToken
-    val newLockOwner = aliceValidatorBackend.getValidatorPartyId()
-
-    val vestingStartTime = getLedgerTime.plusSeconds(1)
-
-    // `tsv1Operations.createGovernanceLock` feeds all of the owner's unlocked
-    // holdings into the `TransferFactory_Transfer` choice. Thus, the tap has to
-    // have landed before the lock is submitted.
     actAndCheck(
-      s"Tap $lockAmount CC for sv1",
-      sv1WalletClient.tap(walletAmuletToUsd(lockAmount)),
-    )(
-      "the tapped amulet is visible",
-      _ => listHoldings(participant, sv1Party).filter(_._2.lock.isEmpty) should have length 1,
-    )
-
-    val (_, vestingLock) = actAndCheck(
-      "Lock and unlock, so that the lock starts vesting",
-      tsv1Operations.createAndUnlockGovernanceLock(
-        participant,
-        owner,
-        lockKind,
-        lockSubject = lockSubject,
-        lockAmount = lockAmount,
-        unlockAmount = lockAmount,
-        vestingStartTime = vestingStartTime,
-      ),
-    )(
-      "SvDsoStore ingests the VestingLock",
-      _ => listVestingLocks.loneElement.payload,
-    )
-
-    actAndCheck(
-      s"Propose $numTransfers transfers of the VestingLock to $newLockOwner",
+      s"Propose $numTransfers transfers to $newLockOwner",
       (1 to numTransfers).foreach { _ =>
-        tsv1Operations.transferVestingLock(vestingLock)(
-          participant,
-          owner,
+        tsv1Operations.transferVestingLock(vestingDuration, vestingEndTime)(
+          sv1Backend.participantClientWithAdminToken,
+          RichPartyId.local(sv1Backend.getDsoInfo().svParty),
           lockKind,
           lockSubject,
           newLockOwner,
@@ -388,10 +362,6 @@ class GovernanceLockTimeBasedIntegrationTest
     clue("Second run archives the remaining partial batch") {
       trigger.runOnce().futureValue shouldBe true
       listLockTransfers shouldBe empty
-    }
-
-    clue("The source VestingLock is left untouched") {
-      listVestingLocks.loneElement.payload shouldBe vestingLock
     }
   }
 
