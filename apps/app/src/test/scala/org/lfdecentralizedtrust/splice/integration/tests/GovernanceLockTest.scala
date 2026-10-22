@@ -36,6 +36,9 @@ trait GovernanceLockTest extends TokenStandardTest {
   private val lockVestingDurationMetaKey = "lock-vesting-duration-micros"
   private val lockVestingEndTimeMetaKey = "lock-vesting-end-time-micros"
 
+  private def durationToRelTime(d: Duration): RelTime =
+    new RelTime(TimeUnit.NANOSECONDS.toMicros(d.toNanos))
+
   private def instantToMicros(i: Instant): Long = ChronoUnit.MICROS.between(Instant.EPOCH, i)
 
   private def formatTimestamp(t: CantonTimestamp): String =
@@ -386,6 +389,12 @@ trait GovernanceLockTest extends TokenStandardTest {
     def substituteGovernanceLock(lock: governancelock.GovernanceLock) =
       new SubstituteLock((Locked, PartyId.tryFromProtoPrimitive(lock.owner), None, None))
 
+    /** Propose a substitution of a vesting GovernanceLock with the given attributes */
+    def substituteVestingLock(owner: PartyId, vestingPeriod: Duration, vestingEndTime: Instant) =
+      new SubstituteLock(
+        (Vesting, owner, Some(durationToRelTime(vestingPeriod)), Some(vestingEndTime))
+      )
+
     /** Propose a substitution of a vesting GovernanceLock */
     def substituteVestingLock(lock: governancelock.GovernanceLock) =
       new SubstituteLock(
@@ -396,10 +405,6 @@ trait GovernanceLockTest extends TokenStandardTest {
           Some(vestingLockSpecification(lock).endTime),
         )
       )
-
-    /** Propose a substitution of the GovernanceLock owned by `targetOwner` */
-    def substituteLockOwnedBy(targetOwner: PartyId) =
-      new SubstituteLock((Locked, targetOwner, None, None))
 
     final class TransferLock(makeData: (PartyId, BigDecimal) => TransferLockData) {
       final def apply(
@@ -442,7 +447,7 @@ trait GovernanceLockTest extends TokenStandardTest {
           Vesting,
           newLockOwner,
           transferAmount,
-          Some(new RelTime(TimeUnit.NANOSECONDS.toMicros(vestingPeriod.toNanos))),
+          Some(durationToRelTime(vestingPeriod)),
           Some(vestingEndTime),
         )
       )

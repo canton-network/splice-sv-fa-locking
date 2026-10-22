@@ -368,6 +368,7 @@ class GovernanceLockTimeBasedIntegrationTest
   "ExpireGovernanceLockSubstitutionTrigger archives expired substitutions in batches" in {
     implicit env =>
       val numSubstitutions = 3
+      val vestingEndTime = getLedgerTime.plus(vestingDuration).underlying.toInstant
       val trigger =
         sv1Backend.dsoDelegateBasedAutomation.trigger[ExpireGovernanceLockSubstitutionTrigger]
 
@@ -394,7 +395,7 @@ class GovernanceLockTimeBasedIntegrationTest
       actAndCheck(
         s"The proposer proposes $numSubstitutions substitutions",
         (1 to numSubstitutions).foreach { _ =>
-          tsv1Operations.substituteLockOwnedBy(sv1Party)(
+          tsv1Operations.substituteVestingLock(sv1Party, vestingDuration, vestingEndTime)(
             proposerParticipant,
             proposer,
             lockKind,
@@ -417,7 +418,10 @@ class GovernanceLockTimeBasedIntegrationTest
         listLockSubstitutions should have length numSubstitutions.toLong
       }
 
-      advanceTime(Duration.ofDays(91))
+      // `listExpiredGovernanceLockSubstitutions` uses a strict `contract_expires_at < now`, and the
+      // trigger reads `now` 5s behind the clock (`clockSkewAutomationDelay`), so step well past
+      // `endTime`.
+      advanceTime(vestingDuration.plusSeconds(10))
 
       clue("The substitutions stay put while the trigger is paused") {
         listLockSubstitutions should have length numSubstitutions.toLong
