@@ -1728,7 +1728,7 @@ object SvDsoStore {
           .getVestingLockSpecification(contract.payload)
           .map(v => Timestamp.assertFromInstant(v.endTime))
         val (lockType, lockSubject) =
-          GovernanceLockUtil.governanceLockTypeAndSubject(contract.payload.specification)
+          GovernanceLockUtil.governanceLockTypeAndSubject(contract.payload)
         DsoAcsStoreRowData(
           contract,
           governanceLockType = Some(lockType),
@@ -1757,7 +1757,7 @@ object SvDsoStore {
         // `listExpiredGovernanceLockSubstitutions` can skip proposals whose lock observers
         // are unavailable.
         val (lockType, lockSubject) =
-          GovernanceLockUtil.governanceLockTypeAndSubject(contract.payload.target.specification)
+          GovernanceLockUtil.specificationTypeAndSubject(contract.payload.target.specification)
         DsoAcsStoreRowData(
           contract,
           governanceLockType = Some(lockType),

@@ -21,9 +21,7 @@ object GovernanceLockUtil {
           .asRuntimeException()
     }
 
-  private def getSpecificationKind(
-      specification: gl.GovernanceLockSpecification
-  ): gl.GovernanceLockKind =
+  def getSpecificationKind(specification: gl.GovernanceLockSpecification): gl.GovernanceLockKind =
     foldSpecification(specification)(_.kind, _.kind)
 
   def getGovernanceLockKind(lock: gl.GovernanceLock): gl.GovernanceLockKind =
@@ -35,17 +33,18 @@ object GovernanceLockUtil {
   /** Parties observing a lock with this specification, mirroring `governanceLockObservers`
     * in `Splice.GovernanceLock`.
     */
-  def governanceLockObservers(specification: gl.GovernanceLockSpecification): Seq[String] =
+  def specificationObservers(specification: gl.GovernanceLockSpecification): Seq[String] =
     getSpecificationKind(specification) match {
       case kind: gl.governancelockkind.GLK_FeaturedApp => Seq(kind.provider)
       case kind: gl.governancelockkind.GLK_ProvisionalFeaturedApp => Seq(kind.provider)
       case _ => Seq.empty
     }
 
-  /** Encodes a lock specification as the `governance_lock_type` and `governance_lock_subject`
-    * index columns.
-    */
-  def governanceLockTypeAndSubject(
+  def governanceLockObservers(lock: gl.GovernanceLock): Seq[String] =
+    specificationObservers(lock.specification)
+
+  /** Encodes a lock as the `governance_lock_type` and `governance_lock_subject` index columns. */
+  def specificationTypeAndSubject(
       specification: gl.GovernanceLockSpecification
   ): (String, String) = {
     val lockType = foldSpecification(specification)(_ => "f", _ => "v")
@@ -60,4 +59,7 @@ object GovernanceLockUtil {
     }
     (s"$lockType:$kindTag", subject)
   }
+
+  def governanceLockTypeAndSubject(lock: gl.GovernanceLock): (String, String) =
+    specificationTypeAndSubject(lock.specification)
 }

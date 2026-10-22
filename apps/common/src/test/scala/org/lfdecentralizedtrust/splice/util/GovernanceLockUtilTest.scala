@@ -25,27 +25,27 @@ class GovernanceLockUtilTest extends AnyWordSpec with BaseTest {
     else
       new gl.governancelockspecification.GLS_FullLock(new gl.FullLockSpecification(kind))
 
-  "governanceLockTypeAndSubject" should {
+  "specificationTypeAndSubject" should {
     "encode every kind of full lock" in {
-      GovernanceLockUtil.governanceLockTypeAndSubject(
+      GovernanceLockUtil.specificationTypeAndSubject(
         spec(featuredApp, vesting = false)
       ) shouldBe ("f:fa", provider)
-      GovernanceLockUtil.governanceLockTypeAndSubject(
+      GovernanceLockUtil.specificationTypeAndSubject(
         spec(provisionalFeaturedApp, vesting = false)
       ) shouldBe ("f:pfa", provider)
-      GovernanceLockUtil.governanceLockTypeAndSubject(
+      GovernanceLockUtil.specificationTypeAndSubject(
         spec(superValidator, vesting = false)
       ) shouldBe ("f:sv", "sv1")
     }
 
     "encode every kind of vesting lock" in {
-      GovernanceLockUtil.governanceLockTypeAndSubject(
+      GovernanceLockUtil.specificationTypeAndSubject(
         spec(featuredApp, vesting = true)
       ) shouldBe ("v:fa", provider)
-      GovernanceLockUtil.governanceLockTypeAndSubject(
+      GovernanceLockUtil.specificationTypeAndSubject(
         spec(provisionalFeaturedApp, vesting = true)
       ) shouldBe ("v:pfa", provider)
-      GovernanceLockUtil.governanceLockTypeAndSubject(
+      GovernanceLockUtil.specificationTypeAndSubject(
         spec(superValidator, vesting = true)
       ) shouldBe ("v:sv", "sv1")
     }

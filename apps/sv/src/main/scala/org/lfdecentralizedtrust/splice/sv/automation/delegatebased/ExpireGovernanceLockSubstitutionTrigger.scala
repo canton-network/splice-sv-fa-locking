@@ -101,7 +101,7 @@ object ExpireGovernanceLockSubstitutionTrigger
       payload: substitutionCodegen.GovernanceLockSubstitution
   ): Seq[String] =
     (payload.owner +: payload.target.owner +:
-      GovernanceLockUtil.governanceLockObservers(payload.target.specification)).distinct
+      GovernanceLockUtil.specificationObservers(payload.target.specification)).distinct
 
   override def dso(payload: substitutionCodegen.GovernanceLockSubstitution): String =
     payload.target.dso
