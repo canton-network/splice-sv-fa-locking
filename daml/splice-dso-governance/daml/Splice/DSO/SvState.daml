@@ -10,6 +10,7 @@ import Splice.DSO.DecentralizedSynchronizer
 import Splice.Util
 
 import DA.List (last)
+import DA.Time (addRelTime, RelTime)
 
 
 -- Checked fetches for per-sv state
@@ -44,24 +45,23 @@ data RewardState = RewardState with
   deriving (Eq, Show, Serializable)
 
 
--- |
+-- | Reward weight adjustment of an SV right due to underlocking.
 data RewardAdjustmentState = RewardAdjustmentState
   with
-    permanentWeightFactor : Decimal -- TODO: move to SvRightOwner for voting.
-      -- ^ the permanent maximum weight factor due to permanent underlocking
+    permanentWeightFactor : Decimal
+      -- ^ The permanent maximum weight factor due to permanent underlocking.
     recoverableUnderlocks : [ UnderlockEvent ]
-      -- ^ Still-recoverable underlocks, sorted by the time they become permanent, latest first.
-      -- Additional invariant: weight factors are strictly increasing (less-penalizing later in the list)
+      -- ^ Still-recoverable underlocks, become permanent at their `permanentAt`, unless recovered from before then.
     lastAdjustedAt : Optional Time
+      -- ^ Represents the last `observedAt` of the last instruction that changed this state.
   deriving (Eq, Show, Serializable)
 
 
-data UnderlockEvent = UnderlockEvent
-  with
-    startTime : Time
-      -- ^ Start time of the underlock event; becomes effective immediately, and permanent after 30.
-    newFactor : Decimal
-      -- ^ the new weight factor
+data UnderlockEvent = UnderlockEvent with
+    permanentAt : Time
+      -- ^ When this underlock becomes permanent if not recovered from.
+    weightFactor : Decimal
+      -- ^ Factor applied to the SV's reward weight while this underlock is in effect.
   deriving (Eq, Show, Serializable)
 
 
@@ -139,38 +139,40 @@ template SvStatusReport with
 
 getAdjustedRewardWeight : Optional RewardAdjustmentState -> Int -> Int
 getAdjustedRewardWeight None weight = weight
-getAdjustedRewardWeight (Some state) weight = floor $ (*) (intToDecimal weight)
-  $ case state.recoverableUnderlocks of
-      underlockEvent :: _ -> underlockEvent.newFactor
-      [] -> state.permanentWeightFactor
+getAdjustedRewardWeight (Some s) weight = floor $ (*) (intToDecimal weight)
+  $ case s.recoverableUnderlocks of
+      underlockEvent :: _ -> min underlockEvent.weightFactor s.permanentWeightFactor
+      [] -> s.permanentWeightFactor
 
 defaultRewardAdjustmentState = RewardAdjustmentState with
   permanentWeightFactor = 1.0
   recoverableUnderlocks = []
   lastAdjustedAt = None
 
--- | Underlocks older than the permanent grace period become permanent. The newest one has the lowest factor.
-promotePermanent : Time -> RewardAdjustmentState -> RewardAdjustmentState
-promotePermanent permanentCutoff s =
-  case span (\underlockEvent -> underlockEvent.startTime > permanentCutoff) s.recoverableUnderlocks of
-    (_, []) -> s
-    (temporary, p :: _) -> RewardAdjustmentState with
-      permanentWeightFactor = min s.permanentWeightFactor p.newFactor
-      recoverableUnderlocks = temporary
-      lastAdjustedAt = s.lastAdjustedAt
+-- | Make the weight factor permanent for the underlocks that has passed the deadline.
+enforcePermanentUnderlock : CanAssert m => Time -> RewardAdjustmentState -> m RewardAdjustmentState
+enforcePermanentUnderlock now s =
+  case span (\underlockEvent -> underlockEvent.permanentAt > now) s.recoverableUnderlocks of
+    (_, []) -> assertFail "No underlock is past its permanence deadline"
+    -- First entry has the lowest factor.
+    (underlocksNotDue, underlockDue :: _) -> pure s with
+      permanentWeightFactor = min s.permanentWeightFactor underlockDue.weightFactor
+      recoverableUnderlocks = underlocksNotDue
 
--- | Update the underlock history to include the factor that the SV currently qualifies for.
-applyWarrantedFactor : Time -> Decimal -> RewardAdjustmentState -> RewardAdjustmentState
-applyWarrantedFactor now warranted s
-  | warranted >= s.permanentWeightFactor = s with recoverableUnderlocks = []
-  | otherwise = s with
-    recoverableUnderlocks =
-      let (recoveredUnderlocks, rest) = span (\underlockEvent -> underlockEvent.newFactor < warranted) s.recoverableUnderlocks
-          -- The last should have the the oldest recovered underlock. The SV has been below the warranted factor since then.
-          start = if null recoveredUnderlocks then now else (last recoveredUnderlocks).startTime
-      in case rest of
-        underlockEvent :: _ | underlockEvent.newFactor == warranted -> rest
-        _ -> (UnderlockEvent with startTime = start; newFactor = warranted) :: rest
+-- |
+applyWarrantedFactor : RelTime -> Time -> Decimal -> RewardAdjustmentState -> RewardAdjustmentState
+applyWarrantedFactor permanentGracePeriod observedAt warranted s =
+  s with
+    recoverableUnderlocks = case rest of
+      e :: _ | e.weightFactor <= warranted -> rest
+      _ | warranted >= s.permanentWeightFactor -> rest
+      _ -> (UnderlockEvent with permanentAt; weightFactor = warranted) :: rest
+  where
+    recoverable e = e.permanentAt > observedAt && e.weightFactor < warranted
+    (recoveredUnderlocks, rest) = span recoverable s.recoverableUnderlocks
+    permanentAt = if null recoveredUnderlocks
+      then observedAt `addRelTime` permanentGracePeriod
+      else (last recoveredUnderlocks).permanentAt
 
 -- instances
 ------------

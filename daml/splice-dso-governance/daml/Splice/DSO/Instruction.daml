@@ -31,7 +31,7 @@ template FeaturedAppUnderlockInstruction with
 template SvUnderlockInstruction with
     dso : Party
     svName : Text
-    qualifyingFactor : Decimal
+    lockedFraction : Decimal
     observedAt : Time
   where
     signatory dso

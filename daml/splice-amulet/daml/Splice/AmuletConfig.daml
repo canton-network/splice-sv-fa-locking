@@ -335,9 +335,9 @@ defaultSvWeightSchedule = Schedule with
     tier = SvLockingTier
     years n = days (365 * n) + hours (6 * n) -- 365.25 days a year
 
-svLockingWeightFactor : [SvLockingTier] -> Decimal -> Decimal -> Decimal
-svLockingWeightFactor tiers lifetimeRewardTotal lockedAmount =
-  case filter (\t -> lockedAmount >= t.minLockedFraction * lifetimeRewardTotal) tiers of
+svLockingWeightFactor : [SvLockingTier] -> Decimal -> Decimal
+svLockingWeightFactor tiers lockedFraction =
+  case filter (\t -> lockedFraction >= t.minLockedFraction) tiers of
     t :: _ -> t.rewardWeightFactor
     [] -> 0.0
 

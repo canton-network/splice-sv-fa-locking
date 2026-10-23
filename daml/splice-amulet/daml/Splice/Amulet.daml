@@ -761,7 +761,7 @@ template UnclaimedActivityRecord
 template SvRewardMintReceipt with
     dso : Party
     amount : Decimal -- ^ The amount of SV rewards minted.
-    svRightOwnerName: Text -- ^ The SV owner name for whose this reward was minted.
+    svRightOwnerName: Text -- ^ The name of the SV for whom this reward was minted.
   where
     signatory dso
 
