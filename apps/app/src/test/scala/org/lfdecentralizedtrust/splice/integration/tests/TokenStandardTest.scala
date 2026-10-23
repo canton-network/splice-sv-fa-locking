@@ -62,7 +62,9 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
   )(implicit
       env: SpliceTestConsoleEnvironment
   ) = {
-    clue(s"Instructing transfer of $amount amulets via token standard from $sender to $receiver") {
+    val action =
+      s"Instructing transfer of $amount amulets via token standard from $sender to $receiver"
+    clue(action) {
       val (factoryChoice, senderHoldingCids) = transferViaTokenStandardCommands(
         participant,
         sender.partyId,
@@ -87,10 +89,12 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       senderHoldingCids.headOption.filter(_ => wait).foreach { trackingHoldingCid =>
         // Prepared tx execution does not wait for the tx being committed.
         // We thus wait here, as otherwise multiple transfer commands will use the same input holdings.
-        clue("Wait until we see at least one of the input holdings being consumed")(
+        checkAction()(
+          action,
+          "Wait until we see at least one of the input holdings being consumed",
           participant.ledger_api.event_query
             .by_contract_id(trackingHoldingCid.contractId, requestingParties = Seq(sender.partyId))
-            .archived should not be empty withClue "archived holding"
+            .archived should not be empty withClue "archived holding",
         )
       }
     }
