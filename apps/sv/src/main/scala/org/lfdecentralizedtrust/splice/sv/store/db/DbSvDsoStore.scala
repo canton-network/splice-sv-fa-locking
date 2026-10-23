@@ -1982,7 +1982,7 @@ class DbSvDsoStore(
                 splice.governancelock.GovernanceLock.TEMPLATE_ID_WITH_PACKAGE_ID
               )}
             and acs.assigned_domain = $synchronizerId
-            and acs.governance_lock_type = 'f:pfa'
+            and acs.governance_lock_type = ${GovernanceLockUtil.StoreTypeAndKind.provisionalFeaturedApp.storeValue}
             and exists (
               select 1
               from #${DsoTables.acsTableName} fa_right

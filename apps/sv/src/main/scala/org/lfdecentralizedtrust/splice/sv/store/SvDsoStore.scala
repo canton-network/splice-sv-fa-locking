@@ -1705,7 +1705,7 @@ object SvDsoStore {
           GovernanceLockUtil.governanceLockTypeAndSubject(contract.payload)
         DsoAcsStoreRowData(
           contract,
-          governanceLockType = Some(lockType),
+          governanceLockType = Some(lockType.storeValue),
           governanceLockSubject = Some(lockSubject),
           contractExpiresAt = expiresAt,
         )
