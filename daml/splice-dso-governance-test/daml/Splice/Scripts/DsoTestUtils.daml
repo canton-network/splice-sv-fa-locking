@@ -113,6 +113,7 @@ initDecentralizedSynchronizerWithAmuletPrice isDevNet initialRound amuletPrice o
         voteCooldownTime = None -- use default value of 1 minute
         nextScheduledLogicalSynchronizerUpgrade = None
         svOperationsSwitchOverTimes = None
+        svUnderlockConfig = None -- use the defaults
   let amuletConfig = fromOptional defaultAmuletConfig optAmuletConfig
   let ansRulesConfig = defaultAnsRulesConfig
 

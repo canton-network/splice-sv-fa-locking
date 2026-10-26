@@ -13,9 +13,9 @@ import DA.Time
 import Daml.Script
 
 import Splice.Amulet
-import Splice.AmuletConfig (defaultSvWeightSchedule, svLockingWeightFactor)
+import Splice.AmuletConfig (SvLockingTier(..), defaultSvWeightSchedule, svLockingWeightFactor)
 import Splice.AmuletRules
-import Splice.Schedule (getValueAsOf)
+import Splice.Schedule (Schedule(..), getValueAsOf)
 import Splice.DSO.Instruction
 import Splice.DSO.SvRightOwner
 import Splice.DSO.SvState
@@ -23,6 +23,7 @@ import Splice.DsoRules
 import Splice.Round
 
 import Splice.Scripts.DsoTestUtils
+import Splice.Scripts.TestSynchronizerMigration (executeDsoRulesConfigChange)
 import Splice.Scripts.Util
 import Splice.Testing.Registries.AmuletRegistry (getActiveOpenRoundsSorted)
 
@@ -30,12 +31,12 @@ import Splice.Testing.Registries.AmuletRegistry (getActiveOpenRoundsSorted)
 ----------
 
 underlockAction : AmuletApp -> Text -> Decimal -> Script ActionRequiringConfirmation
-underlockAction app svName qualifyingFactor = do
+underlockAction app svName weightFactor = do
   [(amuletRulesCid, _)] <- query @AmuletRules app.dso
   pure $ ARC_DsoRules with
     dsoAction = SRARC_DsoRules_CreateSvUnderlockInstruction DsoRules_CreateSvUnderlockInstruction with
       svName
-      qualifyingFactor
+      lockedFraction = weightFactor
       amuletRulesCid
 
 -- | Confirm an underlock instruction with all SVs, execute the confirmed action, and return the new instruction.
@@ -114,12 +115,39 @@ setAdjustmentState app svName rewardAdjustmentState = do
   void $ submit app.dso $ createCmd rewardState with
     state = rewardState.state with rewardAdjustmentState
 
--- | Expected state after applying instructions: no permanent change unless given, `lastAdjustedAt` set.
+-- | Expected state: the permanent factor, the recoverable underlocks as `(permanentAt, weightFactor)` (latest deadline
+-- first), and `lastAdjustedAt`.
 expectedState : Decimal -> [(Time, Decimal)] -> Time -> Optional RewardAdjustmentState
 expectedState permanentWeightFactor events lastAdjustedAt = Some RewardAdjustmentState with
   permanentWeightFactor
-  recoverableUnderlocks = map (\(startTime, newFactor) -> UnderlockEvent with startTime; newFactor) events
+  recoverableUnderlocks = map (\(permanentAt, weightFactor) -> UnderlockEvent with permanentAt; weightFactor) events
   lastAdjustedAt = Some lastAdjustedAt
+
+underlockedUntil : Time -> Time
+underlockedUntil observedAt = observedAt `addRelTime` svUnderlockSuperValidatorUnderlockPermanentGracePeriod None
+
+-- | Set `DsoRulesConfig.svUnderlockConfig` through an SV vote.
+setSvUnderlockConfig : AmuletApp -> SvUnderlockConfig -> Script ()
+setSvUnderlockConfig app svUnderlockConfig =
+  executeDsoRulesConfigChange app (\config -> config with svUnderlockConfig = Some svUnderlockConfig)
+
+-- | The command making `svName`'s underlocks past their deadline permanent.
+enforceUnderlocksCmd : AmuletApp -> Party -> Text -> Script (Commands DsoRules_EnforceSvPermanentUnderlockResult)
+enforceUnderlocksCmd app sv svName = do
+  (svRewardStateCid, _) <- rewardStateOf app svName
+  [(dsoRulesCid, _)] <- query @DsoRules app.dso
+  pure $ exerciseCmd dsoRulesCid DsoRules_EnforceSvPermanentUnderlock with
+    svName
+    svRewardStateCid
+    sv
+
+enforceUnderlocks : AmuletApp -> Party -> Text -> Script ()
+enforceUnderlocks app sv svName =
+  enforceUnderlocksCmd app sv svName >>= void . submit (actAs sv <> readAs app.dso)
+
+enforceUnderlocksMustFail : AmuletApp -> Party -> Text -> Script ()
+enforceUnderlocksMustFail app sv svName =
+  enforceUnderlocksCmd app sv svName >>= submitMustFail (actAs sv <> readAs app.dso)
 
 -- | Collect svName's SV reward coupon for the next open round it hasn't collected, and return the total coupon weight.
 collectCouponWeight : AmuletApp -> Party -> Text -> Script Int
@@ -161,13 +189,13 @@ testSvUnderlockInstructionLifecycle = do
   instruction === SvUnderlockInstruction with
     dso = app.dso
     svName = "sv1"
-    qualifyingFactor = 0.6
+    lockedFraction = 0.6
     observedAt = now
 
   Some newStateCid <- executeUnderlockInstruction app sv1 instructionCid
   (stateCid, _) <- rewardStateOf app "sv1"
   stateCid === newStateCid
-  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(now, 0.6)] now)
+  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(underlockedUntil now, 0.6)] now)
 
   -- The instruction is consumed
   [] <- query @SvUnderlockInstruction app.dso
@@ -187,22 +215,42 @@ testSvUnderlockTemporaryLossAndRecovery = do
   underlock app sv1 "sv1" 1.0
   collectCouponWeight app sv1 "sv1" >>= (=== sv1Weight)
 
--- | The permanent grace period comes from the current `AmuletConfig`.
+-- | The permanent grace period comes from the current `DsoRulesConfig`.
 testSvUnderlockNonDefaultPermanentGracePeriod : Script ()
 testSvUnderlockNonDefaultPermanentGracePeriod = do
-  (app, _, (sv1, _, _, _)) <- initMainNetWithSvUnderlockLockConfig
-    ((svUnderlockEnforcementLockConfig scriptStartTime) with superValidatorUnderlockPermanentGracePeriod = Some (days 2))
-  underlock app sv1 "sv1" 0.6
-
-  -- Re-observed after 2 days rather than the default 30: the underlock is now permanent
-  passTime (days 2)
+  (app, _, (sv1, _, _, _)) <- initMainNetWithSvUnderlockEnforcement
+  setSvUnderlockConfig app SvUnderlockConfig with
+    superValidatorUnderlockPermanentGracePeriod = Some (days 2)
+    superValidatorWeightSchedule = None
   t <- getTime
   underlock app sv1 "sv1" 0.6
+  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(t `addRelTime` days 2, 0.6)] t)
+
+  -- Enforceable after 2 days rather than the default 30
+  passTime (days 2)
+  enforceUnderlocks app sv1 "sv1"
   adjustmentStateOf app "sv1" >>= (=== expectedState 0.6 [] t)
 
   -- Recovery can't lift the weight above the permanent 60%
   underlock app sv1 "sv1" 1.0
   collectCouponWeight app sv1 "sv1" >>= (=== 60000)
+
+-- | `DsoRulesConfig.svUnderlockConfig` falls back to the defaults per field.
+testSvUnderlockConfigDefaults : Script ()
+testSvUnderlockConfigDefaults = script do
+  let empty = SvUnderlockConfig with
+        superValidatorUnderlockPermanentGracePeriod = None
+        superValidatorWeightSchedule = None
+      custom = Schedule with initialValue = [SvLockingTier 0.5 1.0]; futureValues = []
+
+  svUnderlockSuperValidatorUnderlockPermanentGracePeriod None === days 30
+  svUnderlockSuperValidatorUnderlockPermanentGracePeriod (Some empty) === days 30
+  svUnderlockSuperValidatorUnderlockPermanentGracePeriod (Some empty with superValidatorUnderlockPermanentGracePeriod = Some (days 2))
+    === days 2
+
+  svUnderlockSuperValidatorWeightSchedule None === defaultSvWeightSchedule
+  svUnderlockSuperValidatorWeightSchedule (Some empty) === defaultSvWeightSchedule
+  svUnderlockSuperValidatorWeightSchedule (Some empty with superValidatorWeightSchedule = Some custom) === custom
 
 -- | CIP example: Staggered 60% / 40% deadlines and a permanent factor surviving recovery.
 testSvUnderlockStaggeredDeadlines : Script ()
@@ -214,13 +262,14 @@ testSvUnderlockStaggeredDeadlines = do
   passTime (days 3)
   t2 <- getTime
   underlock app sv1 "sv1" 0.4
-  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(t2, 0.4), (t1, 0.6)] t2)
+  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(underlockedUntil t2, 0.4), (underlockedUntil t1, 0.6)] t2)
 
-  -- Re-observed after the permanent grace period of the first underlock: 60% becomes permanent
-  passTime (days 27)
-  t3 <- getTime
-  underlock app sv1 "sv1" 0.4
-  adjustmentStateOf app "sv1" >>= (=== expectedState 0.6 [(t2, 0.4)] t3)
+  -- Not enforceable before the first deadline; at it, 60% becomes permanent and 40% stays recoverable
+  passTime (days 26)
+  enforceUnderlocksMustFail app sv1 "sv1"
+  passTime (days 1)
+  enforceUnderlocks app sv1 "sv1"
+  adjustmentStateOf app "sv1" >>= (=== expectedState 0.6 [(underlockedUntil t2, 0.4)] t2)
 
   -- Full recovery can only get back to the permanent 60%
   passTime (days 1)
@@ -234,10 +283,9 @@ testSvUnderlockStaggeredDeadlines = do
 testSvUnderlockAnniversary : Script ()
 testSvUnderlockAnniversary = do
   let activatesAt = datetime 1970 Jan 1 0 0 0
-      lifetimeRewards = 1000.0
-      locked = 480.0
+      lockedFraction = 480.0 / 1000.0
       -- What each SV's automation computes
-      factorAt now = svLockingWeightFactor (getValueAsOf (now `subTime` activatesAt) defaultSvWeightSchedule) lifetimeRewards locked
+      factorAt now = svLockingWeightFactor (getValueAsOf (now `subTime` activatesAt) defaultSvWeightSchedule) lockedFraction
 
   (app, _, (sv1, _, _, _)) <- initMainNetWithSvUnderlockEnforcementAt activatesAt
 
@@ -249,10 +297,11 @@ testSvUnderlockAnniversary = do
   passTime ((activatesAt `addRelTime` (days 365 + hours 6)) `subTime` t1)
   anniversary <- getTime
   factorAt anniversary === 0.0
-  underlock app sv1 "sv1" (factorAt anniversary)
 
-  -- The earlier 60% underlock is permanent by now; the new one starts at the anniversary
-  adjustmentStateOf app "sv1" >>= (=== expectedState 0.6 [(anniversary, 0.0)] anniversary)
+  -- The earlier 60% underlock is long past its deadline and gets enforced; the new one starts at the anniversary
+  enforceUnderlocks app sv1 "sv1"
+  underlock app sv1 "sv1" (factorAt anniversary)
+  adjustmentStateOf app "sv1" >>= (=== expectedState 0.6 [(underlockedUntil anniversary, 0.0)] anniversary)
 
 
 -- Edge cases of the apply step
@@ -274,7 +323,7 @@ testSvUnderlockStaleInstructionIsNoOp = do
   None <- queryContractId app.dso older
   (stateCidAfter, _) <- rewardStateOf app "sv1"
   stateCidAfter === stateCidBefore
-  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(t2, 0.4)] t2)
+  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(underlockedUntil t2, 0.4)] t2)
 
   -- A full recovery keeps `lastAdjustedAt`, so an older instruction is still recognised as stale.
   underlock app sv1 "sv1" 0.6
@@ -310,7 +359,7 @@ testSvUnderlockUnchangedStateIsNotRecreated = do
   cid === underlockedCid
   rewardState === underlocked
 
--- | Start time and permanence use the instruction's `observedAt`, not the time it is applied.
+-- | The permanence deadline is measured from the instruction's `observedAt`, not the time it is applied.
 testSvUnderlockLateApplyUsesObservedAt : Script ()
 testSvUnderlockLateApplyUsesObservedAt = do
   (app, _, (sv1, _, _, _)) <- initMainNetWithSvUnderlockEnforcement
@@ -318,19 +367,41 @@ testSvUnderlockLateApplyUsesObservedAt = do
   first <- createUnderlockInstruction app "sv1" 0.6
   passTime (days 2)
   Some _ <- executeUnderlockInstruction app sv1 first
-  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(t1, 0.6)] t1)
+  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(underlockedUntil t1, 0.6)] t1)
 
-  -- Observed one day before the underlock becomes permanent, applied one day after: still recoverable
+  -- Re-observed one day before the deadline but applied one day after it: nothing changes
   passTime (days 27)
-  beforePermanent <- createUnderlockInstruction app "sv1" 0.6
+  beforeDeadline <- createUnderlockInstruction app "sv1" 0.6
   passTime (days 2)
-  None <- executeUnderlockInstruction app sv1 beforePermanent
-  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(t1, 0.6)] t1)
+  None <- executeUnderlockInstruction app sv1 beforeDeadline
+  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(underlockedUntil t1, 0.6)] t1)
 
-  -- Observed after it: permanent
-  t4 <- getTime
+  -- 30 days after `observedAt` (not after the apply) the underlock is enforceable
+  enforceUnderlocks app sv1 "sv1"
+  adjustmentStateOf app "sv1" >>= (=== expectedState 0.6 [] t1)
+
+-- | Permanent enforcement: only past the deadline, and afterwards recovery can't lift the weight above the permanent factor.
+testSvUnderlockEnforcePermanent : Script ()
+testSvUnderlockEnforcePermanent = do
+  (app, _, (sv1, _, _, _)) <- initMainNetWithSvUnderlockEnforcement
+  t1 <- getTime
   underlock app sv1 "sv1" 0.6
-  adjustmentStateOf app "sv1" >>= (=== expectedState 0.6 [] t4)
+
+  -- Nothing to enforce before the deadline
+  passTime (days 30 - seconds 1)
+  enforceUnderlocksMustFail app sv1 "sv1"
+
+  -- A recovery observed after the deadline, before anyone enforced, doesn't remove the underlock
+  passTime (seconds 1)
+  underlock app sv1 "sv1" 1.0
+  adjustmentStateOf app "sv1" >>= (=== expectedState 1.0 [(underlockedUntil t1, 0.6)] t1)
+
+  enforceUnderlocks app sv1 "sv1"
+  adjustmentStateOf app "sv1" >>= (=== expectedState 0.6 [] t1)
+  collectCouponWeight app sv1 "sv1" >>= (=== 60000)
+
+  -- Nothing left to enforce
+  enforceUnderlocksMustFail app sv1 "sv1"
 
 
 -- Confirmations
@@ -367,7 +438,7 @@ testSvUnderlockInstructionByVote = do
   initiateAndAcceptVote app [sv1, sv2, sv3, sv4] action
   [(instructionCid, instruction)] <- query @SvUnderlockInstruction dso
   instruction.svName === "sv1"
-  instruction.qualifyingFactor === 0.6
+  instruction.lockedFraction === 0.6
   Some _ <- executeUnderlockInstruction app sv1 instructionCid
   pure ()
 
@@ -423,7 +494,7 @@ testSvUnderlockNotActiveBeforeActivation = do
   instructionCid <- submit dso $ createCmd SvUnderlockInstruction with
     dso
     svName = "sv1"
-    qualifyingFactor = 0.6
+    lockedFraction = 0.6
     observedAt = now
   executeUnderlockInstructionMustFail app sv1 instructionCid
   adjustmentStateOf app "sv1" >>= (=== None)
@@ -510,19 +581,21 @@ testSvUnderlockTermination = do
   passTime (hours 1)
   collectCouponWeight app sv1 "sv1" >>= (=== 60000)
 
-  -- After termination no adjustment applies, temporary or permanent (round 1)
+  -- After termination only permanent losses apply: the permanent 0.5, not the recoverable 0.4 (round 1)
   now <- getTime
   setAdjustmentState app "sv1" $ Some RewardAdjustmentState with
     permanentWeightFactor = 0.5
-    recoverableUnderlocks = [UnderlockEvent with startTime = now; newFactor = 0.4]
+    recoverableUnderlocks = [UnderlockEvent with permanentAt = underlockedUntil now; weightFactor = 0.4]
     lastAdjustedAt = Some now
-  collectCouponWeight app sv1 "sv1" >>= (=== sv1Weight)
+  collectCouponWeight app sv1 "sv1" >>= (=== 50000)
 
-  -- An instruction can't be applied with a round at or after termination, only with one before it
+  -- With a round at or after termination, executing an instruction consumes it and changes nothing
   second <- createUnderlockInstruction app "sv1" 0.0
-  executeUnderlockInstructionInRoundMustFail app sv1 round1Cid second
-
-  Some _ <- executeUnderlockInstructionInRound app sv1 round0Cid second
+  (_, before) <- rewardStateOf app "sv1"
+  None <- executeUnderlockInstructionInRound app sv1 round1Cid second
+  None <- queryContractId app.dso second
+  (_, after) <- rewardStateOf app "sv1"
+  after === before
   pure ()
 
 -- Ultimate SV rights owner
@@ -567,8 +640,8 @@ testSvUnderlockUltimateOwnerGroup = do
   -- One factor for the group, applied to each right in it
   now <- getTime
   forA_ [ name | (group, name) <- groups, group == "DA" ] $ \name -> underlock app sv2 name 0.6
-  adjustmentStateOf app "DA-1" >>= (=== expectedState 1.0 [(now, 0.6)] now)
-  adjustmentStateOf app "DA-2" >>= (=== expectedState 1.0 [(now, 0.6)] now)
+  adjustmentStateOf app "DA-1" >>= (=== expectedState 1.0 [(underlockedUntil now, 0.6)] now)
+  adjustmentStateOf app "DA-2" >>= (=== expectedState 1.0 [(underlockedUntil now, 0.6)] now)
 
   -- Rights outside the group are untouched
   adjustmentStateOf app "sv2" >>= (=== None)

@@ -11,7 +11,6 @@ import Daml.Script
 import Splice.AmuletRules
 import Splice.AmuletConfig
 import Splice.Fees
-import Splice.Schedule
 import Splice.Testing.Registries.AmuletRegistry.Parameters
 import Splice.Scripts.Util
 
@@ -48,24 +47,13 @@ testAmuletRulesSvUnderlockConfigValidation = do
   let currentConfig = amuletRules.configSchedule.initialValue
       activeLockConfig = (svUnderlockEnforcementLockConfig (time (date 2027 Jan 1) 0 0 0)) with
         superValidatorUnderlockEnforcementTerminatesAfter = Some (days (365 * 5 + 30))
-        superValidatorWeightSchedule = Some defaultSvWeightSchedule
 
-  -- An invalid SV underlock config is rejected: activation without the permanent grace period
+  -- An invalid SV underlock config is rejected: enforcement terminating immediately
   submitMustFail (actAs app.dso <> readAs app.dso) $
     exerciseCmd amuletRulesCid AmuletRules_SetConfig with
       newConfig = currentConfig with
         governanceLockConfig = Some activeLockConfig with
-          superValidatorUnderlockPermanentGracePeriod = None
-      baseConfig = currentConfig
-
-  -- An invalid SV weight schedule is rejected: tiers out of order
-  submitMustFail (actAs app.dso <> readAs app.dso) $
-    exerciseCmd amuletRulesCid AmuletRules_SetConfig with
-      newConfig = currentConfig with
-        governanceLockConfig = Some activeLockConfig with
-          superValidatorWeightSchedule = Some Schedule with
-            initialValue = [SvLockingTier 0.45 0.6, SvLockingTier 0.7 1.0]
-            futureValues = []
+          superValidatorUnderlockEnforcementTerminatesAfter = Some (days 0)
       baseConfig = currentConfig
 
   -- A valid SV underlock config is accepted

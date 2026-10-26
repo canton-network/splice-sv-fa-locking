@@ -132,15 +132,12 @@ emptyGovernanceLockConfig = GovernanceLockConfig with
   featuredAppUnderlockGracePeriod = None
   superValidatorUnderlockEnforcementActivatesAt = None
   superValidatorUnderlockEnforcementTerminatesAfter = None
-  superValidatorUnderlockPermanentGracePeriod = None
-  superValidatorWeightSchedule = None
 
--- | SV underlock enforcement activating at the given time, with the 30-day permanent grace period set explicitly
--- (required once activation is set).
+-- | SV underlock enforcement activating at the given time. The SV-only parameters (permanent grace period,
+-- weight schedule) live in `DsoRulesConfig.svUnderlockConfig` and keep their defaults.
 svUnderlockEnforcementLockConfig : Time -> GovernanceLockConfig
 svUnderlockEnforcementLockConfig activatesAt = emptyGovernanceLockConfig with
   superValidatorUnderlockEnforcementActivatesAt = Some activatesAt
-  superValidatorUnderlockPermanentGracePeriod = Some (days 30)
 
 replaceDevelopmentFundConfig : AmuletApp -> AmuletConfig Unit.USD -> Optional Party -> Optional Decimal -> Script ()
 replaceDevelopmentFundConfig app baseConfig optDevelopmentFundManager optDevelopmentFundPercentage = do

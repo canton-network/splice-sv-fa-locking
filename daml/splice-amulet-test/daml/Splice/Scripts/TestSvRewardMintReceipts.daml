@@ -26,7 +26,6 @@ createSvRewardCoupon app beneficiary svRightOwnerName = submit app.dso $ createC
   round = Round 0
   svRightOwnerName
 
--- | Set SV underlock enforcement to activate at the given time.
 activateSvUnderlockEnforcementAt : AmuletApp -> Time -> Script ()
 activateSvUnderlockEnforcementAt app activatesAt = updateAmuletConfig app $ \config -> config with
   governanceLockConfig = Some (svUnderlockEnforcementLockConfig activatesAt)
@@ -122,3 +121,26 @@ testSvRewardMintReceiptsAfterActivation = do
   mintViaTransfer app alice withoutRightOwner
   receipts <- query @SvRewardMintReceipt app.dso
   length receipts === 2
+
+-- | Once the SV lock-up requirement has ended (measured on the round's `issuingFor`), mints no longer create receipts.
+testNoSvRewardMintReceiptsAfterTermination : Script ()
+testNoSvRewardMintReceiptsAfterTermination = do
+  DefaultAppWithUsers{..} <- setupDefaultAppWithUsers
+  now <- getTime
+
+  -- Terminate one minute into the issuance curve: every round after round 0 is past it
+  updateAmuletConfig app $ \config -> config with
+    governanceLockConfig = Some (svUnderlockEnforcementLockConfig now) with
+      superValidatorUnderlockEnforcementTerminatesAfter = Some (minutes 1)
+
+  couponCid <- createSvRewardCoupon app bob (Some "sv1")
+  runNextIssuance app
+  runNextIssuance app
+
+  (_, openRound) <- getLatestOpenRound app
+  assert (openRound.issuingFor >= minutes 1)
+  mintViaTransfer app bob couponCid
+  -- the coupon was minted, but no receipt was created
+  [] <- query @SvRewardCoupon app.dso
+  [] <- query @SvRewardMintReceipt app.dso
+  pure ()

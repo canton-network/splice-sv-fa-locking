@@ -19,7 +19,7 @@ import qualified DA.TextMap as TextMap
 import DA.Time
 
 import Splice.Amulet
-import Splice.AmuletConfig (governanceLockSuperValidatorUnderlockPermanentGracePeriod, governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter, AmuletConfig(..), USD)
+import Splice.AmuletConfig (governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter, AmuletConfig(..), USD, SvLockingTier(..), defaultSvWeightSchedule)
 import Splice.Amulet.RewardAccountingV2 qualified as RewardAccountingV2
 import Splice.AmuletRules
 import Splice.ExternalPartyAmuletRules
@@ -622,7 +622,28 @@ data DsoRulesConfig = DsoRulesConfig with
     voteCooldownTime : Optional RelTime -- ^ The minimum time between two votes by the same SV.
     nextScheduledLogicalSynchronizerUpgrade: Optional LogicalSynchronizerUpgradeSchedule
     svOperationsSwitchOverTimes : Optional (TextMap Time) -- ^ Timepoints for synchronized switch-overs of amulet functionality both on and off-ledger.
+    svUnderlockConfig : Optional SvUnderlockConfig -- ^ Parameters for enforcing SV underlocking that only DsoRules uses.
   deriving (Eq, Show, Serializable)
+
+-- | Parameters for automatic enforcement of SV underlocking (CIP-0127).
+data SvUnderlockConfig = SvUnderlockConfig with
+    superValidatorUnderlockPermanentGracePeriod : Optional RelTime
+      -- ^ How long an underlocked sv has to cure before it permanently drops a reward tier.
+      --   Default: 30 days.
+    superValidatorWeightSchedule : Optional (Schedule RelTime [SvLockingTier])
+      -- ^ Tiers in effect, keyed by the time elapsed since `superValidatorUnderlockEnforcementActivatesAt` which lives in `AmuletConfig.governanceLockConfig`.
+      -- Tiers are sorted from highest to lowest. An SV below lowest tier earns 0
+      -- Default: Refer to table in CIP-0105 section 5.
+  deriving (Eq, Show, Serializable)
+
+getSvUnderlockConfigValue : a -> (SvUnderlockConfig -> Optional a) -> Optional SvUnderlockConfig -> a
+getSvUnderlockConfigValue defaultValue getValue config = fromOptional defaultValue $ config >>= getValue
+
+svUnderlockSuperValidatorWeightSchedule : Optional SvUnderlockConfig -> Schedule RelTime [SvLockingTier]
+svUnderlockSuperValidatorWeightSchedule = getSvUnderlockConfigValue defaultSvWeightSchedule (.superValidatorWeightSchedule)
+
+svUnderlockSuperValidatorUnderlockPermanentGracePeriod : Optional SvUnderlockConfig -> RelTime
+svUnderlockSuperValidatorUnderlockPermanentGracePeriod = getSvUnderlockConfigValue (days 30) (.superValidatorUnderlockPermanentGracePeriod)
 
 -- | Read the `voteCooldownTime` from the `DsoRulesConfig` with a default value of 1 minute.
 getVoteCooldownTime : DsoRulesConfig -> RelTime
@@ -2361,15 +2382,15 @@ template DsoRules with
 
         amuletRules <- fetchReferenceData forDso amuletRulesCid
         now <- getTime
-        let config = getValueAsOf now amuletRules.configSchedule
+        let amuletConfig = getValueAsOf now amuletRules.configSchedule
         openRound <- fetchReferenceData forDso openMiningRoundCid
 
-        svUnderlockEnforcementActive config >>= require "SV underlock enforcement is active"
+        svUnderlockEnforcementActive amuletConfig >>= require "SV underlock enforcement is active"
 
         instruction <- fetchAndArchive forDso instructionCid
         svRewardState <- fetchChecked (ForSv with dso; svName = instruction.svName) svRewardStateCid
-        let permanentGracePeriod = governanceLockSuperValidatorUnderlockPermanentGracePeriod config.governanceLockConfig
-            terminated = checkSvUnderlockEnforcementTermination config openRound
+        let permanentGracePeriod = svUnderlockSuperValidatorUnderlockPermanentGracePeriod config.svUnderlockConfig
+            terminated = checkSvUnderlockEnforcementTermination amuletConfig openRound
             old = fromOptional defaultRewardAdjustmentState svRewardState.state.rewardAdjustmentState
             observedAt = instruction.observedAt
             stale = optional False (> observedAt) old.lastAdjustedAt
@@ -2782,6 +2803,12 @@ instance Patchable DsoRulesConfig where
     nextScheduledLogicalSynchronizerUpgrade = patch new.nextScheduledLogicalSynchronizerUpgrade base.nextScheduledLogicalSynchronizerUpgrade current.nextScheduledLogicalSynchronizerUpgrade
     voteCooldownTime = patch new.voteCooldownTime base.voteCooldownTime current.voteCooldownTime
     svOperationsSwitchOverTimes = patch new.svOperationsSwitchOverTimes base.svOperationsSwitchOverTimes current.svOperationsSwitchOverTimes
+    svUnderlockConfig = patch new.svUnderlockConfig base.svUnderlockConfig current.svUnderlockConfig
+
+instance Patchable SvUnderlockConfig where
+  patch new base current = SvUnderlockConfig with
+    superValidatorUnderlockPermanentGracePeriod = patch new.superValidatorUnderlockPermanentGracePeriod base.superValidatorUnderlockPermanentGracePeriod current.superValidatorUnderlockPermanentGracePeriod
+    superValidatorWeightSchedule = patch new.superValidatorWeightSchedule base.superValidatorWeightSchedule current.superValidatorWeightSchedule
 
 instance Patchable SynchronizerUpgradeSchedule where
   patch new base current = SynchronizerUpgradeSchedule with

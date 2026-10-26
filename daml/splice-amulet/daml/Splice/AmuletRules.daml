@@ -221,11 +221,12 @@ template AmuletRules
         let rewardsConfig = RewardsIssuanceConfig with
               issueAppRewards = True
               issueValidatorRewards = True
-        executeTransfer (toInterfaceContractId self) rewardsConfig context dso
-          (getDevelopmentFundManagerBlacklist configUsd)
-          (configUsd.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt))
-          (governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter configUsd.governanceLockConfig)
-          transfer
+            transferEnv = TransferEnv with
+              developmentFundManagerBlacklist = getDevelopmentFundManagerBlacklist configUsd
+              svUnderlockEnforcementActivatesAt = configUsd.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)
+              svUnderlockEnforcementTerminatesAfter = governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter configUsd.governanceLockConfig
+
+        executeTransfer (toInterfaceContractId self) rewardsConfig context dso transferEnv transfer
 
     nonconsuming choice AmuletRules_CreateExternalPartySetupProposal : AmuletRules_CreateExternalPartySetupProposalResult
       -- ^ Propose to host an external party
@@ -314,14 +315,15 @@ template AmuletRules
         checkExpectedDso dso expectedDso
         -- validate choice parameters
         configUsd <- getValueAsOfLedgerTime configSchedule
-        let svUnderlockEnforcementActivatesAt = configUsd.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)
-            svUnderlockEnforcementTerminatesAfter = governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter configUsd.governanceLockConfig
+        let transferEnv = TransferEnv with
+              developmentFundManagerBlacklist = getDevelopmentFundManagerBlacklist configUsd
+              svUnderlockEnforcementActivatesAt = configUsd.governanceLockConfig >>= (.superValidatorUnderlockEnforcementActivatesAt)
+              svUnderlockEnforcementTerminatesAfter = governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter configUsd.governanceLockConfig
         case validateBuyMemberTrafficInputs configUsd synchronizerId trafficAmount of
           Left failureStatus -> failWithStatus failureStatus
           Right _ -> pure ()
         (trafficCostAmulet, trafficCostUsd) <- computeSynchronizerFees dso provider trafficAmount this context
-        (transferResult, meta) <- splitAndBurn (toInterfaceContractId self) provider trafficCostAmulet inputs context dso
-          (getDevelopmentFundManagerBlacklist configUsd) svUnderlockEnforcementActivatesAt svUnderlockEnforcementTerminatesAfter "traffic purchase"
+        (transferResult, meta) <- splitAndBurn (toInterfaceContractId self) provider trafficCostAmulet inputs context dso transferEnv "traffic purchase"
         -- create a new MemberTraffic contract for the purchased traffic
         purchasedTraffic <- create MemberTraffic with
           dso
@@ -1196,11 +1198,16 @@ data RewardsIssuanceConfig = RewardsIssuanceConfig with
     issueValidatorRewards : Bool
   deriving (Serializable)
 
+data TransferEnv = TransferEnv with
+  developmentFundManagerBlacklist : [Party]
+  svUnderlockEnforcementActivatesAt : Optional Time
+  svUnderlockEnforcementTerminatesAfter : RelTime
+
 -- | Execute a transfer.
-executeTransfer : ContractId TransferEventsV2.EventLog -> RewardsIssuanceConfig -> TransferContext -> Party -> [Party] -> Optional Time -> RelTime -> Transfer -> Update TransferResult
-executeTransfer eventLogCid config context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt svUnderlockEnforcementTerminatesAfter t = do
+executeTransfer : ContractId TransferEventsV2.EventLog -> RewardsIssuanceConfig -> TransferContext -> Party -> TransferEnv -> Transfer -> Update TransferResult
+executeTransfer eventLogCid config context dso transferEnv t = do
   -- compute summaries
-  csum <- summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt svUnderlockEnforcementTerminatesAfter t
+  csum <- summarizeAndValidateContext eventLogCid context dso transferEnv t
   executeTransfer' config csum dso t
 
 -- | Execute a transfer for external parties so that the prepared tx remains valid for 24h
@@ -1365,8 +1372,8 @@ getUnsuspendedFeaturedAppProvider dso contextFeaturedAppRight tf = do
         then None
         else Some tf.provider
 
-summarizeAndValidateContext : ContractId TransferEventsV2.EventLog -> TransferContext -> Party -> [Party] -> Optional Time -> RelTime -> Transfer -> Update TransferContextSummaryV2
-summarizeAndValidateContext eventLogCid context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt svUnderlockEnforcementTerminatesAfter tf = do
+summarizeAndValidateContext : ContractId TransferEventsV2.EventLog -> TransferContext -> Party -> TransferEnv -> Transfer -> Update TransferContextSummaryV2
+summarizeAndValidateContext eventLogCid context dso transferEnv@TransferEnv{..} tf = do
   -- check that the current mining round is open
   openRound <- fetchReferenceData (ForDso with dso) context.openMiningRound
   assertDeadlineExceeded "openRound.opensAt" openRound.opensAt
@@ -1580,32 +1587,12 @@ summarizeAndConsumeInputs csum dso sender inps = do
       unclaimedActivityRecord <- fetchAndArchive forOwner unclaimedActivityRecordCid
       assertWithinDeadline "UnclaimedActivityRecord.expiresAt" unclaimedActivityRecord.expiresAt
 
-      return $ case unclaimedActivityRecord.svRightOwnerName of
-        None -> TransferInputsSummary with
-          totalAmuletAmount = s.totalAmuletAmount
-          totalAppRewardAmount = s.totalAppRewardAmount
-          totalValidatorRewardAmount = s.totalValidatorRewardAmount
-          totalUnclaimedActivityRecordAmount =
-            (+ unclaimedActivityRecord.amount) <$> s.totalUnclaimedActivityRecordAmount
-          totalValidatorFaucetAmount = s.totalValidatorFaucetAmount
-          totalSvRewardAmount = s.totalSvRewardAmount
-          totalHoldingFees = s.totalHoldingFees
-          amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
-          changeToHoldingFeesRate = s.changeToHoldingFeesRate
-          totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
-          mintedSvRewardMap = s.mintedSvRewardMap
-        Some svRightOwnerName -> TransferInputsSummary with
-          totalAmuletAmount = s.totalAmuletAmount
-          totalAppRewardAmount = s.totalAppRewardAmount
-          totalValidatorRewardAmount = s.totalValidatorRewardAmount
-          totalUnclaimedActivityRecordAmount = s.totalUnclaimedActivityRecordAmount
-          totalValidatorFaucetAmount = s.totalValidatorFaucetAmount
-          totalSvRewardAmount = unclaimedActivityRecord.amount + s.totalSvRewardAmount
-          totalHoldingFees = s.totalHoldingFees
-          amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
-          changeToHoldingFeesRate = s.changeToHoldingFeesRate
-          totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
-          mintedSvRewardMap = addMintedSvReward svRightOwnerName unclaimedActivityRecord.amount s.mintedSvRewardMap
+      return s with
+        totalUnclaimedActivityRecordAmount =
+          (+ unclaimedActivityRecord.amount) <$> s.totalUnclaimedActivityRecordAmount
+        mintedSvRewardMap = optional s.mintedSvRewardMap
+          (\svName -> addMintedSvReward svName unclaimedActivityRecord.amount s.mintedSvRewardMap)
+          unclaimedActivityRecord.svRightOwnerName
 
     summarizeAndConsumeInput _round s (InputDevelopmentFundCoupon couponCid) = do
       coupon <- fetchAndArchive forOwner couponCid
@@ -2370,13 +2357,13 @@ computeTransferPreapprovalFee duration amuletConfig context dso = do
   let feeAmulet = feeUsd / contextMiningRound.amuletPrice
   pure (feeAmulet, feeUsd)
 
-splitAndBurn : ContractId TransferEventsV2.EventLog -> Party -> Decimal -> [TransferInput] -> TransferContext -> Party -> [Party] -> Optional Time -> RelTime -> Text -> Update (TransferResult, Metadata)
-splitAndBurn eventLogCid sender amount inputs context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt svUnderlockEnforcementTerminatesAfter usage = do
+splitAndBurn : ContractId TransferEventsV2.EventLog -> Party -> Decimal -> [TransferInput] -> TransferContext -> Party -> TransferEnv -> Text -> Update (TransferResult, Metadata)
+splitAndBurn eventLogCid sender amount inputs context dso transferEnv@TransferEnv{..} usage = do
 -- do not create activity records as part of the transfer. We create a validator activity record for the full burn below.
   let rewardsConfig = RewardsIssuanceConfig with
         issueAppRewards = False
         issueValidatorRewards = False
-  transferResult <- executeTransfer eventLogCid rewardsConfig context dso developmentFundManagerBlacklist svUnderlockEnforcementActivatesAt svUnderlockEnforcementTerminatesAfter Transfer with
+  transferResult <- executeTransfer eventLogCid rewardsConfig context dso transferEnv Transfer with
     sender
     provider = sender
     inputs
@@ -2456,8 +2443,11 @@ payForTransferPreapproval reason dso provider context inputs expiresAt newExpire
         , emptyMetadata)
     else do
       (amuletPaid, _) <- computeTransferPreapprovalFee paidExtension configUsd context.context dso
-      (transferResult, meta) <- splitAndBurn (toInterfaceContractId context.amuletRules) provider amuletPaid inputs context.context dso
-        (getDevelopmentFundManagerBlacklist configUsd) svUnderlockEnforcementActivatesAt svUnderlockEnforcementTerminatesAfter reason
+      let transferEnv = TransferEnv with
+            developmentFundManagerBlacklist = getDevelopmentFundManagerBlacklist configUsd
+            svUnderlockEnforcementActivatesAt
+            svUnderlockEnforcementTerminatesAfter
+      (transferResult, meta) <- splitAndBurn (toInterfaceContractId context.amuletRules) provider amuletPaid inputs context.context dso transferEnv reason
       pure (amuletPaid, transferResult, meta)
 
 -- Token standard context parsing

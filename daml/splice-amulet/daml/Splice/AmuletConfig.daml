@@ -243,13 +243,6 @@ data GovernanceLockConfig = GovernanceLockConfig with
     superValidatorUnderlockEnforcementTerminatesAfter : Optional RelTime
       -- ^ Point on the issuance curve from which SV under locks are no longer enforced.
       --   Default: 5 years and 30 days.
-    superValidatorUnderlockPermanentGracePeriod : Optional RelTime
-      -- ^ How long an underlocked sv has to cure before it permanently drops a reward tier.
-      --   Default: 30 days.
-    superValidatorWeightSchedule : Optional (Schedule RelTime [SvLockingTier])
-      -- ^ Tiers in effect, keyed by the time elapsed since `superValidatorUnderlockEnforcementActivatesAt`.
-      -- Tiers are sorted from highest to lowest. An SV below lowest tier earns 0
-      -- Default: Refer to table in CIP-0105 section 5.
   deriving (Show, Eq, Serializable)
 
 validGovernanceLockConfig : GovernanceLockConfig -> Bool
@@ -260,15 +253,9 @@ validGovernanceLockConfig GovernanceLockConfig
     , featuredAppLockThreshold
     , featuredAppUnderlockGracePeriod
     , superValidatorUnderlockEnforcementTerminatesAfter
-    , superValidatorUnderlockEnforcementActivatesAt
-    , superValidatorUnderlockPermanentGracePeriod
-    , superValidatorWeightSchedule
     }
   =
     optional True (> 0.0) minimumLockAmount
-    && optional True (\_ -> isSome superValidatorUnderlockPermanentGracePeriod) superValidatorUnderlockEnforcementActivatesAt
-    && optional True validSuperValidatorWeightSchedule superValidatorWeightSchedule
-    && optional True (> days 0) superValidatorUnderlockPermanentGracePeriod
     && optional True (> days 0) superValidatorLockVestingDuration
     && optional True (> days 0) featuredAppLockVestingDuration
     && optional True (> days 0) featuredAppUnderlockGracePeriod
@@ -304,17 +291,11 @@ governanceLockFeaturedAppLockVestingDuration = getGovernanceLockConfigValue (day
 governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter : Optional GovernanceLockConfig -> RelTime
 governanceLockSuperValidatorUnderlockEnforcementTerminatesAfter = getGovernanceLockConfigValue (days (365 * 5 + 30)) (.superValidatorUnderlockEnforcementTerminatesAfter)
 
-governanceLockSuperValidatorUnderlockPermanentGracePeriod : Optional GovernanceLockConfig -> RelTime
-governanceLockSuperValidatorUnderlockPermanentGracePeriod = getGovernanceLockConfigValue (days 30) (.superValidatorUnderlockPermanentGracePeriod)
-
 governanceLockFeaturedAppUnderlockGracePeriod : Optional GovernanceLockConfig -> RelTime
 governanceLockFeaturedAppUnderlockGracePeriod = getGovernanceLockConfigValue (days 7) (.featuredAppUnderlockGracePeriod)
 
 governanceLockFeaturedAppLockThreshold : Optional GovernanceLockConfig -> Decimal
 governanceLockFeaturedAppLockThreshold = getGovernanceLockConfigValue 5_000_000.0 (.featuredAppLockThreshold)
-
-governanceLockSuperValidatorWeightSchedule : Optional GovernanceLockConfig -> Schedule RelTime [SvLockingTier]
-governanceLockSuperValidatorWeightSchedule = getGovernanceLockConfigValue defaultSvWeightSchedule (.superValidatorWeightSchedule)
 
 -- | Represents a SV locking tier. An SV that has locked at least `minLockedFraction` of its
 -- lifetime SV rewards earns `rewardWeightFactor` of its SV weight.
@@ -401,8 +382,6 @@ instance Patchable GovernanceLockConfig where
     featuredAppUnderlockGracePeriod = patch new.featuredAppUnderlockGracePeriod base.featuredAppUnderlockGracePeriod current.featuredAppUnderlockGracePeriod
     superValidatorUnderlockEnforcementTerminatesAfter = patch new.superValidatorUnderlockEnforcementTerminatesAfter base.superValidatorUnderlockEnforcementTerminatesAfter current.superValidatorUnderlockEnforcementTerminatesAfter
     superValidatorUnderlockEnforcementActivatesAt = patch new.superValidatorUnderlockEnforcementActivatesAt base.superValidatorUnderlockEnforcementActivatesAt current.superValidatorUnderlockEnforcementActivatesAt
-    superValidatorUnderlockPermanentGracePeriod = patch new.superValidatorUnderlockPermanentGracePeriod base.superValidatorUnderlockPermanentGracePeriod current.superValidatorUnderlockPermanentGracePeriod
-    superValidatorWeightSchedule = patch new.superValidatorWeightSchedule base.superValidatorWeightSchedule current.superValidatorWeightSchedule
 
 instance Patchable [SvLockingTier] where
   patch = patchScalar

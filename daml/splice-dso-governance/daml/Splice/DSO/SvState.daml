@@ -46,8 +46,7 @@ data RewardState = RewardState with
 
 
 -- | Reward weight adjustment of an SV right due to underlocking.
-data RewardAdjustmentState = RewardAdjustmentState
-  with
+data RewardAdjustmentState = RewardAdjustmentState with
     permanentWeightFactor : Decimal
       -- ^ The permanent maximum weight factor due to permanent underlocking.
     recoverableUnderlocks : [ UnderlockEvent ]
@@ -159,7 +158,7 @@ enforcePermanentUnderlock now s =
       permanentWeightFactor = min s.permanentWeightFactor underlockDue.weightFactor
       recoverableUnderlocks = underlocksNotDue
 
--- |
+-- | Temporary update for an observed warranted factor.
 applyWarrantedFactor : RelTime -> Time -> Decimal -> RewardAdjustmentState -> RewardAdjustmentState
 applyWarrantedFactor permanentGracePeriod observedAt warranted s =
   s with
