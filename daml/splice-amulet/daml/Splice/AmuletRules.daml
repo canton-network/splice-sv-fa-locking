@@ -1587,9 +1587,18 @@ summarizeAndConsumeInputs csum dso sender inps = do
       unclaimedActivityRecord <- fetchAndArchive forOwner unclaimedActivityRecordCid
       assertWithinDeadline "UnclaimedActivityRecord.expiresAt" unclaimedActivityRecord.expiresAt
 
-      return s with
+      return TransferInputsSummary with
+        totalAmuletAmount = s.totalAmuletAmount
+        totalAppRewardAmount = s.totalAppRewardAmount
+        totalValidatorRewardAmount = s.totalValidatorRewardAmount
         totalUnclaimedActivityRecordAmount =
           (+ unclaimedActivityRecord.amount) <$> s.totalUnclaimedActivityRecordAmount
+        totalValidatorFaucetAmount = s.totalValidatorFaucetAmount
+        totalSvRewardAmount = s.totalSvRewardAmount
+        totalHoldingFees = s.totalHoldingFees
+        amountArchivedAsOfRoundZero = s.amountArchivedAsOfRoundZero
+        changeToHoldingFeesRate = s.changeToHoldingFeesRate
+        totalDevelopmentFundAmount = s.totalDevelopmentFundAmount
         mintedSvRewardMap = optional s.mintedSvRewardMap
           (\svName -> addMintedSvReward svName unclaimedActivityRecord.amount s.mintedSvRewardMap)
           unclaimedActivityRecord.svRightOwnerName
