@@ -83,6 +83,7 @@ import DA.List (sortOn)
 import DA.List.Total (head)
 import DA.Map qualified as Map
 import DA.Optional
+import DA.Set qualified as Set
 import DA.Text qualified as Text
 import DA.TextMap qualified as TextMap
 import DA.Time
@@ -114,14 +115,26 @@ data GovernanceLockKind
       svName : Text  -- ^ Name of the SV rights owner for whom the funds are locked.
   deriving (Eq, Show, Serializable)
 
+data ControllerSpecification = ControllerSpecification with
+    controllers : [[Party]]
+      -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
+  deriving (Eq, Show, Serializable)
+
+instance Semigroup ControllerSpecification where
+  (<>) (ControllerSpecification a) (ControllerSpecification b) = ControllerSpecification $ a <> b
+
 data VestingLockSpecification = VestingLockSpecification with
     kind : GovernanceLockKind
     vestingPeriod : RelTime -- ^ Duration over which the amount vests in a linear fashion.
     endTime : Time -- ^ Time at which vesting completes.
+    vestingControllers : ControllerSpecification
   deriving (Eq, Show, Serializable)
 
 data FullLockSpecification = FullLockSpecification with
     kind : GovernanceLockKind
+    unlockControllers : ControllerSpecification
+    substitutionControllers : ControllerSpecification
+    vestingControllers : ControllerSpecification
   deriving (Eq, Show, Serializable)
 
 data GovernanceLockSpecification
@@ -166,7 +179,7 @@ template GovernanceLock
     requestedAt : Time  -- ^ Time of the request to create this lock.
   where
     signatory dso, owner
-    observer governanceLockObservers specification
+    observer governanceLockObservers specification, governanceLockControllers specification
     ensure amount > 0.0 && validateGovernanceLockSpecification specification
     key ( GovernanceLockKey with dso; owner; specification ) : GovernanceLockKey
     maintainer key.dso
@@ -407,6 +420,7 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingSt
               kind = fullSpec.kind
               vestingPeriod
               endTime
+              vestingControllers = fullSpec.vestingControllers
         let forOwner = ForOwner with dso; owner
 
         (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if hasNoVestingPeriod
@@ -558,6 +572,17 @@ governanceLockObservers spec = case governanceLockKind spec of
   GLK_FeaturedApp party -> [party]
   GLK_ProvisionalFeaturedApp party -> [party]
   GLK_SuperValidatorRightsOwner _ -> []
+
+-- | All parties that appear in any controller set.
+allControllers : ControllerSpecification -> Set.Set Party
+allControllers = Set.fromList . concat . (.controllers)
+
+governanceLockControllers : GovernanceLockSpecification -> Set.Set Party
+governanceLockControllers specification = allControllers $ getSpecControllers specification
+  where
+    getSpecControllers (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) =
+      unlockControllers <> substitutionControllers <> vestingControllers
+    getSpecControllers (GLS_VestingLock (VestingLockSpecification _ _ _ vestingControllers)) = vestingControllers
 
 -- Lock properties for LockSubject types
 

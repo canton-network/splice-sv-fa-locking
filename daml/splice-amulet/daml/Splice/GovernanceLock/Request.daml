@@ -309,6 +309,7 @@ governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{
 -- `join ((\a b c -> pure . f $ E) <$> pa <*> pb <*> pc)` coming from
 -- `do { pa; pb; pc; pure . f $ E}` where `f` is itself pure.
 data Parser i o = Parser (i -> Validation Text o)
+type ControllerSpecificationParser = Party -> Parser Metadata ControllerSpecification
 
 runParser : Parser i o -> i -> Validation Text o
 runParser (Parser f) input = f input
@@ -410,6 +411,15 @@ governanceLockMetadataParser = do
 parseGovernanceLockMetadata : CanAssert m => Metadata -> m Metadata
 parseGovernanceLockMetadata = assertParsed governanceLockMetadataParser
 
+controllersParser : Text -> ControllerSpecificationParser
+controllersParser key owner =
+    ControllerSpecification <$> (optionalMetadataParser key >>= optional (pure [[owner]]) partiesParser)
+  where
+    partiesParser : Text -> Parser Metadata [[Party]]
+    partiesParser t = forA (Text.splitOn ";" t) \ps -> forA (Text.splitOn "," ps) (partyFromTextParser key)
+
+--vestingControllersParser :
+
 fullLockSpecificationParser : Parser Metadata FullLockSpecification
 fullLockSpecificationParser = FullLockSpecification <$> governanceLockKindParser
 
@@ -418,10 +428,12 @@ vestingLockSpecificationParser = do
   kind <- governanceLockKindParser
   vestingPeriod <- vestingDurationParser
   endTime <- vestingEndTimeParser
+  vestingControllers <- vestingControllersParser
   pure $ VestingLockSpecification with
     kind
     vestingPeriod
     endTime
+    vestingControllersParser
 
 governanceLockSpecificationParser : LockState -> Parser Metadata GovernanceLockSpecification
 governanceLockSpecificationParser LS_Locked = GLS_FullLock <$> fullLockSpecificationParser
