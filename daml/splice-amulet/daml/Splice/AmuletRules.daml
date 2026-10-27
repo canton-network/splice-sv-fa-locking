@@ -2025,7 +2025,7 @@ instance Additive BalanceChange where
 
 
 instance HasCheckedFetch AmuletRules ForDso where
-  contractGroupId AmuletRules with .. = ForDso with ..
+  contractGroupId AmuletRules{..} = ForDso with dso
 
 -- External Party Setup
 -- ----------------------
@@ -2238,6 +2238,9 @@ instance HasCheckedFetch TransferPreapproval ForOwner where
     ForOwner with
       owner = receiver
       dso
+
+instance HasCheckedFetch TransferPreapproval ForDso where
+  contractGroupId TransferPreapproval{..} = ForDso with dso
 
 data TransferPreapproval_SendResult = TransferPreapproval_SendResult
   with
