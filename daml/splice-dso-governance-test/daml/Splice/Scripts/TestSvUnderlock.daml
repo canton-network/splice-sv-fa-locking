@@ -31,19 +31,19 @@ import Splice.Testing.Registries.AmuletRegistry (getActiveOpenRoundsSorted)
 ----------
 
 underlockAction : AmuletApp -> Text -> Decimal -> Script ActionRequiringConfirmation
-underlockAction app svName weightFactor = do
+underlockAction app svName lockedFraction = do
   [(amuletRulesCid, _)] <- query @AmuletRules app.dso
   pure $ ARC_DsoRules with
     dsoAction = SRARC_DsoRules_CreateSvUnderlockInstruction DsoRules_CreateSvUnderlockInstruction with
       svName
-      lockedFraction = weightFactor
+      lockedFraction = lockedFraction
       amuletRulesCid
 
 -- | Confirm an underlock instruction with all SVs, execute the confirmed action, and return the new instruction.
 createUnderlockInstruction : AmuletApp -> Text -> Decimal -> Script (ContractId SvUnderlockInstruction)
-createUnderlockInstruction app svName qualifyingFactor = do
+createUnderlockInstruction app svName lockedFraction = do
   before <- map fst <$> query @SvUnderlockInstruction app.dso
-  action <- underlockAction app svName qualifyingFactor
+  action <- underlockAction app svName lockedFraction
   confirmAndExecutionAction app action
 
   after <- query @SvUnderlockInstruction app.dso
@@ -445,8 +445,8 @@ testSvUnderlockInstructionByVote = do
 testSvUnderlockQualifyingFactorRange : Script ()
 testSvUnderlockQualifyingFactorRange = do
   (app, dso, _) <- initMainNetWithSvUnderlockEnforcement
-  forA_ [1.5, -0.1] $ \factor -> do
-    action <- underlockAction app "sv1" factor
+  forA_ [1.5, -0.1] $ \lockedFraction -> do
+    action <- underlockAction app "sv1" lockedFraction
     -- Confirming works, executing the confirmed action fails on the range check
     confirmAndExecutionActionMustFail app action
   [] <- query @SvUnderlockInstruction dso

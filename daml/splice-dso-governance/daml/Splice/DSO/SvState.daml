@@ -158,7 +158,10 @@ enforcePermanentUnderlock now s =
       permanentWeightFactor = min s.permanentWeightFactor underlockDue.weightFactor
       recoverableUnderlocks = underlocksNotDue
 
--- | Temporary update for an observed warranted factor.
+-- | Temporary update for the weight factor the SV currently qualifies for.
+-- Removes recorded underlocks below the warranted factor that haven't reached their permanent deadline,
+-- and records a new underlock that becomes permanent after `permanentGracePeriod`.
+-- A new underlock becomes permanent after `permanentGracePeriod`. A partial recovery keeps the oldest recovered deadline.
 applyWarrantedFactor : RelTime -> Time -> Decimal -> RewardAdjustmentState -> RewardAdjustmentState
 applyWarrantedFactor permanentGracePeriod observedAt warranted s =
   s with

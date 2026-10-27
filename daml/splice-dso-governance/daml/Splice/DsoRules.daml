@@ -2389,23 +2389,27 @@ template DsoRules with
 
         instruction <- fetchAndArchive forDso instructionCid
         svRewardState <- fetchChecked (ForSv with dso; svName = instruction.svName) svRewardStateCid
-        let permanentGracePeriod = svUnderlockSuperValidatorUnderlockPermanentGracePeriod config.svUnderlockConfig
-            terminated = checkSvUnderlockEnforcementTermination amuletConfig openRound
-            old = fromOptional defaultRewardAdjustmentState svRewardState.state.rewardAdjustmentState
-            observedAt = instruction.observedAt
-            stale = optional False (> observedAt) old.lastAdjustedAt
-            adjusted = applyWarrantedFactor permanentGracePeriod observedAt instruction.lockedFraction old
+
+        let terminated = checkSvUnderlockEnforcementTermination amuletConfig openRound
+            oldAdjustmentState = fromOptional defaultRewardAdjustmentState svRewardState.state.rewardAdjustmentState
+
+            -- Stale if an instruction observed after this one was applied already
+            stale = optional False (\lastAdjusted -> lastAdjusted > instruction.observedAt) oldAdjustmentState.lastAdjustedAt
+
+            -- Computes the SV's temporary reward weight to the factor it currently qualifies for
+            latestAdjustmentState = applyWarrantedFactor (svUnderlockSuperValidatorUnderlockPermanentGracePeriod config.svUnderlockConfig)
+              instruction.observedAt instruction.lockedFraction oldAdjustmentState
 
         -- We don't return a new svRewardStateCid if either the enforcement has terminated or instruction is old
         -- or the new adjustment state has not changed from the old
-        optNewSvRewardStateCid <- if (terminated || stale || adjusted == old)
+        optNewSvRewardStateCid <- if (terminated || stale || latestAdjustmentState == oldAdjustmentState)
           then pure None
           else do
             archive svRewardStateCid
             newSvRewardState <- create svRewardState with
               state = svRewardState.state with
-                rewardAdjustmentState = Some adjusted with
-                  lastAdjustedAt = Some observedAt
+                rewardAdjustmentState = Some latestAdjustmentState with
+                  lastAdjustedAt = Some instruction.observedAt
             pure $ Some newSvRewardState
 
         pure DsoRules_ExecuteSvUnderlockInstructionResult with
