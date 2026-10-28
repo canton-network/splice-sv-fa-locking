@@ -16,6 +16,7 @@ module Splice.GovernanceLock (
   -- * Lock specifications and state
   GovernanceLockKind(..),
   GovernanceLockSpecification(..),
+  ControllerSpecification(..),
   FullLockSpecification(..),
   VestingLockSpecification(..),
   GovernanceLockKey(..),
@@ -62,6 +63,9 @@ module Splice.GovernanceLock (
   lockStatusMetaKey,
   lockVestingDurationMetaKey,
   lockVestingEndTimeMetaKey,
+  substitutionControllersMetaKey,
+  unlockControllersMetaKey,
+  vestingControllersMetaKey,
   vestingStartTimeMetaKey,
   vestedUntilTimeMetaKey,
 
@@ -127,14 +131,14 @@ data VestingLockSpecification = VestingLockSpecification with
     kind : GovernanceLockKind
     vestingPeriod : RelTime -- ^ Duration over which the amount vests in a linear fashion.
     endTime : Time -- ^ Time at which vesting completes.
-    vestingControllers : ControllerSpecification
+    vestingControllers : Optional ControllerSpecification
   deriving (Eq, Show, Serializable)
 
 data FullLockSpecification = FullLockSpecification with
     kind : GovernanceLockKind
-    unlockControllers : ControllerSpecification
-    substitutionControllers : ControllerSpecification
-    vestingControllers : ControllerSpecification
+    unlockControllers : Optional ControllerSpecification
+    substitutionControllers : Optional ControllerSpecification
+    vestingControllers : Optional ControllerSpecification
   deriving (Eq, Show, Serializable)
 
 data GovernanceLockSpecification
@@ -303,6 +307,77 @@ data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
   lockCid : ContractId GovernanceLock
   lock : GovernanceLock
   changeHolding : Optional (ContractId Amulet)
+
+template UnlockProposal
+  with
+    target : GovernanceLockKey
+    dso : Party
+    owner : Party
+    amount : Decimal
+    controllerSpecification : ControllerSpecification
+    approvals : Map.Map Party ()
+    requestedAt : Time
+  where
+    signatory owner
+    observer governanceLockControllers controllerSpecification
+    ensure assertWithinDeadline "requestedAt" requestedAt
+
+    choice UnlockProposal_Approve : UnlockProposal_ApproveResult
+      with
+        approvers : [Party]
+      controller approver
+      do
+
+        UnlockProposal_ApproveResult
+
+-- | Updates approvals for a GovernanceLock unlock
+unlockProposal_updateUnlockApprovals : UnlockProposal -> Decimal -> Time -> [Party] -> Update (Either (Map.Map Party ()) Time)
+unlockProposal_updateUnlockApprovals UnlockProposal{..} unlockAmount vestingStartTime actors = do
+  result <- updateApprovals
+    specification.unlockControllers
+    actors
+    ()
+    pendingUnlockApprovals
+    (\_ -> True)
+  forA result (effectiveVestingStartTime . fmap ((.vestingStartTime) . snd))
+
+
+-- | Updates approvals to include the approval of actors and checks if the
+-- updated approvals satisfy one of the sets of controllers.
+--
+-- A set of controllers is considered satisfied when all of its parties have a
+-- value within the updated approvals for which approvalIsValid holds true.
+--
+-- If any controller set is satisfied, the superset of all satisfied controller
+-- sets, along with their approvals, is returned as an approved Right value.
+--
+-- If no controller sets are satisfied, the updated approvals map is returned as
+-- a still-pending Left value.
+updateApprovals
+  :  (CanAssert m, Eq a)
+  => ControllerSpecification -- ^ The sets of controllers that can authorize the current action.
+  -> [Party] -- ^ The set of actors that have authorized the current action.
+  -> a -- ^ The approval authorized by these actors.
+  -> Map.Map Party a -- ^ The pre-existing set of pending approvals.
+  -> (a -> Bool) -- ^ Whether an approval should be considered valid.
+  -> m (Either (Map.Map Party a) [(Party, a)])
+updateApprovals ControllerSpecification{controllers} actors approval approvals approvalIsValid = do
+  require "actors must not be empty" (not $ null actors)
+  forA_ actors $ \actor ->
+    require ("actor " <> partyToText actor <> " must be a controller") (any (actor `elem`) controllers)
+  -- Reject calls that change no approval; otherwise a repeated call would re-create the lock and invalidate its contract id for others
+  require "at least one actor's approval must change"
+    (any (\actor -> Map.lookup actor approvals /= Some approval) actors)
+  let updated = foldl (\m actor -> Map.insert actor approval m) approvals actors
+      approvedBy p = optional False approvalIsValid (Map.lookup p updated)
+      satisfiedControllers = ControllerSpecification $ filter (all approvedBy) controllers
+  pure $ if null satisfiedControllers.controllers
+    then Left updated
+    else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (Set.toList $ allControllers satisfiedControllers)
+
+data UnlockProposal_ApproveResult
+  = UnlockProposal_ApproveResult
+
 
 fetchAndMergeGovernanceLocks'
   :  Optional (Decimal, [ContractId Holding], Time)
@@ -573,16 +648,13 @@ governanceLockObservers spec = case governanceLockKind spec of
   GLK_ProvisionalFeaturedApp party -> [party]
   GLK_SuperValidatorRightsOwner _ -> []
 
--- | All parties that appear in any controller set.
-allControllers : ControllerSpecification -> Set.Set Party
-allControllers = Set.fromList . concat . (.controllers)
-
 governanceLockControllers : GovernanceLockSpecification -> Set.Set Party
-governanceLockControllers specification = allControllers $ getSpecControllers specification
+governanceLockControllers specification = Set.fromList . concat $ getSpecControllers specification
   where
+    getSpecControllers : GovernanceLockSpecification -> [[Party]]
     getSpecControllers (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) =
-      unlockControllers <> substitutionControllers <> vestingControllers
-    getSpecControllers (GLS_VestingLock (VestingLockSpecification _ _ _ vestingControllers)) = vestingControllers
+      concatMap (.controllers) $ catOptionals [unlockControllers, substitutionControllers, vestingControllers]
+    getSpecControllers (GLS_VestingLock (VestingLockSpecification _ _ _ vestingControllers)) = optional [[]] (.controllers) vestingControllers
 
 -- Lock properties for LockSubject types
 
@@ -766,6 +838,15 @@ targetLockMetaPrefix = cipMetaPrefix <> "target-"
 
 -- | Metadata key that specifies the owner of a target lock.
 targetLockOwnerMetaKey = targetLockMetaPrefix <> "lock-owner"
+
+-- |
+vestingControllersMetaKey = cipMemoPrefix <> "vesting-controllers"
+
+-- |
+substitutionControllersMetaKey = cipMemoPrefix <> "substitution-controllers"
+
+-- |
+unlockControllersMetaKey = cipMemoPrefix <> "unlock-controllers"
 
 -- | The metadata entries of the kind, subject and status of a lock, in the order of the CIP.
 encodeCommonLockMetadataEntries : GovernanceLockKind -> LockState -> [(Text, Text)]

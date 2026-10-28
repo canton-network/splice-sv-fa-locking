@@ -25,7 +25,7 @@ module Splice.GovernanceLock.Request (
   governanceLockRequestTSv1Parser,
 ) where
 
-import Prelude hiding (forA)
+import Prelude hiding (forA, mapA)
 import DA.Action (unless)
 import DA.Assert
 import DA.NonEmpty qualified as NonEmpty
@@ -33,7 +33,7 @@ import DA.Optional
 import DA.Text qualified as Text
 import DA.TextMap qualified as TextMap
 import DA.Time
-import DA.Traversable (forA)
+import DA.Traversable (forA, mapA)
 import DA.Validation
 
 import Splice.Amulet.TokenApiUtils
@@ -309,7 +309,7 @@ governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{
 -- `join ((\a b c -> pure . f $ E) <$> pa <*> pb <*> pc)` coming from
 -- `do { pa; pb; pc; pure . f $ E}` where `f` is itself pure.
 data Parser i o = Parser (i -> Validation Text o)
-type ControllerSpecificationParser = Party -> Parser Metadata ControllerSpecification
+type ControllerSpecificationParser = Parser Metadata (Optional ControllerSpecification)
 
 runParser : Parser i o -> i -> Validation Text o
 runParser (Parser f) input = f input
@@ -412,16 +412,28 @@ parseGovernanceLockMetadata : CanAssert m => Metadata -> m Metadata
 parseGovernanceLockMetadata = assertParsed governanceLockMetadataParser
 
 controllersParser : Text -> ControllerSpecificationParser
-controllersParser key owner =
-    ControllerSpecification <$> (optionalMetadataParser key >>= optional (pure [[owner]]) partiesParser)
+controllersParser key =
+    optionalMetadataParser key >>= mapA (fmap ControllerSpecification . partiesParser)
   where
     partiesParser : Text -> Parser Metadata [[Party]]
     partiesParser t = forA (Text.splitOn ";" t) \ps -> forA (Text.splitOn "," ps) (partyFromTextParser key)
 
---vestingControllersParser :
+vestingControllersParser : ControllerSpecificationParser
+vestingControllersParser = controllersParser vestingControllersMetaKey
+
+substitutionControllersParser : ControllerSpecificationParser
+substitutionControllersParser = controllersParser substitutionControllersMetaKey
+
+unlockControllersParser : ControllerSpecificationParser
+unlockControllersParser = controllersParser unlockControllersMetaKey
 
 fullLockSpecificationParser : Parser Metadata FullLockSpecification
-fullLockSpecificationParser = FullLockSpecification <$> governanceLockKindParser
+fullLockSpecificationParser = FullLockSpecification <$>
+  governanceLockKindParser <*>
+  unlockControllersParser <*>
+  substitutionControllersParser <*>
+  vestingControllersParser
+
 
 vestingLockSpecificationParser : Parser Metadata VestingLockSpecification
 vestingLockSpecificationParser = do
@@ -433,7 +445,7 @@ vestingLockSpecificationParser = do
     kind
     vestingPeriod
     endTime
-    vestingControllersParser
+    vestingControllers
 
 governanceLockSpecificationParser : LockState -> Parser Metadata GovernanceLockSpecification
 governanceLockSpecificationParser LS_Locked = GLS_FullLock <$> fullLockSpecificationParser
