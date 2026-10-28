@@ -31,6 +31,9 @@ module Splice.GovernanceLock (
   governanceLock_lockForGovernance_impl,
   FetchAndMergeLocksResult(..),
   fetchAndMergeGovernanceLocks,
+  TopUpFunds(..),
+  SvRewardCouponTopUpArgs(..),
+  fetchAndMergeGovernanceLocksWithTopUp,
   governanceLock_unlockImpl,
   vestingLock_withdrawImpl,
   governanceLock_dsoSubstituteImpl,
@@ -95,11 +98,13 @@ import Splice.AmuletConfig (GovernanceLockConfig, governanceLockFeaturedAppLockV
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.TransferEventsV2 as TransferEventsV2
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.Expiry hiding (maxTime)
-import Splice.Fees (relTimeToDays, relTimeToSeconds)
 import Splice.ExternalPartyConfigState
+import Splice.Fees (relTimeToDays, relTimeToSeconds)
+import Splice.Round
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
 import Splice.Types
@@ -286,20 +291,40 @@ data GovernanceLock_DsoTransferResult
     unlockedAmulet : ContractId Amulet
       -- ^ The transferred funds, returned to the owner of the source lock.
 
+data SvRewardCouponTopUpArgs = SvRewardCouponTopUpArgs with
+    svRewardCoupons : [ContractId SvRewardCoupon]
+      -- ^ SV Reward Coupon inputs used to fund the top-up.
+    svRewardCouponPercentage : Decimal
+      -- ^ Percentage (specified as a number between 0.0 and 1.0) of the SV reward coupons
+      -- minting allowance to top-up a governance lock with. The remainder is returned as change.
+    openingMiningRound : ContractId OpenMiningRound
+    issuingMiningRounds : Map.Map Round (ContractId IssuingMiningRound)
+  deriving (Eq, Show, Serializable)
+
+data TopUpFunds
+  = TUF_LiquidFunds with
+    amount : Decimal
+      -- ^ The amount to lock.
+    holdings : [ContractId Holding]
+      -- ^ The input holdings used to fund the lock.
+  | TUF_SvRewardCouponFunds with
+    topUpArgs: SvRewardCouponTopUpArgs
+  deriving (Show)
+
 data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
   lockCid : ContractId GovernanceLock
   lock : GovernanceLock
   changeHolding : Optional (ContractId Amulet)
 
-fetchAndMergeGovernanceLocks'
-  :  Optional (Decimal, [ContractId Holding], Time)
-    -- ^ New funds to lock: the amount, inputs, and requestedAt time.
+fetchAndMergeGovernanceLocksWithTopUp
+  :  Optional (TopUpFunds, Time)
+    -- ^ New funds to lock and the requestedAt time.
   -> GovernanceLockKey
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Text
   -> Update FetchAndMergeLocksResult
-fetchAndMergeGovernanceLocks' newFunds key context state reason =
+fetchAndMergeGovernanceLocksWithTopUp newFunds key context state reason =
   let
     defaultNumberToMerge = 20
 
@@ -315,11 +340,18 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
 
       (initialInputs, initialAmount) <- case newFunds of
         None -> pure ([], 0.0)
-        Some (amount, inputs, _) -> do
+        Some (TUF_LiquidFunds{..}, _) -> do
           -- Allowing amount to be 0 gives the ability to merge existing locks without locking new funds.
           -- Note: this also means that a single existing lock could be cycled by creating a new lock with `amount = 0`.
           require' ("amount", amount) isGreaterOrEqualR ("zero", 0.0)
-          pure (inputs, amount)
+          pure (holdings, amount)
+        Some (TUF_SvRewardCouponFunds args, _) -> do
+          case key.specification of
+            GLS_FullLock FullLockSpecification{kind = GLK_SuperValidatorRightsOwner _} -> pure ()
+            specification -> assertFail $ "SV reward coupons can only fund SV locks, got: " <> show specification
+          require' ("svRewardCouponPercentage", args.svRewardCouponPercentage) isGreaterOrEqualR ("zero", 0.0)
+          require' ("svRewardCouponPercentage", args.svRewardCouponPercentage) isLessOrEqualR ("one", 1.0)
+          getSvRewardInputAmuletAndChange args forOwner (toInterfaceContractId context.externalPartyConfigState)
 
       (mergedAmount, inputHoldings) <- foldrA
         (\(lockCid, lock) (accAmount, accHoldings) -> do
@@ -367,7 +399,7 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
           lock
           changeHolding = None
         (None, (_, lock) :: _) -> merge lock.requestedAt locks
-        (Some (_, _, requestedAt), _) -> merge requestedAt locks
+        (Some (_, requestedAt), _) -> merge requestedAt locks
 
   in case (key.specification, newFunds) of
     (spec@(GLS_VestingLock _), Some funds) ->
@@ -385,7 +417,7 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
 fetchAndMergeGovernanceLocks : GovernanceLockKey -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update FetchAndMergeLocksResult
 fetchAndMergeGovernanceLocks key context state reason = do
   -- `changeHolding` should always be `None` since no new funds are passed
-  result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
+  result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocksWithTopUp None key context state reason
   pure result
 
 -- | Unlocks `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks which have no vesting period.
@@ -481,20 +513,19 @@ calculateUnvestedAmount currentTime vestingAmount VestingLockSpecification{..}
 -- | Create a `GovernanceLock`, used by the core implementation of token standard interfaces.
 governanceLock_lockForGovernance_impl
   : Party
- -> Decimal
- -> [ContractId Holding]
+ -> TopUpFunds
  -> FullLockSpecification
  -> ExtraArgs
  -> Party
  -> Time
  -> Text
  -> Update (GovernanceLock, ContractId GovernanceLock, Optional (ContractId Amulet))
-governanceLock_lockForGovernance_impl dso amount inputs fullSpecification extraArgs owner requestedAt reason = do
+governanceLock_lockForGovernance_impl dso funds fullSpecification extraArgs owner requestedAt reason = do
   let specification = GLS_FullLock fullSpecification
   assertInPast24Hours "requestedAt" requestedAt
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  FetchAndMergeLocksResult{lock, lockCid, changeHolding} <- fetchAndMergeGovernanceLocks'
-    (Some (amount, inputs, requestedAt))
+  FetchAndMergeLocksResult{lock, lockCid, changeHolding} <- fetchAndMergeGovernanceLocksWithTopUp
+    (Some (funds, requestedAt))
     (GovernanceLockKey with dso; owner; specification)
     context
     state
@@ -841,6 +872,41 @@ lockStateToText LS_Vesting = "vesting"
 
 lockStateFromText : Text -> Optional LockState
 lockStateFromText = dataFromText lockStateToText [minBound .. maxBound]
+
+-- SV Reward Coupon Helpers
+---------------------------
+
+getSvRewardInputAmuletAndChange
+  :  SvRewardCouponTopUpArgs
+  -> ForOwner
+  -> ContractId TransferEventsV2.EventLog
+  -> Update ([ContractId Holding], Decimal)
+getSvRewardInputAmuletAndChange SvRewardCouponTopUpArgs{svRewardCoupons = []} _ _ = pure ([], 0.0)
+getSvRewardInputAmuletAndChange SvRewardCouponTopUpArgs{..} forOwner transferEventsV2EventLog = do
+  let dso = forOwner.dso
+
+  let transferContext = TransferContext with
+        openMiningRound = openingMiningRound
+        issuingMiningRounds
+        validatorRights = Map.empty
+        featuredAppRight = None
+      transfer = Splice.AmuletRules.Transfer with
+        sender = forOwner.owner
+        provider = forOwner.owner -- the sender is serving as its own "app provider"
+        outputs = []
+        inputs = fmap InputSvRewardCoupon svRewardCoupons
+        beneficiaries = None
+      rewardsConfig = RewardsIssuanceConfig with
+        issueAppRewards = False
+        issueValidatorRewards = False
+
+  result <- executeTransfer transferEventsV2EventLog rewardsConfig transferContext dso [] transfer
+  let (Some changeFromSvCouponRewards) : Optional (ContractId Amulet) = result.senderChangeAmulet
+
+  amulet <- fetchChecked forOwner changeFromSvCouponRewards
+  let svRewardMintAllowance = amulet.amount.initialAmount * svRewardCouponPercentage
+
+  pure ([toInterfaceContractId changeFromSvCouponRewards], svRewardMintAllowance)
 
 -- Instances
 ------------

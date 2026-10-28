@@ -29,7 +29,7 @@ import Splice.AmuletAllocation as AmuletAllocationV1
 import Splice.AmuletAllocationV2 as AmuletAllocationV2
 import Splice.AmuletTransferInstruction
 import Splice.AmuletRules
-import Splice.GovernanceLock (lockManagerParty)
+import Splice.GovernanceLock (FullLockSpecification, GovernanceLock(..), governanceLock_lockForGovernance_impl, lockManagerParty, SvRewardCouponTopUpArgs, TopUpFunds(..))
 import Splice.GovernanceLock.Request (governanceLock_transferFactoryV1_transferImpl)
 import Splice.DecentralizedSynchronizer (MemberTrafficPurchase(..), parseTrafficPurchaseMemo)
 import Splice.Round (OpenMiningRound(..))
@@ -49,6 +49,12 @@ data ExternalPartyAmuletRules_ExpireAmuletAllocationsResult = ExternalPartyAmule
 
 data ExternalPartyAmuletRules_ExpireAmuletAllocationsV2Result = ExternalPartyAmuletRules_ExpireAmuletAllocationsV2Result {}
   -- intentionally no results to save storage space in Scan
+  deriving (Eq, Show, Serializable)
+
+data ExternalPartyAmuletRules_MintSvRewardsIntoLockResult = ExternalPartyAmuletRules_MintSvRewardsIntoLockResult
+  with
+    lockCid : ContractId GovernanceLock
+    changeHolding : Optional (ContractId Amulet)
   deriving (Eq, Show, Serializable)
 
 -- | Rules contract that can be used in transactions that require signatures
@@ -130,6 +136,33 @@ template ExternalPartyAmuletRules
            nonce
            description
          pure (ExternalPartyAmuletRules_CreateTransferCommandResult cmd)
+
+    nonconsuming choice ExternalPartyAmuletRules_MintSvRewardsIntoLock : ExternalPartyAmuletRules_MintSvRewardsIntoLockResult
+      with
+        owner : Party
+          -- ^ Lock owner and beneficiary of the Sv reward coupons.
+        specification : FullLockSpecification
+          -- ^ Specification of the SV lock to mint into.
+        topUpArgs : SvRewardCouponTopUpArgs
+          -- ^ SV rewards used to top up the lock.
+        requestedAt : Time
+        expectedDso : Optional Party
+        extraArgs : ExtraArgs
+      controller owner
+      do
+        checkExpectedDso dso expectedDso
+        (_, lockCid, changeHolding) <- governanceLock_lockForGovernance_impl
+          dso
+          (TUF_SvRewardCouponFunds topUpArgs)
+          specification
+          extraArgs
+          owner
+          requestedAt
+          "minting SV rewards into lock"
+
+        pure ExternalPartyAmuletRules_MintSvRewardsIntoLockResult with
+          lockCid
+          changeHolding
 
     interface instance Api.Token.TransferInstructionV1.TransferFactory for ExternalPartyAmuletRules where
       view = Api.Token.TransferInstructionV1.TransferFactoryView with
