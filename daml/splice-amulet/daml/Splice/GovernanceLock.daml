@@ -78,10 +78,11 @@ module Splice.GovernanceLock (
   assertInPast24Hours,
 ) where
 
-import Prelude hiding (forA)
+import Prelude hiding (forA, forA_)
 import DA.Action (foldrA, unless)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
+import DA.Foldable (forA_)
 import DA.Functor (($>))
 import DA.List (sortOn)
 import DA.List.Total (head)
@@ -311,35 +312,41 @@ data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
 template UnlockProposal
   with
     target : GovernanceLockKey
-    dso : Party
     owner : Party
     amount : Decimal
     controllerSpecification : ControllerSpecification
     approvals : Map.Map Party ()
-    requestedAt : Time
+    vestingStartTime : Time
+    reason : Text
   where
     signatory owner
-    observer governanceLockControllers controllerSpecification
-    ensure assertWithinDeadline "requestedAt" requestedAt
+    observer (Set.fromList $ concat controllerSpecification.controllers)
+    ensure amount > 0.0
 
     choice UnlockProposal_Approve : UnlockProposal_ApproveResult
       with
-        approvers : [Party]
-      controller approver
+        actors : [Party]
+        context : ExternalPartyTransferContext
+        state : ExternalPartyConfigState
+      controller actors
       do
+        result <- updateApprovals
+          controllerSpecification
+          actors
+          ()
+          approvals
+          (\_ -> True)
 
-        UnlockProposal_ApproveResult
-
--- | Updates approvals for a GovernanceLock unlock
-unlockProposal_updateUnlockApprovals : UnlockProposal -> Decimal -> Time -> [Party] -> Update (Either (Map.Map Party ()) Time)
-unlockProposal_updateUnlockApprovals UnlockProposal{..} unlockAmount vestingStartTime actors = do
-  result <- updateApprovals
-    specification.unlockControllers
-    actors
-    ()
-    pendingUnlockApprovals
-    (\_ -> True)
-  forA result (effectiveVestingStartTime . fmap ((.vestingStartTime) . snd))
+        case result of
+          Left pendingApprovals -> create this with
+            approvals = pendingApprovals
+          Right _ -> do
+            assertWithinDeadline "vestingStartTime" vestingStartTime
+            (governanceLockCid, governanceLock) <- fetchByKey @GovernanceLock target
+            governanceLock_unlockImpl governanceLockCid governanceLock amount vestingStartTime actors context state reason
+            -- We unlock the GL since we have the required approvals
+            -- GL is unlocked into vesting
+        pure UnlockProposal_ApproveResult
 
 
 -- | Updates approvals to include the approval of actors and checks if the
@@ -373,10 +380,11 @@ updateApprovals ControllerSpecification{controllers} actors approval approvals a
       satisfiedControllers = ControllerSpecification $ filter (all approvedBy) controllers
   pure $ if null satisfiedControllers.controllers
     then Left updated
-    else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (Set.toList $ allControllers satisfiedControllers)
+    else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (concat satisfiedControllers.controllers)
 
 data UnlockProposal_ApproveResult
   = UnlockProposal_ApproveResult
+  deriving (Eq, Show, Serializable)
 
 
 fetchAndMergeGovernanceLocks'
@@ -469,12 +477,43 @@ fetchAndMergeGovernanceLocks key context state reason = do
   result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
   pure result
 
--- | Unlocks `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks which have no vesting period.
+isRequiredActors : [Party] -> [[Party]] -> Bool
+isRequiredActors actors allowedActors = any (\y -> Set.fromList actors == Set.fromList y) allowedActors
+
 governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Optional Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update GovernanceLock_UnlockResult
 governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingStartTime actors context state reason
+  = do
+    fullSpec <- requireFullLock specification
+    let hasRequiredActors = isRequiredActors actors $ fromOptional [[owner]] specification.unlockControllers
+
+    let vestingPeriod = vestingDurationFor (governanceLockKind specification) state.governanceLockConfig
+    let hasNoVestingPeriod = vestingPeriod == days 0
+    vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
+          (True, _) -> pure $ fromOptional minBound optVestingStartTime
+          (False, None) -> assertFail "Missing vestingStartTime"
+          (False, Some vestingStartTime) -> do
+            assertInNext24Hours "vestingStartTime" vestingStartTime
+            pure vestingStartTime
+
+    case hasRequiredActors of
+      True ->
+        governanceLock_unlockImplInner self this unlockAmount vestingStartTime actors context state reason
+      False ->
+        case lookupNByKey @UnlockProposal 1 (key this) of
+          [] -> create UnlockProposal with
+            target = key this
+            owner
+            amount = unlockAmount
+            controllerSpecification = specification.unlockControllers
+            approvals = Map.fromList $ fmap (\x -> (x, ())) actors
+            vestingStartTime
+
+
+
+-- | Unlocks `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks which have no vesting period.
+governanceLock_unlockImplInner : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update GovernanceLock_UnlockResult
+governanceLock_unlockImplInner self this@GovernanceLock{..} unlockAmount vestingStartTime actors context state reason
     = do
-        fullSpec <- requireFullLock specification
-        checkActors actors [[owner]]
         require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", amount)
         let isFullUnlock = unlockAmount == amount
         require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
@@ -484,12 +523,6 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingSt
 
         let vestingPeriod = vestingDurationFor (governanceLockKind specification) state.governanceLockConfig
         let hasNoVestingPeriod = vestingPeriod == days 0
-        vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
-              (True, _) -> pure $ fromOptional minBound optVestingStartTime
-              (False, None) -> assertFail "Missing vestingStartTime"
-              (False, Some vestingStartTime) -> do
-                assertInNext24Hours "vestingStartTime" vestingStartTime
-                pure vestingStartTime
         let endTime = vestingStartTime `addRelTime` vestingPeriod
         let specification = GLS_VestingLock VestingLockSpecification with
               kind = fullSpec.kind
