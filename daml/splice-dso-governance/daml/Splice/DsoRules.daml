@@ -265,6 +265,9 @@ data DsoRules_ExecuteFeaturedAppUnderlockInstructionResult = DsoRules_ExecuteFea
 data DsoRules_EnforceFeaturedAppPermanentUnderlockResult = DsoRules_EnforceFeaturedAppPermanentUnderlockResult {}
   deriving (Serializable)
 
+data DsoRules_ExpireFeaturedAppUnderlockInstructionResult = DsoRules_ExpireFeaturedAppUnderlockInstructionResult {}
+  deriving (Serializable)
+
 data DsoRules_OnboardValidatorResult = DsoRules_OnboardValidatorResult with
     validatorLicense : ContractId ValidatorLicense
   deriving (Serializable)
@@ -1196,7 +1199,9 @@ template DsoRules with
         underlocked : Bool
       controller dso
       do
-        instructionCid <- create FeaturedAppUnderlockInstruction with dso; provider; underlocked
+        now <- getTime
+        let expiresAt = now `addRelTime` config.voteRequestTimeout
+        instructionCid <- create FeaturedAppUnderlockInstruction with dso; provider; underlocked; expiresAt
         pure DsoRules_CreateFeaturedAppUnderlockInstructionResult with instructionCid
 
     nonconsuming choice DsoRules_ExecuteFeaturedAppUnderlockInstruction : DsoRules_ExecuteFeaturedAppUnderlockInstructionResult
@@ -1225,6 +1230,17 @@ template DsoRules with
         void $ fetchChecked (ForDso with dso) rightCid
         void $ exercise rightCid FeaturedAppRight_EnforcePermanentUnderlock
         pure DsoRules_EnforceFeaturedAppPermanentUnderlockResult
+
+    nonconsuming choice DsoRules_ExpireFeaturedAppUnderlockInstruction : DsoRules_ExpireFeaturedAppUnderlockInstructionResult
+      with
+        instructionCid : ContractId FeaturedAppUnderlockInstruction
+        sv : Party
+      controller sv
+      do
+        void $ getAndValidateSvParty this (Some sv)
+        void $ fetchChecked (ForDso dso) instructionCid
+        void $ exercise instructionCid FeaturedAppUnderlockInstruction_Expire
+        pure DsoRules_ExpireFeaturedAppUnderlockInstructionResult
 
     -- Validator onboarding
     -----------------------
