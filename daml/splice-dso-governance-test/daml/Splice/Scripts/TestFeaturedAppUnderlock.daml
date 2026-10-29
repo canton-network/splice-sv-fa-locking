@@ -280,6 +280,41 @@ testUnderlockEnforceAfterCureFails = do
   Some _ <- getFeaturedAppRight app provider
   pure ()
 
+testUnderlockInstructionExpiry : Script ()
+testUnderlockInstructionExpiry = do
+  (app, dso, (sv1, sv2, _, _)) <- initMainNet
+  provider <- allocateParty "provider"
+  _ <- grantRight app provider
+  [(dsoRulesCid, dsoRules)] <- query @DsoRules dso
+
+  confirmAndExecutionAction app $ ARC_DsoRules with
+    dsoAction = SRARC_CreateFeaturedAppUnderlockInstruction DsoRules_CreateFeaturedAppUnderlockInstruction with
+      provider; underlocked = True
+  now <- getTime
+  [(instructionCid, instruction)] <- queryFilter @FeaturedAppUnderlockInstruction dso (\i -> i.provider == provider)
+  instruction.expiresAt === now `addRelTime` dsoRules.config.voteRequestTimeout
+
+  -- cannot be expired before expiresAt
+  submitMustFail (actAs sv1 <> readAs dso) $
+    exerciseCmd dsoRulesCid DsoRules_ExpireFeaturedAppUnderlockInstruction with
+      instructionCid; sv = sv1
+
+  passTime dsoRules.config.voteRequestTimeout
+
+  -- only SVs can expire it
+  submitMustFail (actAs dso) $
+    exerciseCmd dsoRulesCid DsoRules_ExpireFeaturedAppUnderlockInstruction with
+      instructionCid; sv = dso
+  _ <- svSubmits app sv2 $ \dsoRulesCid ->
+    exerciseCmd dsoRulesCid DsoRules_ExpireFeaturedAppUnderlockInstruction with
+      instructionCid; sv = sv2
+
+  [] <- queryFilter @FeaturedAppUnderlockInstruction dso (\i -> i.provider == provider)
+
+  -- the right is untouched
+  state <- underlockPermanentAtOf app provider
+  state === None
+
 testUnderlockRegrantedRightNotEnforceable : Script ()
 testUnderlockRegrantedRightNotEnforceable = do
   (app, dso, (sv1, _, _, _)) <- initMainNet
