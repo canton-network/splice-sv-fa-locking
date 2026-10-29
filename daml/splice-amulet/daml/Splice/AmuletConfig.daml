@@ -270,9 +270,6 @@ governanceLockFeaturedAppLockVestingDuration = getGovernanceLockConfigValue (day
 governanceLockFeaturedAppUnderlockGracePeriod : Optional GovernanceLockConfig -> RelTime
 governanceLockFeaturedAppUnderlockGracePeriod = getGovernanceLockConfigValue (days 7) (.featuredAppUnderlockGracePeriod)
 
-governanceLockFeaturedAppLockThreshold : Optional GovernanceLockConfig -> Decimal
-governanceLockFeaturedAppLockThreshold = getGovernanceLockConfigValue 5_000_000.0 (.featuredAppLockThreshold)
-
 instance Patchable RewardVersion where
   patch = patchScalar
 
