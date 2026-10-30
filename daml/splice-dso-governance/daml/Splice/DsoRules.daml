@@ -130,6 +130,7 @@ data DsoRules_ActionRequiringConfirmation
     -- ^ Voted action to change to a featured app right's config.
   | SRARC_CreateFeaturedAppUnderlockInstruction DsoRules_CreateFeaturedAppUnderlockInstruction
     -- ^ Record that a featured app provider has been observed underlocked.
+  | SRARC_CreateRevokeFeaturedAppRightInstruction DsoRules_CreateRevokeFeaturedAppRightInstruction
   deriving (Eq, Show, Serializable)
 
 data AnsEntryContext_ActionRequiringConfirmation
@@ -266,6 +267,16 @@ data DsoRules_EnforceFeaturedAppPermanentUnderlockResult = DsoRules_EnforceFeatu
   deriving (Serializable)
 
 data DsoRules_ExpireFeaturedAppUnderlockInstructionResult = DsoRules_ExpireFeaturedAppUnderlockInstructionResult {}
+  deriving (Serializable)
+
+data DsoRules_CreateRevokeFeaturedAppRightInstructionResult = DsoRules_CreateRevokeFeaturedAppRightInstructionResult with
+    instructionCid : ContractId RevokeFeaturedAppRightInstruction
+  deriving (Serializable)
+
+data DsoRules_ExecuteRevokeFeaturedAppRightInstructionResult = DsoRules_ExecuteRevokeFeaturedAppRightInstructionResult {}
+  deriving (Serializable)
+
+data DsoRules_ExpireRevokeFeaturedAppRightInstructionResult = DsoRules_ExpireRevokeFeaturedAppRightInstructionResult {}
   deriving (Serializable)
 
 data DsoRules_OnboardValidatorResult = DsoRules_OnboardValidatorResult with
@@ -1242,6 +1253,39 @@ template DsoRules with
         void $ exercise instructionCid FeaturedAppUnderlockInstruction_Expire
         pure DsoRules_ExpireFeaturedAppUnderlockInstructionResult
 
+    nonconsuming choice DsoRules_CreateRevokeFeaturedAppRightInstruction : DsoRules_CreateRevokeFeaturedAppRightInstructionResult
+      with
+        provider : Party
+      controller dso
+      do
+        now <- getTime
+        let expiresAt = now `addRelTime` config.voteRequestTimeout
+        instructionCid <- create RevokeFeaturedAppRightInstruction with dso; provider; expiresAt
+        pure DsoRules_CreateRevokeFeaturedAppRightInstructionResult with instructionCid
+
+    nonconsuming choice DsoRules_ExecuteRevokeFeaturedAppRightInstruction : DsoRules_ExecuteRevokeFeaturedAppRightInstructionResult
+      with
+        instructionCid : ContractId RevokeFeaturedAppRightInstruction
+        rightCid : ContractId FeaturedAppRight
+        sv : Party
+      controller sv
+      do
+        void $ getAndValidateSvParty this (Some sv)
+        instruction <- fetchAndArchive (ForDso dso) instructionCid
+        void $ fetchAndArchive (ForOwner with dso; owner = instruction.provider) rightCid
+        pure DsoRules_ExecuteRevokeFeaturedAppRightInstructionResult
+
+    nonconsuming choice DsoRules_ExpireRevokeFeaturedAppRightInstruction : DsoRules_ExpireRevokeFeaturedAppRightInstructionResult
+      with
+        instructionCid : ContractId RevokeFeaturedAppRightInstruction
+        sv : Party
+      controller sv
+      do
+        void $ getAndValidateSvParty this (Some sv)
+        void $ fetchChecked (ForDso dso) instructionCid
+        void $ exercise instructionCid RevokeFeaturedAppRightInstruction_Expire
+        pure DsoRules_ExpireRevokeFeaturedAppRightInstructionResult
+
     -- Validator onboarding
     -----------------------
 
@@ -2092,6 +2136,7 @@ executeActionRequiringConfirmation dso dsoRulesCid amuletRulesCid act = case act
       SRARC_CreateBootstrapExternalPartyConfigStateInstruction choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_CreateFeaturedAppConfigUpdateInstruction choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_CreateFeaturedAppUnderlockInstruction choiceArg -> void $ exercise dsoRulesCid choiceArg
+      SRARC_CreateRevokeFeaturedAppRightInstruction choiceArg -> void $ exercise dsoRulesCid choiceArg
   ARC_AnsEntryContext with .. -> do
     void $ fetchChecked (ForDso with dso) ansEntryContextCid
     case ansEntryContextAction of

@@ -47,8 +47,26 @@ template FeaturedAppUnderlockInstruction with
       do assertDeadlineExceeded "expiresAt" expiresAt
          pure FeaturedAppUnderlockInstruction_ExpireResult
 
+data RevokeFeaturedAppRightInstruction_ExpireResult = RevokeFeaturedAppRightInstruction_ExpireResult {}
+  deriving (Serializable)
+
+template RevokeFeaturedAppRightInstruction with
+    dso : Party
+    provider : Party
+    expiresAt : Time
+  where
+    signatory dso
+
+    choice RevokeFeaturedAppRightInstruction_Expire : RevokeFeaturedAppRightInstruction_ExpireResult
+      controller dso
+      do assertDeadlineExceeded "expiresAt" expiresAt
+         pure RevokeFeaturedAppRightInstruction_ExpireResult
+
 instance HasCheckedFetch FeaturedAppConfigUpdateInstruction ForDso where
   contractGroupId FeaturedAppConfigUpdateInstruction {..} = ForDso with dso
 
 instance HasCheckedFetch FeaturedAppUnderlockInstruction ForDso where
   contractGroupId FeaturedAppUnderlockInstruction {..} = ForDso with dso
+
+instance HasCheckedFetch RevokeFeaturedAppRightInstruction ForDso where
+  contractGroupId RevokeFeaturedAppRightInstruction {..} = ForDso with dso
