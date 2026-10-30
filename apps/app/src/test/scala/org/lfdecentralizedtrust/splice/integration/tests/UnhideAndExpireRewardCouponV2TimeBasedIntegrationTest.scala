@@ -526,6 +526,8 @@ class UnhideAndExpireRewardCouponV2TimeBasedIntegrationTest
             java.util.Optional.empty(),
             java.util.Optional.empty(),
             java.util.Optional.empty(),
+            java.util.Optional.empty(),
+            java.util.Optional.empty(),
           ).create,
         ),
     )(

@@ -145,6 +145,8 @@ export const GrantRevokeFeaturedAppForm: React.FC<GrantRevokeFeaturedAppFormProp
                 // TODO(#7665): make these fields editable
                 appKind: null,
                 opsParties: null,
+                // TODO(canton-network/splice-sv-fa-locking#200): make this editable
+                config: null,
               },
             },
           },

@@ -587,6 +587,7 @@ template WalletAppInstall
         activityWeight : Optional Decimal
         appKind : Optional FeaturedAppKind
         opsParties : Optional [Party]
+        -- TODO(canton-network/splice-sv-fa-locking#201): FA underlock support
       controller validatorParty
       do require "opsParties has at most 10 entries" (optional 0 length opsParties <= 10)
          result <- exercise amuletRulesCid $ AmuletRules_DevNet_FeatureApp with
