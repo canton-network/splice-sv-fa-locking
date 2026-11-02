@@ -7,9 +7,9 @@ import DA.Assert
 import DA.Time
 import Daml.Script
 
-import Splice.AmuletRules
 import Splice.Api.FeaturedAppRightV1 qualified as FAR1
 import Splice.Api.FeaturedAppRightV2 qualified as FAR2
+import Splice.Amulet (FeaturedAppActivityMarker)
 import Splice.DSO.GovernanceLockManagement
 import Splice.DSO.Instruction
 import Splice.DsoRules
@@ -28,10 +28,9 @@ setUnderlockStatus app sv provider underlocked = do
       provider; underlocked
   [(instructionCid, _)] <- queryFilter @FeaturedAppUnderlockInstruction app.dso (\i -> i.provider == provider)
   Some rightCid <- getFeaturedAppRight app provider
-  [(amuletRulesCid, _)] <- query @AmuletRules app.dso
   svSubmits app sv $ \dsoRulesCid ->
     exerciseCmd dsoRulesCid DsoRules_ExecuteFeaturedAppUnderlockInstruction with
-      amuletRulesCid; instructionCid; rightCid; sv
+      instructionCid; rightCid; sv
   pure ()
 
 underlockPermanentAtOf : AmuletApp -> Party -> Script (Optional Time)
@@ -166,6 +165,8 @@ testUnderlockSuspendedCreatesNoMarkers = do
     exerciseCmd ifaceCid FAR1.FeaturedAppRight_CreateActivityMarker with
       beneficiaries = [FAR1.AppRewardBeneficiary provider 1.0]
 
+  [marker] <- query @FeaturedAppActivityMarker provider
+
   setUnderlockStatus app sv1 provider True
 
   -- succeeds, but creates nothing
@@ -173,7 +174,9 @@ testUnderlockSuspendedCreatesNoMarkers = do
   FAR1.FeaturedAppRight_CreateActivityMarkerResult [] <- submit provider $
     exerciseCmd ifaceCid' FAR1.FeaturedAppRight_CreateActivityMarker with
       beneficiaries = [FAR1.AppRewardBeneficiary provider 1.0]
-  pure ()
+
+  markersAfter <- query @FeaturedAppActivityMarker provider
+  markersAfter === [marker]
 
 -----------------
 
@@ -192,11 +195,9 @@ testUnderlockWrongProviderFails = do
   [(instructionCid, _)] <- queryFilter @FeaturedAppUnderlockInstruction app.dso (\i -> i.provider == alice)
 
   Some bobRight <- getFeaturedAppRight app bob
-  [(amuletRulesCid, _)] <- query @AmuletRules app.dso
   [(dsoRulesCid, _)] <- query @DsoRules dso
   submitMustFail (actAs sv1 <> readAs dso) $
     exerciseCmd dsoRulesCid DsoRules_ExecuteFeaturedAppUnderlockInstruction with
-      amuletRulesCid
       instructionCid
       rightCid = bobRight
       sv = sv1
@@ -213,6 +214,8 @@ testUnderlockSuspendedCreatesNoMarkersV2 = do
       beneficiaries = [FAR2.AppRewardBeneficiary provider 1.0]
       weight = Some 50.0
 
+  [marker] <- query @FeaturedAppActivityMarker provider
+
   setUnderlockStatus app sv1 provider True
 
   [(ifaceCid', _)] <- queryInterface @FAR2.FeaturedAppRight provider
@@ -220,7 +223,9 @@ testUnderlockSuspendedCreatesNoMarkersV2 = do
     exerciseCmd ifaceCid' FAR2.FeaturedAppRight_CreateActivityMarker with
       beneficiaries = [FAR2.AppRewardBeneficiary provider 1.0]
       weight = Some 50.0
-  pure ()
+
+  markersAfter <- query @FeaturedAppActivityMarker provider
+  markersAfter === [marker]
 
 testUnderlockCureWhenNotSuspendedIsNoOp : Script ()
 testUnderlockCureWhenNotSuspendedIsNoOp = do

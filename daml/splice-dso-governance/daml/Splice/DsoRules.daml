@@ -1217,28 +1217,27 @@ template DsoRules with
 
     nonconsuming choice DsoRules_ExecuteFeaturedAppUnderlockInstruction : DsoRules_ExecuteFeaturedAppUnderlockInstructionResult
       with
-        amuletRulesCid : ContractId AmuletRules
         instructionCid : ContractId FeaturedAppUnderlockInstruction
         rightCid : ContractId FeaturedAppRight
         sv : Party
       controller sv
       do
         void $ getAndValidateSvParty this (Some sv)
-        void $ fetchChecked (ForDso with dso) amuletRulesCid
         instruction <- fetchAndArchive (ForDso dso) instructionCid
         right <- fetchButArchiveLater (ForOwner with dso; owner = instruction.provider) rightCid
         now <- getTime
 
         let grace = governanceLockFeaturedAppUnderlockGracePeriod config.governanceLockManagementConfig
-            newUnderlockPermanentAt = now `addRelTime` grace
-            recreate underlockPermanentAt = void $ potentiallyUnsafeArchive rightCid *> create right with underlockPermanentAt
+            newDeadline = now `addRelTime` grace
+            newUnderlockPermanentAt
+              | instruction.underlocked =
+                  Some $ optional newDeadline (min newDeadline) right.underlockPermanentAt
+              | otherwise = None
 
-        case (instruction.underlocked, right.underlockPermanentAt) of
-          (False, None) -> pure ()
-          (False, Some _) -> recreate None
-          (True, None) -> recreate $ Some newUnderlockPermanentAt
-          (True, Some underlockPermanentAt) ->
-            if underlockPermanentAt <= newUnderlockPermanentAt then pure () else recreate (Some newUnderlockPermanentAt)
+        unless (right.underlockPermanentAt == newUnderlockPermanentAt) do
+          potentiallyUnsafeArchive rightCid
+          create right with underlockPermanentAt = newUnderlockPermanentAt
+          pure ()
 
         pure DsoRules_ExecuteFeaturedAppUnderlockInstructionResult
 

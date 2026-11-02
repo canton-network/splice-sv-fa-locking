@@ -11,6 +11,10 @@
     - `synchronizer-topology.num-parties` metric now includes also parties not hosted on any participant. This also fixes an issue where those were deducted from the metric on update,
       but then inconsistently added back in an app restart.
 
+  - SV App
+
+    - Support changing the `governanceLockManagementConfig` fields in `DsoRules` config vote requests.
+
 ## Upcoming for next minor release (template):
 
 {/* If you introduce any breaking changes in the next minor release,
@@ -33,3 +37,33 @@
     - Protocol Changes:
 
     - Daml Model Changes:
+
+      - Add underlock enforcement for featured app rights, as specified in
+        [CIP-127](https://github.com/canton-foundation/cips/blob/main/cip-0127/cip-0127.md).
+        A featured app provider that does not keep enough Amulet locked loses its featured status:
+
+        - Add the optional `underlockPermanentAt` field to `FeaturedAppRight`. If it is set, the featured app right is suspended:
+          `FeaturedAppRight_CreateActivityMarker` creates no activity markers,
+          and transfers do not record the provider as a featured app provider.
+
+        - Add the `SRARC_CreateFeaturedAppUnderlockInstruction` vote action. It creates a `FeaturedAppUnderlockInstruction`
+          that records that SVs observed a provider to be underlocked, or to have recovered from an underlock.
+          SVs execute it with `DsoRules_ExecuteFeaturedAppUnderlockInstruction`, which sets
+          `underlockPermanentAt` to the end of the grace period, or clears it after a recovery.
+
+        - Add `DsoRules_EnforceFeaturedAppPermanentUnderlock`, which archives a suspended featured app right
+          after its `underlockPermanentAt` deadline passes.
+
+        - Add the `SRARC_CreateRevokeFeaturedAppRightInstruction` vote action. It creates a `RevokeFeaturedAppRightInstruction`,
+          which SVs execute with `DsoRules_ExecuteRevokeFeaturedAppRightInstruction` to archive the featured app right of a provider.
+
+        - Both instruction templates expire after the vote request timeout.
+          SVs archive expired instructions with `DsoRules_ExpireFeaturedAppUnderlockInstruction`
+          and `DsoRules_ExpireRevokeFeaturedAppRightInstruction`.
+
+      - Add the optional `governanceLockManagementConfig` field to `DsoRulesConfig` with these fields:
+
+        - `featuredAppBasicLockThreshold` (default 5M CC)
+        - `featuredAppAssetMovingLockThreshold` (default 5M CC)
+        - `featuredAppAssetLockThreshold` (default 25M CC)
+        - `featuredAppUnderlockGracePeriod` (default 7 days)
