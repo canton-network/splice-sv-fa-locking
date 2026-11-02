@@ -1,0 +1,22 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.DSO.GovernanceLockManagement where
+
+import DA.Optional (fromOptional)
+import DA.Time
+
+data GovernanceLockManagementConfig = GovernanceLockManagementConfig with
+    featuredAppBasicLockThreshold : Optional Decimal
+      -- ^ Amount of amulet a basic featured app must keep locked to retain its right. Default: 5M.
+    featuredAppAssetMovingLockThreshold : Optional Decimal
+      -- ^ Amount of amulet a featured asset mover must keep locked to retain its right. Default: 5M.
+    featuredAppAssetLockThreshold : Optional Decimal
+      -- ^ Amount of amulet a featured asset must keep locked to retain its right. Default: 25M.
+    featuredAppUnderlockGracePeriod : Optional RelTime
+      -- ^ How long an underlocked provider has to cure before its right becomes archivable.
+      --   Default: 7 days.
+  deriving (Eq, Show, Serializable)
+
+governanceLockFeaturedAppUnderlockGracePeriod : Optional GovernanceLockManagementConfig -> RelTime
+governanceLockFeaturedAppUnderlockGracePeriod config = fromOptional (days 7) $ config >>= (.featuredAppUnderlockGracePeriod)

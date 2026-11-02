@@ -329,6 +329,7 @@ trait SvTestUtil extends TestCommon {
     dsoRulesConfig.voteCooldownTime,
     dsoRulesConfig.nextScheduledLogicalSynchronizerUpgrade,
     dsoRulesConfig.svOperationsSwitchOverTimes,
+    dsoRulesConfig.governanceLockManagementConfig,
   )
 
   private def updateNextScheduledLogicalSynchronizerUpgrade(
@@ -349,6 +350,7 @@ trait SvTestUtil extends TestCommon {
     dsoRulesConfig.voteCooldownTime,
     schedule.toJava,
     dsoRulesConfig.svOperationsSwitchOverTimes,
+    dsoRulesConfig.governanceLockManagementConfig,
   )
 
   def computeAmuletsToIssueToSvs(

@@ -526,7 +526,6 @@ class SvReonboardingIntegrationTest
                 java.util.Optional.empty(),
                 java.util.Optional.empty(),
                 java.util.Optional.empty(),
-                java.util.Optional.empty(),
               )
             )
           )

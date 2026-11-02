@@ -842,7 +842,6 @@ abstract class StoreTestBase
       Optional.empty(),
       Optional.empty(),
       Optional.empty(),
-      Optional.empty(),
     )
     contract(
       FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID,

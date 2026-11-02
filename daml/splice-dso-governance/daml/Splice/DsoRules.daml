@@ -38,6 +38,7 @@ import Splice.Ans
 import Splice.SvOnboarding
 import Splice.DSO.AmuletPrice
 import Splice.DSO.DecentralizedSynchronizer
+import Splice.DSO.GovernanceLockManagement
 import Splice.DSO.Instruction
 import Splice.DSO.SvState
 import Splice.Schedule
@@ -600,6 +601,7 @@ data DsoRulesConfig = DsoRulesConfig with
     voteCooldownTime : Optional RelTime -- ^ The minimum time between two votes by the same SV.
     nextScheduledLogicalSynchronizerUpgrade: Optional LogicalSynchronizerUpgradeSchedule
     svOperationsSwitchOverTimes : Optional (TextMap Time) -- ^ Timepoints for synchronized switch-overs of amulet functionality both on and off-ledger.
+    governanceLockManagementConfig : Optional GovernanceLockManagementConfig
   deriving (Eq, Show, Serializable)
 
 -- | Read the `voteCooldownTime` from the `DsoRulesConfig` with a default value of 1 minute.
@@ -1131,7 +1133,6 @@ template DsoRules with
         activityWeight : Optional Decimal
         appKind : Optional FeaturedAppKind
         opsParties : Optional [Party]
-        config : Optional FeaturedAppConfigInternal
       controller dso
       do
         featuredAppRight <- create FeaturedAppRight with
@@ -1140,7 +1141,6 @@ template DsoRules with
           activityWeight
           appKind
           opsParties
-          config
           underlockPermanentAt = None
         return DsoRules_GrantFeaturedAppRightResult with ..
 
@@ -1224,11 +1224,22 @@ template DsoRules with
       controller sv
       do
         void $ getAndValidateSvParty this (Some sv)
+        void $ fetchChecked (ForDso with dso) amuletRulesCid
         instruction <- fetchAndArchive (ForDso dso) instructionCid
-        void $ exercise amuletRulesCid AmuletRules_UpdateFeaturedAppUnderlockState with
-          rightCid
-          provider = instruction.provider
-          underlocked = instruction.underlocked
+        right <- fetchButArchiveLater (ForOwner with dso; owner = instruction.provider) rightCid
+        now <- getTime
+
+        let grace = governanceLockFeaturedAppUnderlockGracePeriod config.governanceLockManagementConfig
+            newUnderlockPermanentAt = now `addRelTime` grace
+            recreate underlockPermanentAt = void $ potentiallyUnsafeArchive rightCid *> create right with underlockPermanentAt
+
+        case (instruction.underlocked, right.underlockPermanentAt) of
+          (False, None) -> pure ()
+          (False, Some _) -> recreate None
+          (True, None) -> recreate $ Some newUnderlockPermanentAt
+          (True, Some underlockPermanentAt) ->
+            if underlockPermanentAt <= newUnderlockPermanentAt then pure () else recreate (Some newUnderlockPermanentAt)
+
         pure DsoRules_ExecuteFeaturedAppUnderlockInstructionResult
 
     nonconsuming choice DsoRules_EnforceFeaturedAppPermanentUnderlock : DsoRules_EnforceFeaturedAppPermanentUnderlockResult
@@ -2374,6 +2385,7 @@ instance Patchable DsoRulesConfig where
     nextScheduledLogicalSynchronizerUpgrade = patch new.nextScheduledLogicalSynchronizerUpgrade base.nextScheduledLogicalSynchronizerUpgrade current.nextScheduledLogicalSynchronizerUpgrade
     voteCooldownTime = patch new.voteCooldownTime base.voteCooldownTime current.voteCooldownTime
     svOperationsSwitchOverTimes = patch new.svOperationsSwitchOverTimes base.svOperationsSwitchOverTimes current.svOperationsSwitchOverTimes
+    governanceLockManagementConfig = patch new.governanceLockManagementConfig base.governanceLockManagementConfig current.governanceLockManagementConfig
 
 instance Patchable SynchronizerUpgradeSchedule where
   patch new base current = SynchronizerUpgradeSchedule with
@@ -2389,3 +2401,10 @@ instance Patchable LogicalSynchronizerUpgradeSchedule where
         upgradeTime = patch new.upgradeTime base.upgradeTime current.upgradeTime
         newPhysicalSynchronizerSerial = patch new.newPhysicalSynchronizerSerial base.newPhysicalSynchronizerSerial current.newPhysicalSynchronizerSerial
         newPhysicalSynchronizerProtocolVersion = patch new.newPhysicalSynchronizerProtocolVersion base.newPhysicalSynchronizerProtocolVersion current.newPhysicalSynchronizerProtocolVersion
+
+instance Patchable GovernanceLockManagementConfig where
+  patch new base current = GovernanceLockManagementConfig with
+    featuredAppBasicLockThreshold = patch new.featuredAppBasicLockThreshold base.featuredAppBasicLockThreshold current.featuredAppBasicLockThreshold
+    featuredAppAssetMovingLockThreshold = patch new.featuredAppAssetMovingLockThreshold base.featuredAppAssetMovingLockThreshold current.featuredAppAssetMovingLockThreshold
+    featuredAppAssetLockThreshold = patch new.featuredAppAssetLockThreshold base.featuredAppAssetLockThreshold current.featuredAppAssetLockThreshold
+    featuredAppUnderlockGracePeriod = patch new.featuredAppUnderlockGracePeriod base.featuredAppUnderlockGracePeriod current.featuredAppUnderlockGracePeriod

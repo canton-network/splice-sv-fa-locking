@@ -211,6 +211,7 @@ class SvTimeBasedOnboardingIntegrationTest
                 .payload
                 .config
                 .svOperationsSwitchOverTimes,
+              sv1Backend.getDsoInfo().dsoRules.payload.config.governanceLockManagementConfig,
             )
 
             val action: ActionRequiringConfirmation =

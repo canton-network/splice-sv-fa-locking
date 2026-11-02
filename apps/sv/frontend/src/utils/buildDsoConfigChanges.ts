@@ -215,6 +215,35 @@ export function buildDsoConfigChanges(
       newValue: after?.voteCooldownTime?.microseconds || '',
     },
     {
+      fieldName: 'governanceLockManagementConfigFeaturedAppBasicLockThreshold',
+      label:
+        'Governance lock management: Amount of amulet a basic featured app must keep locked to retain its right (default 5 million)',
+      currentValue: before?.governanceLockManagementConfig?.featuredAppBasicLockThreshold || '',
+      newValue: after?.governanceLockManagementConfig?.featuredAppBasicLockThreshold || '',
+    },
+    {
+      fieldName: 'governanceLockManagementConfigFeaturedAppAssetMovingLockThreshold',
+      label:
+        'Governance lock management: Amount of amulet a featured asset mover must keep locked to retain its right (default 5 million)',
+      currentValue:
+        before?.governanceLockManagementConfig?.featuredAppAssetMovingLockThreshold || '',
+      newValue: after?.governanceLockManagementConfig?.featuredAppAssetMovingLockThreshold || '',
+    },
+    {
+      fieldName: 'governanceLockManagementConfigFeaturedAppAssetLockThreshold',
+      label:
+        'Governance lock management: Amount of amulet a featured asset must keep locked to retain its right (default 25 million)',
+      currentValue: before?.governanceLockManagementConfig?.featuredAppAssetLockThreshold || '',
+      newValue: after?.governanceLockManagementConfig?.featuredAppAssetLockThreshold || '',
+    },
+    {
+      fieldName: 'governanceLockManagementConfigFeaturedAppUnderlockGracePeriod',
+      label:
+        'Governance lock management: How long an underlocked featured app provider has to cure before its right becomes archivable (default: 7 days)',
+      currentValue: before?.governanceLockManagementConfig?.featuredAppUnderlockGracePeriod || '',
+      newValue: after?.governanceLockManagementConfig?.featuredAppUnderlockGracePeriod || '',
+    },
+    {
       fieldName: 'svOperationsSwitchOverTimes',
       label: 'SV operations switch-over times',
       currentValue: switchOverMapToConfigValue(before?.svOperationsSwitchOverTimes),

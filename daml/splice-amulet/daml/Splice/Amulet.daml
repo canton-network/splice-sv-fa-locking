@@ -114,14 +114,6 @@ data FeaturedAppRight_UpdateConfigResult = FeaturedAppRight_UpdateConfigResult w
   featuredAppRightCid : ContractId FeaturedAppRight
     deriving (Serializable)
 
-data FeaturedAppRight_SetUnderlockResult = FeaturedAppRight_SetUnderlockResult with
-  featuredAppRightCid : ContractId FeaturedAppRight
-    deriving (Serializable)
-
-data FeaturedAppRight_ClearUnderlockResult = FeaturedAppRight_ClearUnderlockResult with
-  featuredAppRightCid : ContractId FeaturedAppRight
-    deriving (Serializable)
-
 data FeaturedAppRight_EnforcePermanentUnderlockResult = FeaturedAppRight_EnforcePermanentUnderlockResult {}
     deriving (Serializable)
 
@@ -341,15 +333,6 @@ data FeaturedAppConfig = FeaturedAppConfig with
       -- as submissions by this featured app.
       --
       -- If not set, use the default value of []
-    lockThresholdOverride : Optional Decimal
-      -- ^ Override of the network-wide minimum lock threshold.
-      -- None means that the default from AmuletConfig applies.
-  deriving (Eq, Show, Serializable)
-
--- | This holds those fields of FeaturedAppConfig which are not stored directly on the FeaturedAppRight contract.
--- We would ideally move activityWeight here but SCU won't allow it.
-data FeaturedAppConfigInternal = FeaturedAppConfigInternal with
-    lockThresholdOverride : Optional Decimal
   deriving (Eq, Show, Serializable)
 
 validFeaturedAppRight : FeaturedAppRight -> Bool
@@ -357,7 +340,6 @@ validFeaturedAppRight FeaturedAppRight{..} =
   0.0 <= fromOptional defaultAppActivityWeight activityWeight
   && unique ops
   && provider `notElem` ops
-  && optional True (0.0 <=) (config >>= (.lockThresholdOverride))
   where ops = fromOptional defaultOpsParties opsParties
 
 -- | The right for an application provider to earn featured app rewards.
@@ -378,12 +360,10 @@ template FeaturedAppRight with
       -- as submissions by this featured app.
       --
       -- If not set, use the default value of []
-    config : Optional FeaturedAppConfigInternal
-      -- ^ Additional config values specific to this featured app right.
     underlockPermanentAt : Optional Time
       -- ^ If set, indicates that the featured app right is suspended and
       -- indicates the deadline of when the underlock will be made permanent
-      -- by archiving FeaturedAppRight.
+      -- by archiving the FeaturedAppRight.
   where
     signatory dso
     observer provider
@@ -424,26 +404,6 @@ template FeaturedAppRight with
         let configToSet = patch newConfig baseConfig (getFeaturedAppConfig this)
         featuredAppRightCid <- create (setFeaturedAppConfig configToSet this)
         return FeaturedAppRight_UpdateConfigResult with
-          featuredAppRightCid
-
-    choice FeaturedAppRight_SetUnderlock : FeaturedAppRight_SetUnderlockResult
-      with
-        permanentAt : Time
-      controller dso
-      do
-        -- To ensure that we don't accidentally extend an existing grace period automatically via this choice,
-        -- we take the minimum of the times when already underlocked.
-        featuredAppRightCid <- case this.underlockPermanentAt of
-          Some permanentAt' -> create this with underlockPermanentAt = Some (min permanentAt permanentAt')
-          None -> create this with underlockPermanentAt = Some permanentAt
-        return FeaturedAppRight_SetUnderlockResult with
-          featuredAppRightCid
-
-    choice FeaturedAppRight_ClearUnderlock : FeaturedAppRight_ClearUnderlockResult
-      controller dso
-      do
-        featuredAppRightCid <- create this with underlockPermanentAt = None
-        return FeaturedAppRight_ClearUnderlockResult with
           featuredAppRightCid
 
     choice FeaturedAppRight_EnforcePermanentUnderlock : FeaturedAppRight_EnforcePermanentUnderlockResult
@@ -512,15 +472,12 @@ getFeaturedAppConfig right = FeaturedAppConfig with
   activityWeight = right.activityWeight
   appKind = right.appKind
   opsParties = right.opsParties
-  lockThresholdOverride = (.lockThresholdOverride) =<< right.config
 
 setFeaturedAppConfig : FeaturedAppConfig -> FeaturedAppRight -> FeaturedAppRight
 setFeaturedAppConfig newConfig right = right with
   activityWeight = newConfig.activityWeight
   appKind = newConfig.appKind
   opsParties = newConfig.opsParties
-  config = Some $ FeaturedAppConfigInternal with
-    lockThresholdOverride = newConfig.lockThresholdOverride
 
 isFeaturedAppRightSuspended : FeaturedAppRight -> Bool
 isFeaturedAppRightSuspended right = isSome right.underlockPermanentAt
@@ -945,4 +902,3 @@ instance Patchable FeaturedAppConfig where
     activityWeight = patchScalar new.activityWeight base.activityWeight current.activityWeight
     appKind = patchScalar new.appKind base.appKind current.appKind
     opsParties = patchScalar new.opsParties base.opsParties current.opsParties
-    lockThresholdOverride = patch new.lockThresholdOverride base.lockThresholdOverride current.lockThresholdOverride

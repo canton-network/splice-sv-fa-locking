@@ -54,6 +54,9 @@ template RevokeFeaturedAppRightInstruction with
     dso : Party
     provider : Party
     expiresAt : Time
+      -- ^ When this instruction expires. Used to avoid a storage leak in case
+      -- this instruction races with other choices that lead to the featured app
+      -- right being revoked (e.g., enforcing a permanent underlock).
   where
     signatory dso
 

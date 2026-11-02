@@ -38,7 +38,7 @@ import Splice.Amulet.TokenApiUtils
 import Splice.AmuletConfig
   ( transferConfigToTransferConfigV2, AmuletConfig(..), TransferConfig(..), TransferConfigV2(..), validAmuletConfig
   , defaultTransferPreapprovalFee, getDevelopmentFundManagerBlacklist, getExternalPartyConfigStateTickDuration
-  , getTransferPreapprovalBaseDuration, useTrafficBasedAppRewards, governanceLockFeaturedAppUnderlockGracePeriod
+  , getTransferPreapprovalBaseDuration, useTrafficBasedAppRewards
   , RewardVersion(..), useFeaturedAppMarkers
   )
 import qualified Splice.AmuletConfig as Unit
@@ -87,10 +87,6 @@ data AmuletRules_DevNet_TapResult = AmuletRules_DevNet_TapResult with
 
 data AmuletRules_DevNet_FeatureAppResult = AmuletRules_DevNet_FeatureAppResult with
     featuredAppRightCid : ContractId FeaturedAppRight
-  deriving (Serializable)
-
-data AmuletRules_UpdateFeaturedAppUnderlockStateResult = AmuletRules_UpdateFeaturedAppUnderlockStateResult with
-    featuredAppRightCid : Optional (ContractId FeaturedAppRight)
   deriving (Serializable)
 
 data AmuletRules_Bootstrap_RoundsResult = AmuletRules_Bootstrap_RoundsResult with
@@ -433,7 +429,6 @@ template AmuletRules
           activityWeight
           appKind
           opsParties
-          config = None
           underlockPermanentAt = None
         return AmuletRules_DevNet_FeatureAppResult with ..
 
@@ -993,28 +988,6 @@ template AmuletRules
                       amount = amountAmulet * weight
                 else pure []
             pure AmuletRules_ConvertFeaturedAppActivityMarkersResult with appRewardCouponCids = concat markerCids
-
-    nonconsuming choice AmuletRules_UpdateFeaturedAppUnderlockState : AmuletRules_UpdateFeaturedAppUnderlockStateResult
-      with
-        rightCid : ContractId FeaturedAppRight
-        provider : Party -- ^ The provider whose underlock status should be updated
-        underlocked : Bool
-      controller dso
-      do
-        right <- fetchChecked (ForOwner with dso; owner = provider) rightCid
-        featuredAppRightCid <- case (underlocked, right.underlockPermanentAt) of
-          (True, None) -> do
-            now <- getTime
-            let config = getValueAsOf now configSchedule
-                grace = governanceLockFeaturedAppUnderlockGracePeriod config.governanceLockConfig
-            result <- exercise rightCid FeaturedAppRight_SetUnderlock with
-              permanentAt = now `addRelTime` grace
-            pure $ Some result.featuredAppRightCid
-          (False, Some _) -> do
-            result <- exercise rightCid FeaturedAppRight_ClearUnderlock
-            pure $ Some result.featuredAppRightCid
-          _ -> pure None -- It's already in the requested state, no need to create contention
-        pure AmuletRules_UpdateFeaturedAppUnderlockStateResult with featuredAppRightCid
 
     nonconsuming choice AmuletRules_Amulet_ExpireTransferInstructions : AmuletRules_Amulet_ExpireTransferInstructionsResult
       with

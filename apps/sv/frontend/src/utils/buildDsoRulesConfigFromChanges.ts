@@ -7,6 +7,7 @@ import type {
   SynchronizerState,
 } from '@daml.js/splice-dso-governance/lib/Splice/DSO/DecentralizedSynchronizer/module';
 import type { DsoRulesConfig } from '@daml.js/splice-dso-governance/lib/Splice/DsoRules';
+import { nullIfAllNull, wrapMicroseconds } from './changes';
 import type { ConfigChange } from './types';
 import { configValueToSwitchOverMap } from '../components/forms/formValidators';
 
@@ -126,6 +127,23 @@ export function buildDsoRulesConfigFromChanges(dsoConfigChanges: ConfigChange[])
           },
     voteCooldownTime: voteCooldownTime === null ? null : { microseconds: voteCooldownTime },
     svOperationsSwitchOverTimes: svOperationsSwitchOverTimes,
+    governanceLockManagementConfig: nullIfAllNull({
+      featuredAppBasicLockThreshold: getValue(
+        'governanceLockManagementConfigFeaturedAppBasicLockThreshold',
+        true
+      ),
+      featuredAppAssetMovingLockThreshold: getValue(
+        'governanceLockManagementConfigFeaturedAppAssetMovingLockThreshold',
+        true
+      ),
+      featuredAppAssetLockThreshold: getValue(
+        'governanceLockManagementConfigFeaturedAppAssetLockThreshold',
+        true
+      ),
+      featuredAppUnderlockGracePeriod: wrapMicroseconds(
+        getValue('governanceLockManagementConfigFeaturedAppUnderlockGracePeriod', true)
+      ),
+    }),
   };
 
   return dsoConfig;

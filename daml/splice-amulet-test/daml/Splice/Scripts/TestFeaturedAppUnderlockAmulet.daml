@@ -24,9 +24,11 @@ testUnderlockSuspendedEarnsNoFeaturedRewards = do
   [ (c.provider, c.featured) | (_, c) <- before ] === [(provider1.primaryParty, True)]
 
   -- Suspend directly - no DsoRules machinery
+  Some right <- queryContractId app.dso rightCid
   now <- getTime
-  _ <- submit app.dso $ exerciseCmd rightCid FeaturedAppRight_SetUnderlock with
-    permanentAt = now `addRelTime` days 7
+  _ <- submit app.dso $
+    archiveCmd rightCid *>
+    createCmd right with underlockPermanentAt = Some $ now `addRelTime` days 7
 
   let previousCoupons = map fst before
   pay app provider1 alice.primaryParty 1.0
@@ -46,9 +48,11 @@ testUnderlockMarkersFromBeforeSuspensionStillConvert = do
   markers <- query @FeaturedAppActivityMarker app.dso
   map (\(_, m) -> m.provider) markers === [provider1.primaryParty]
 
+  Some right <- queryContractId app.dso rightCid
   now <- getTime
-  _ <- submit app.dso $ exerciseCmd rightCid FeaturedAppRight_SetUnderlock with
-    permanentAt = now `addRelTime` days 7
+  _ <- submit app.dso $
+    archiveCmd rightCid *>
+    createCmd right with underlockPermanentAt = Some $ now `addRelTime` days 7
 
   -- suspension stops accrual; it is not clawback. AmuletRules_ConvertFeaturedAppActivityMarkers
   -- never looks at the right, so markers earned before suspension still pay out.

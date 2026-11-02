@@ -140,6 +140,7 @@ object SvOnboardingConfig {
       ),
       initialProtocolVersion: ProtocolVersion = ProtocolVersion.v37,
       initialGovernanceLockConfig: Option[InitialGovernanceLockConfig] = None,
+      initialGovernanceLockManagementConfig: Option[InitialGovernanceLockManagementConfig] = None,
   ) extends SvOnboardingConfig
 
   case class JoinWithKey(
@@ -308,27 +309,40 @@ final case class InitialGovernanceLockConfig(
     minimumLockAmount: Option[NonNegativeNumeric[BigDecimal]] = None,
     superValidatorLockVestingDuration: Option[NonNegativeFiniteDuration] = None,
     featuredAppLockVestingDuration: Option[NonNegativeFiniteDuration] = None,
-    featuredAppLockThreshold: Option[NonNegativeNumeric[BigDecimal]] = None,
-    featuredAppUnderlockGracePeriod: Option[NonNegativeFiniteDuration] = None,
 ) {
-  final def toGovernanceLockConfig: splice.amuletconfig.GovernanceLockConfig = {
-    def toRelTime(optDuration: Option[NonNegativeFiniteDuration]) =
-      optDuration
-        .map(duration =>
-          new org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime(
-            TimeUnit.NANOSECONDS.toMicros(duration.duration.toNanos)
-          )
-        )
-        .toJava
-
+  final def toGovernanceLockConfig: splice.amuletconfig.GovernanceLockConfig =
     new splice.amuletconfig.GovernanceLockConfig(
       minimumLockAmount.map(_.value.bigDecimal).toJava,
-      toRelTime(superValidatorLockVestingDuration),
-      toRelTime(featuredAppLockVestingDuration),
-      featuredAppLockThreshold.map(_.value.bigDecimal).toJava,
-      toRelTime(featuredAppUnderlockGracePeriod),
+      InitialGovernanceLockConfig.toRelTime(superValidatorLockVestingDuration),
+      InitialGovernanceLockConfig.toRelTime(featuredAppLockVestingDuration),
     )
-  }
+}
+
+object InitialGovernanceLockConfig {
+  private[config] def toRelTime(optDuration: Option[NonNegativeFiniteDuration]) =
+    optDuration
+      .map(duration =>
+        new org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime(
+          TimeUnit.NANOSECONDS.toMicros(duration.duration.toNanos)
+        )
+      )
+      .toJava
+}
+
+final case class InitialGovernanceLockManagementConfig(
+    featuredAppBasicLockThreshold: Option[NonNegativeNumeric[BigDecimal]] = None,
+    featuredAppAssetMovingLockThreshold: Option[NonNegativeNumeric[BigDecimal]] = None,
+    featuredAppAssetLockThreshold: Option[NonNegativeNumeric[BigDecimal]] = None,
+    featuredAppUnderlockGracePeriod: Option[NonNegativeFiniteDuration] = None,
+) {
+  final def toGovernanceLockManagementConfig
+      : splice.dso.governancelockmanagement.GovernanceLockManagementConfig =
+    new splice.dso.governancelockmanagement.GovernanceLockManagementConfig(
+      featuredAppBasicLockThreshold.map(_.value.bigDecimal).toJava,
+      featuredAppAssetMovingLockThreshold.map(_.value.bigDecimal).toJava,
+      featuredAppAssetLockThreshold.map(_.value.bigDecimal).toJava,
+      InitialGovernanceLockConfig.toRelTime(featuredAppUnderlockGracePeriod),
+    )
 }
 
 final case class SynchronizerFeesConfig(
