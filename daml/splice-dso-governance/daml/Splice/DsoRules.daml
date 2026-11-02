@@ -246,6 +246,10 @@ data DsoRules_UpdateFeaturedAppRightResult = DsoRules_UpdateFeaturedAppRightResu
     result : FeaturedAppRight_UpdateResult
   deriving (Serializable)
 
+data DsoRules_MergeFeaturedAppRightsResult = DsoRules_MergeFeaturedAppRightsResult with
+    featuredAppRight : Optional (ContractId FeaturedAppRight)
+  deriving (Show, Serializable)
+
 data DsoRules_CreateFeaturedAppConfigUpdateInstructionResult = DsoRules_CreateFeaturedAppConfigUpdateInstructionResult with
     instructionCids : [ContractId FeaturedAppConfigUpdateInstruction]
   deriving (Serializable)
@@ -1163,6 +1167,77 @@ template DsoRules with
         void $ fetchChecked (ForDso with dso) rightCid
         result <- exercise rightCid update
         return DsoRules_UpdateFeaturedAppRightResult with result
+
+    nonconsuming choice DsoRules_MergeFeaturedAppRights : DsoRules_MergeFeaturedAppRightsResult
+      with
+        sv : Party
+        rightCids : [ContractId FeaturedAppRight]
+      controller sv
+      do
+        getAndValidateSvParty this $ Some sv
+        require "unique rightCids" $ List.unique rightCids
+
+        let
+          valueUnlessDefault : Eq a => Optional a -> a -> Optional a
+          valueUnlessDefault (Some value) defaultValue | value == defaultValue = None
+          valueUnlessDefault (Some value) _ = Some value
+          valueUnlessDefault None _ = None
+
+          normalizeRight : FeaturedAppRight -> FeaturedAppRight
+          normalizeRight (FeaturedAppRight dso provider activityWeight appKind opsParties underlockPermanentAt) = FeaturedAppRight with
+            dso
+            provider
+            activityWeight = valueUnlessDefault activityWeight defaultAppActivityWeight
+            appKind = valueUnlessDefault appKind defaultAppKind
+            opsParties = dedupSort <$> valueUnlessDefault opsParties defaultOpsParties
+            underlockPermanentAt
+
+        featuredAppRight <- case rightCids of
+          [] -> pure None
+          cid :: [] -> do
+            fetchButArchiveLater (ForDso with dso) cid
+            pure $ Some cid
+          firstCid :: otherCids -> do
+            firstRight <- fetchButArchiveLater (ForDso with dso) firstCid
+            -- Ensure all other rights have the same provider
+            let forOwner = ForOwner with dso; owner = firstRight.provider
+            otherRights <- forA otherCids (fetchAndArchive forOwner)
+
+            let
+              getActivityWeight right = fromOptional defaultAppActivityWeight right.activityWeight
+              getAppKind right = fromOptional defaultAppKind right.appKind
+              getOpsParties right = Set.fromList $ fromOptional defaultOpsParties right.opsParties
+
+              (activityWeight, appKind, opsParties, underlockPermanentAt) = foldl
+                (\(accActivityWeight, accAppKind, accOpsParties, accUnderlockPermanentAt) right -> (
+                  max accActivityWeight (getActivityWeight right),
+                  max accAppKind (getAppKind right),
+                  accOpsParties <> getOpsParties right,
+                  case (accUnderlockPermanentAt, right.underlockPermanentAt) of
+                    (Some x, Some y) -> Some $ min x y
+                    _ -> optional right.underlockPermanentAt Some accUnderlockPermanentAt
+                ))
+                (
+                  getActivityWeight firstRight,
+                  getAppKind firstRight,
+                  getOpsParties firstRight,
+                  firstRight.underlockPermanentAt
+                )
+                otherRights
+
+              mergedRight = normalizeRight firstRight with
+                activityWeight = Some activityWeight
+                appKind = Some appKind
+                opsParties = Some (Set.toList opsParties)
+                underlockPermanentAt
+
+            if mergedRight == normalizeRight firstRight
+              then pure $ Some firstCid
+              else do
+                potentiallyUnsafeArchive firstCid -- safe as we did a checked fetch earlier
+                Some <$> create mergedRight
+
+        pure DsoRules_MergeFeaturedAppRightsResult with featuredAppRight
 
     nonconsuming choice DsoRules_CreateFeaturedAppConfigUpdateInstruction : DsoRules_CreateFeaturedAppConfigUpdateInstructionResult
       with

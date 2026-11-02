@@ -318,6 +318,15 @@ data FeaturedAppKind
   | FAK_Asset -- ^ A featured asset.
   deriving (Eq, Show, Serializable)
 
+instance Ord FeaturedAppKind where
+  compare x y =
+    compare (featuredAppKindPrecedence x) (featuredAppKindPrecedence y)
+    where
+      featuredAppKindPrecedence : FeaturedAppKind -> Int
+      featuredAppKindPrecedence FAK_Basic = 0
+      featuredAppKindPrecedence FAK_AssetMoving = 1
+      featuredAppKindPrecedence FAK_Asset = 2
+
 data FeaturedAppConfig = FeaturedAppConfig with
     appKind : Optional FeaturedAppKind
       -- ^ The kind of the featured app.
