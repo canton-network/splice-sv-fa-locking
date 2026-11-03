@@ -81,13 +81,13 @@ module Splice.GovernanceLock (
 ) where
 
 import Prelude hiding (forA, forA_)
-import DA.Action (foldrA, unless)
+import DA.Action (filterA, foldrA, unless)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
 import DA.Foldable (forA_)
 import DA.Functor (($>))
 import DA.List (sortOn)
-import DA.List.Total (head)
+import DA.List.Total (head, minimumOn)
 import DA.Map qualified as Map
 import DA.Optional
 import DA.Set qualified as Set
@@ -336,8 +336,7 @@ template UnlockProposal
     owner : Party
     amount : Decimal -- ^ Amount being unlocked.
     controllerSpecification : ControllerSpecification
-    approvals : Map.Map Party () -- ^ Approvals recorded so far.
-    vestingStartTime : Time -- ^ Time at which vesting is proposed to start.
+    approvals : Map.Map Party Time -- ^ Approvals recorded so far, mapping the approver to the approved vesting start time.
     reason : Text
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
   where
@@ -350,6 +349,7 @@ template UnlockProposal
     choice UnlockProposal_Approve : UnlockProposal_ApproveResult
       with
         actors : [Party]
+        vestingStartTime : Time
         context : ExternalPartyTransferContext
         state : ExternalPartyConfigState
       controller actors
@@ -357,7 +357,7 @@ template UnlockProposal
         result <- updateApprovals
           controllerSpecification
           actors
-          ()
+          vestingStartTime
           approvals
           (const True)
 
@@ -366,15 +366,14 @@ template UnlockProposal
             pendingProposal <- create this with
               approvals = pendingApprovals
             pure $ UnlockProposal_ApproveResult $ GovernanceLock_UnlockResult_Pending with pendingProposal
-          Right _ -> do
-            -- TODO: what if enough time passed between proposal creation and now that vestingStartTime is no longer within deadline?
-            assertWithinDeadline "vestingStartTime" vestingStartTime
+          Right approved -> do
             (lockCid, lock) <- fetchByKey @GovernanceLock target
+            approvedVestingStartTime <- effectiveVestingStartTime $ fmap snd approved
             governanceLockUnlockResult <- governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
               lockCid
               lock
               unlockAmount = amount
-              vestingStartTime
+              vestingStartTime = approvedVestingStartTime
               context
               state
               reason
@@ -564,15 +563,15 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
               owner = lock.owner
               amount = unlockAmount
               controllerSpecification = unlockControllers
-              approvals = Map.fromList $ fmap (\x -> (x, ())) actors
-              vestingStartTime
+              approvals = Map.fromList $ fmap (, vestingStartTime) actors
               reason
               expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
             pure $ GovernanceLock_UnlockResult_Pending with
               pendingProposal
-          Some unlockProposalCid ->  do
+          Some unlockProposalCid -> do
             (UnlockProposal_ApproveResult result) <- exercise unlockProposalCid UnlockProposal_Approve with
               actors
+              vestingStartTime
               context
               state
             pure result
@@ -637,6 +636,15 @@ governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs{..}
           vestingLock
           governanceLock
           unlockedAmulet
+
+effectiveVestingStartTime : [Time] -> Update Time
+effectiveVestingStartTime times = do
+  futureTimes <- filterA isLedgerTimeLT times
+  case minimumOn identity futureTimes of
+    None -> assertFail "None of the approved unlock times is in the future"
+    Some earliest -> do
+      assertInNext24Hours "vestingStartTime" earliest
+      pure earliest
 
 vestingLock_withdrawImpl : ContractId GovernanceLock -> GovernanceLock -> Time -> [Party] -> ExternalPartyTransferContext -> Text -> Update VestingLock_WithdrawResult
 vestingLock_withdrawImpl self this@GovernanceLock{..} vestedUntilTime actors context reason
