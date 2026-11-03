@@ -205,7 +205,7 @@ describe('buildDsoRulesConfigFromChanges governance lock management config', () 
     });
   });
 
-  it('serializes empty values as null', () => {
+  it('serializes empty values correctly', () => {
     const result = buildDsoRulesConfigFromChanges([
       change('governanceLockManagementFeaturedAppUnderlockEnforcementEnabled', ''),
       change('governanceLockManagementConfigFeaturedAppBasicLockThreshold', ''),
