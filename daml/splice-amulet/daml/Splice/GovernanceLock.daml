@@ -333,52 +333,19 @@ data UnlockProposalKey = UnlockProposalKey with
 template UnlockProposal
   with
     target : GovernanceLockKey
+    -- TODO: change this to proposers : [Party] and pass `actors` below?
     owner : Party
     amount : Decimal -- ^ Amount being unlocked.
-    controllerSpecification : ControllerSpecification
+    unlockControllers : ControllerSpecification
     approvals : Map.Map Party Time -- ^ Approvals recorded so far, mapping the approver to the approved vesting start time.
     reason : Text
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
   where
     signatory target.dso, owner
-    observer (Set.fromList $ concat controllerSpecification.controllers)
+    observer (Set.fromList $ concat unlockControllers.controllers)
     ensure amount > 0.0 && either error (const True) (requireFullLock target.specification)
     key (UnlockProposalKey with target; amount) : UnlockProposalKey
     maintainer key.target.dso
-
-    choice UnlockProposal_Approve : UnlockProposal_ApproveResult
-      with
-        actors : [Party]
-        vestingStartTime : Time
-        context : ExternalPartyTransferContext
-        state : ExternalPartyConfigState
-      controller actors
-      do
-        result <- updateApprovals
-          controllerSpecification
-          actors
-          vestingStartTime
-          approvals
-          (const True)
-
-        case result of
-          Left pendingApprovals -> do
-            pendingProposal <- create this with
-              approvals = pendingApprovals
-            pure $ UnlockProposal_ApproveResult $ GovernanceLock_UnlockResult_Pending with pendingProposal
-          Right approved -> do
-            FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks target context state reason
-            approvedVestingStartTime <- effectiveVestingStartTime $ fmap snd approved
-            governanceLockUnlockResult <- governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
-              lockCid
-              lock
-              unlockAmount = amount
-              vestingStartTime = approvedVestingStartTime
-              context
-              state
-              reason
-            pure $ UnlockProposal_ApproveResult governanceLockUnlockResult
-
 
 -- | Updates approvals to include the approval of actors and checks if the
 -- updated approvals satisfy one of the sets of controllers.
@@ -412,11 +379,6 @@ updateApprovals ControllerSpecification{controllers} actors approval approvals a
   pure $ if null satisfiedControllers.controllers
     then Left updated
     else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (concat satisfiedControllers.controllers)
-
-data UnlockProposal_ApproveResult
-  = UnlockProposal_ApproveResult GovernanceLock_UnlockResult
-  deriving (Eq, Show, Serializable)
-
 
 fetchAndMergeGovernanceLocks'
   :  Optional (Decimal, [ContractId Holding], Time)
@@ -515,6 +477,26 @@ fetchAndMergeGovernanceLocks key context state reason = do
   result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
   pure result
 
+fetchAndMergeUnlockProposals : UnlockProposalKey -> Update (Optional (ContractId UnlockProposal, UnlockProposal))
+fetchAndMergeUnlockProposals key = do
+  proposals <- lookupNByKey @UnlockProposal 20 key
+  case proposals of
+    [] -> pure None
+    [proposal] -> pure $ Some proposal
+    (firstProposalCid, firstProposal) :: otherProposals -> do
+      potentiallyUnsafeArchive firstProposalCid
+      (approvals, expiresAt) <- foldrA
+        (\(proposalCid, proposal) (accApprovals, accExpiresAt) -> do
+          -- Fetched above via `lookupNByKey`
+          potentiallyUnsafeArchive proposalCid
+          pure (Map.unionWith max accApprovals proposal.approvals, max accExpiresAt proposal.expiresAt))
+        (firstProposal.approvals, firstProposal.expiresAt)
+        otherProposals
+
+      let newProposal = firstProposal with approvals; expiresAt
+      newProposalCid <- create newProposal
+      pure $ Some (newProposalCid, newProposal)
+
 isControllersSubset : [Party] -> ControllerSpecification -> Bool
 isControllersSubset actors controllers =
   let actorsSet = Set.fromList actors
@@ -537,11 +519,11 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
   = do
     assertInPast24Hours "requestedAt" requestedAt
     fullSpec <- requireFullLock lock.specification
-    let unlockControllers = ControllerSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
-    let hasRequiredActors = isControllersSubset actors unlockControllers
-
-    let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
-    let hasNoVestingPeriod = vestingPeriod == days 0
+    let target = key lock
+        unlockControllers = ControllerSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
+        hasRequiredActors = isControllersSubset actors unlockControllers
+        vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
+        hasNoVestingPeriod = vestingPeriod == days 0
     vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
           (True, _) -> pure $ fromOptional minBound optVestingStartTime
           (False, None) -> assertFail "Missing vestingStartTime"
@@ -552,29 +534,61 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
     if hasRequiredActors
       then governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with ..
       else do
-        optUnlockProposalCid <- lookupByKey @UnlockProposal UnlockProposalKey with
-          target = key lock
-          amount = unlockAmount
-        case optUnlockProposalCid of
+        optProposal <- fetchAndMergeUnlockProposals UnlockProposalKey with target; amount = unlockAmount
+        case optProposal of
           None -> do
             pendingProposal <- create UnlockProposal with
-              target = key lock
+              target
               -- TODO: is this correct? should it be the `actors`?
               owner = lock.owner
               amount = unlockAmount
-              controllerSpecification = unlockControllers
+              unlockControllers
               approvals = Map.fromList $ fmap (, vestingStartTime) actors
               reason
               expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
-            pure $ GovernanceLock_UnlockResult_Pending with
-              pendingProposal
-          Some unlockProposalCid -> do
-            (UnlockProposal_ApproveResult result) <- exercise unlockProposalCid UnlockProposal_Approve with
+            pure $ GovernanceLock_UnlockResult_Pending with pendingProposal
+          Some (proposalCid, proposal) ->
+            potentiallyUnsafeArchive proposalCid -- safe as we did a checked fetch in `fetchAndMergeUnlockProposals`
+            unlockProposal_approve UnlockProposalApproveArgs with
+              proposal
               actors
               vestingStartTime
               context
               state
-            pure result
+              reason
+
+data UnlockProposalApproveArgs = UnlockProposalApproveArgs with
+  proposal : UnlockProposal
+  actors : [Party]
+  vestingStartTime : Time
+  context : ExternalPartyTransferContext
+  state : ExternalPartyConfigState
+  reason : Text
+
+unlockProposal_approve : UnlockProposalApproveArgs -> Update GovernanceLock_UnlockResult
+unlockProposal_approve UnlockProposalApproveArgs{..} = do
+  result <- updateApprovals
+    proposal.unlockControllers
+    actors
+    vestingStartTime
+    proposal.approvals
+    (const True)
+
+  case result of
+    Left pendingApprovals -> do
+      pendingProposal <- create proposal with approvals = pendingApprovals
+      pure $ GovernanceLock_UnlockResult_Pending with pendingProposal
+    Right approved -> do
+      FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.target context state reason
+      approvedVestingStartTime <- effectiveVestingStartTime $ fmap snd approved
+      governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
+        lockCid
+        lock
+        unlockAmount = proposal.amount
+        vestingStartTime = approvedVestingStartTime
+        context
+        state
+        reason
 
 data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
   lockCid : ContractId GovernanceLock
