@@ -202,7 +202,6 @@ governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{tran
         specification = GLS_FullLock specification
       reason = reasonFromMeta transfer.meta
   FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks key context state reason
-  potentiallyUnsafeArchive lockCid
   result <- governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs with
     lockCid
     lock
@@ -213,14 +212,27 @@ governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{tran
     state
     reason
     requestedAt = transfer.requestedAt
-  pure V1.TransferInstructionResult with
-    output = case result.vestingLock of
-      Some vestingLock -> V1.TransferInstructionResult_Pending with
-        transferInstructionCid = toInterfaceContractId vestingLock
-      None -> V1.TransferInstructionResult_Completed with
-        receiverHoldingCids = []
-    senderChangeCids = optionalToList $ fmap toInterfaceContractId result.unlockedAmulet
-    meta = emptyMetadata
+
+  case result of
+    GovernanceLock_UnlockResult_Pending{..} ->
+      error "TODO"
+      {-
+      pure V1.TransferInstructionResult with
+        output = V1.TransferInstructionResult_Pending with
+          transferInstructionCid = toInterfaceContractId pendingProposal
+        senderChangeCids = []
+        meta = emptyMetadata
+      -}
+    GovernanceLock_UnlockResult_Completed{..} -> do
+      potentiallyUnsafeArchive lockCid
+      pure V1.TransferInstructionResult with
+        output = case result.vestingLock of
+          Some vestingLock -> V1.TransferInstructionResult_Pending with
+            transferInstructionCid = toInterfaceContractId vestingLock
+          None -> V1.TransferInstructionResult_Completed with
+            receiverHoldingCids = []
+        senderChangeCids = optionalToList $ fmap toInterfaceContractId result.unlockedAmulet
+        meta = emptyMetadata
 
 governanceLock_transferFactoryV1_transferLockImpl
   :  V1.TransferFactory_Transfer
