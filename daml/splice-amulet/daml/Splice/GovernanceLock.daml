@@ -32,6 +32,7 @@ module Splice.GovernanceLock (
   governanceLock_lockForGovernance_impl,
   FetchAndMergeLocksResult(..),
   fetchAndMergeGovernanceLocks,
+  GovernanceLock_UnlockResult(..),
   GovernanceLockProposeUnlockArgs(..),
   governanceLock_proposeUnlock,
   vestingLock_withdrawImpl,
