@@ -341,7 +341,7 @@ template UnlockProposal
     reason : Text
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
   where
-    signatory owner
+    signatory target.dso, owner
     observer (Set.fromList $ concat controllerSpecification.controllers)
     ensure amount > 0.0 && either error (const True) (requireFullLock target.specification)
     key (UnlockProposalKey with target; amount) : UnlockProposalKey
