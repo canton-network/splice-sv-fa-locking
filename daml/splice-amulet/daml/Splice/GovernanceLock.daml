@@ -126,6 +126,12 @@ data ControllerSpecification = ControllerSpecification with
       -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
   deriving (Eq, Show, Serializable)
 
+validateControllerSpecification : CanAssert m => Text -> Optional ControllerSpecification -> m ()
+validateControllerSpecification _ None = pure ()
+validateControllerSpecification controllerType (Some ControllerSpecification{controllers}) = do
+  require (controllerType <> "Controllers must not be empty") (not $ null controllers)
+  require (controllerType <> "Controllers must not contain an empty controller set") (all (not . null) controllers)
+
 instance Semigroup ControllerSpecification where
   (<>) (ControllerSpecification a) (ControllerSpecification b) = ControllerSpecification $ a <> b
 
@@ -148,9 +154,14 @@ data GovernanceLockSpecification
   | GLS_VestingLock VestingLockSpecification
   deriving (Eq, Show, Serializable)
 
-validateGovernanceLockSpecification : GovernanceLockSpecification -> Bool
-validateGovernanceLockSpecification (GLS_FullLock _) = True
-validateGovernanceLockSpecification (GLS_VestingLock v) = v.vestingPeriod >= aunit
+validateGovernanceLockSpecification : CanAssert m => GovernanceLockSpecification -> m ()
+validateGovernanceLockSpecification (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) = do
+  validateControllerSpecification "unlock" unlockControllers
+  validateControllerSpecification "substitution" substitutionControllers
+  validateControllerSpecification "vesting" vestingControllers
+validateGovernanceLockSpecification (GLS_VestingLock (VestingLockSpecification _ vestingPeriod _ vestingControllers)) = do
+  assertMsg "vestingPeriod is positive" $ vestingPeriod >= aunit
+  validateControllerSpecification "vesting" vestingControllers
 
 requireFullLock : CanAssert m => GovernanceLockSpecification -> m FullLockSpecification
 requireFullLock (GLS_FullLock spec) = pure spec
@@ -186,7 +197,7 @@ template GovernanceLock
   where
     signatory dso, owner
     observer governanceLockObservers specification, governanceLockControllers specification
-    ensure amount > 0.0 && validateGovernanceLockSpecification specification
+    ensure amount > 0.0 && either error (const True) (validateGovernanceLockSpecification specification)
     key ( GovernanceLockKey with dso; owner; specification ) : GovernanceLockKey
     maintainer key.dso
 
