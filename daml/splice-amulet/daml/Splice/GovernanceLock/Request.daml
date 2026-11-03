@@ -195,7 +195,7 @@ governanceLock_transferFactoryV1_unlockImpl
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{transfer} specification unlockAmount vestingStartTime context state = do
+governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{transfer} specification unlockAmount optVestingStartTime context state = do
   let key = GovernanceLockKey with
         dso
         owner = transfer.sender
@@ -203,7 +203,16 @@ governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{tran
       reason = reasonFromMeta transfer.meta
   FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks key context state reason
   potentiallyUnsafeArchive lockCid
-  result <- governanceLock_unlockImpl lockCid lock unlockAmount vestingStartTime [transfer.sender] context state reason
+  result <- governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs with
+    lockCid
+    lock
+    unlockAmount
+    optVestingStartTime
+    actors = [transfer.sender]
+    context
+    state
+    reason
+    requestedAt = transfer.requestedAt
   pure V1.TransferInstructionResult with
     output = case result.vestingLock of
       Some vestingLock -> V1.TransferInstructionResult_Pending with

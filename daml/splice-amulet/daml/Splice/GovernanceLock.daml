@@ -32,7 +32,8 @@ module Splice.GovernanceLock (
   governanceLock_lockForGovernance_impl,
   FetchAndMergeLocksResult(..),
   fetchAndMergeGovernanceLocks,
-  governanceLock_unlockImpl,
+  GovernanceLockProposeUnlockArgs(..),
+  governanceLock_proposeUnlock,
   vestingLock_withdrawImpl,
   governanceLock_dsoSubstituteImpl,
   governanceLock_dsoSplitForSubstitutionImpl,
@@ -96,7 +97,7 @@ import DA.Traversable (forA)
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
-import Splice.AmuletConfig (GovernanceLockConfig, governanceLockFeaturedAppLockVestingDuration, governanceLockMinimumLockAmount, governanceLockSuperValidatorLockVestingDuration)
+import Splice.AmuletConfig (getTokenStandardMaxTTL, GovernanceLockConfig, governanceLockFeaturedAppLockVestingDuration, governanceLockMinimumLockAmount, governanceLockSuperValidatorLockVestingDuration)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
@@ -321,11 +322,12 @@ template UnlockProposal
   with
     target : GovernanceLockKey
     owner : Party
-    amount : Decimal
+    amount : Decimal -- ^ Amount being unlocked.
     controllerSpecification : ControllerSpecification
-    approvals : Map.Map Party ()
-    vestingStartTime : Time
+    approvals : Map.Map Party () -- ^ Approvals recorded so far.
+    vestingStartTime : Time -- ^ Time at which vesting is proposed to start.
     reason : Text
+    expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
   where
     signatory owner
     observer (Set.fromList $ concat controllerSpecification.controllers)
@@ -355,8 +357,15 @@ template UnlockProposal
           Right _ -> do
             -- TODO: what if enough time passed between proposal creation and now that vestingStartTime is no longer within deadline?
             assertWithinDeadline "vestingStartTime" vestingStartTime
-            (governanceLockCid, governanceLock) <- fetchByKey @GovernanceLock target
-            governanceLockUnlockResult <- governanceLock_executeUnlock governanceLockCid governanceLock amount vestingStartTime context state reason
+            (lockCid, lock) <- fetchByKey @GovernanceLock target
+            governanceLockUnlockResult <- governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
+              lockCid
+              lock
+              unlockAmount = amount
+              vestingStartTime
+              context
+              state
+              reason
             pure $ UnlockProposal_ApproveResult governanceLockUnlockResult
 
 
@@ -500,14 +509,27 @@ isControllersSet actors controllers =
   let actorsSet = Set.fromList actors
   in any ((==) actorsSet . Set.fromList) controllers.controllers
 
-governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Optional Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update GovernanceLock_UnlockResult
-governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingStartTime actors context state reason
+data GovernanceLockProposeUnlockArgs = GovernanceLockProposeUnlockArgs with
+  lockCid : ContractId GovernanceLock
+  lock : GovernanceLock
+  unlockAmount : Decimal
+  optVestingStartTime : Optional Time
+  actors : [Party]
+  context : ExternalPartyTransferContext
+  state : ExternalPartyConfigState
+  reason : Text
+  requestedAt : Time
+
+-- | Proposes to unlock `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks with have no vesting period.
+governanceLock_proposeUnlock : GovernanceLockProposeUnlockArgs -> Update GovernanceLock_UnlockResult
+governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
   = do
-    fullSpec <- requireFullLock specification
-    let unlockControllers = ControllerSpecification $ optional [[owner]] (.controllers) fullSpec.unlockControllers
+    assertInPast24Hours "requestedAt" requestedAt
+    fullSpec <- requireFullLock lock.specification
+    let unlockControllers = ControllerSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
     let hasRequiredActors = isControllersSet actors unlockControllers
 
-    let vestingPeriod = vestingDurationFor (governanceLockKind specification) state.governanceLockConfig
+    let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
     let hasNoVestingPeriod = vestingPeriod == days 0
     vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
           (True, _) -> pure $ fromOptional minBound optVestingStartTime
@@ -516,23 +538,24 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingSt
             assertInNext24Hours "vestingStartTime" vestingStartTime
             pure vestingStartTime
 
-    case hasRequiredActors of
-      True ->
-        governanceLock_executeUnlock self this unlockAmount vestingStartTime context state reason
-      False -> do
+    if hasRequiredActors
+      then governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with ..
+      else do
         optUnlockProposalCid <- lookupByKey @UnlockProposal UnlockProposalKey with
-          target = key this
+          target = key lock
           amount = unlockAmount
         case optUnlockProposalCid of
           None -> do
             pendingProposal <- create UnlockProposal with
-              target = key this
-              owner
+              target = key lock
+              -- TODO: is this correct? should it be the `actors`?
+              owner = lock.owner
               amount = unlockAmount
               controllerSpecification = unlockControllers
               approvals = Map.fromList $ fmap (\x -> (x, ())) actors
               vestingStartTime
               reason
+              expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
             pure $ GovernanceLock_UnlockResult_Pending with
               pendingProposal
           Some unlockProposalCid ->  do
@@ -542,20 +565,30 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingSt
               state
             pure result
 
--- | Unlocks `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks which have no vesting period.
-governanceLock_executeUnlock : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update GovernanceLock_UnlockResult
-governanceLock_executeUnlock self this@GovernanceLock{..} unlockAmount vestingStartTime context state reason
+data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
+  lockCid : ContractId GovernanceLock
+  lock : GovernanceLock
+  unlockAmount : Decimal
+  vestingStartTime : Time
+  context : ExternalPartyTransferContext
+  state : ExternalPartyConfigState
+  reason : Text
+
+-- | Unlocks `unlockAmount` of a governance lock.
+governanceLock_executeUnlock : GovernanceLockExecuteUnlockArgs -> Update GovernanceLock_UnlockResult
+governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs{..}
     = do
-        require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", amount)
-        let isFullUnlock = unlockAmount == amount
+        require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", lock.amount)
+        let isFullUnlock = unlockAmount == lock.amount
         require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
         unless isFullUnlock $ do
           requireMinimumLock state unlockAmount
-          requireMinimumLock state (amount - unlockAmount)
+          requireMinimumLock state (lock.amount - unlockAmount)
 
-        fullSpec <- requireFullLock specification
+        fullSpec <- requireFullLock lock.specification
+        let GovernanceLock{dso, owner, lockedAmulet, originalLockCid} = lock
 
-        let vestingPeriod = vestingDurationFor (governanceLockKind specification) state.governanceLockConfig
+        let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
         let hasNoVestingPeriod = vestingPeriod == days 0
         let endTime = vestingStartTime `addRelTime` vestingPeriod
         let specification = GLS_VestingLock VestingLockSpecification with
@@ -574,10 +607,10 @@ governanceLock_executeUnlock self this@GovernanceLock{..} unlockAmount vestingSt
             pure (Some vestingLockedAmulet, optStillLocked, None)
 
         governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
-          this with
+          lock with
             lockedAmulet
             amount = stillLockedAmount
-            originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid)
+            originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid)
 
         vestingLock <- forA optVestingLockedAmulet (\(lockedAmulet, amount) -> create GovernanceLock with
           dso
@@ -585,7 +618,7 @@ governanceLock_executeUnlock self this@GovernanceLock{..} unlockAmount vestingSt
           lockedAmulet
           amount
           specification
-          originalLockCid = guard isFullUnlock $> fromOptional (toAnyContractId self) originalLockCid
+          originalLockCid = guard isFullUnlock $> fromOptional (toAnyContractId lockCid) originalLockCid
           requestedAt = endTime `addRelTime` (- vestingPeriod))
 
         pure GovernanceLock_UnlockResult_Completed with
