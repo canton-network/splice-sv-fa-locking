@@ -516,10 +516,10 @@ fetchAndMergeGovernanceLocks key context state reason = do
   result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
   pure result
 
-isControllersSet : [Party] -> ControllerSpecification -> Bool
-isControllersSet actors controllers =
+isControllersSubset : [Party] -> ControllerSpecification -> Bool
+isControllersSubset actors controllers =
   let actorsSet = Set.fromList actors
-  in any ((==) actorsSet . Set.fromList) controllers.controllers
+  in any (\cs -> (Set.fromList cs) `Set.isSubsetOf` actorsSet) controllers.controllers
 
 data GovernanceLockProposeUnlockArgs = GovernanceLockProposeUnlockArgs with
   lockCid : ContractId GovernanceLock
@@ -539,7 +539,7 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
     assertInPast24Hours "requestedAt" requestedAt
     fullSpec <- requireFullLock lock.specification
     let unlockControllers = ControllerSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
-    let hasRequiredActors = isControllersSet actors unlockControllers
+    let hasRequiredActors = isControllersSubset actors unlockControllers
 
     let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
     let hasNoVestingPeriod = vestingPeriod == days 0
