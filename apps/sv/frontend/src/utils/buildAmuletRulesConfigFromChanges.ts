@@ -6,7 +6,7 @@ import { Tuple2 } from '@daml.js/daml-prim-DA-Types-1.0.0/lib/DA/Types';
 import * as damlTypes from '@daml/types';
 import { RelTime } from '@daml.js/daml-stdlib-DA-Time-Types-1.0.0/lib/DA/Time/Types';
 import { IssuanceConfig } from '@daml.js/splice-amulet/lib/Splice/Issuance';
-import { nullIfAllNull, wrapMicroseconds } from './changes';
+import { wrapMicroseconds } from './changes';
 import { ConfigChange } from './types';
 import { Set as DamlSet } from '@daml.js/daml-stdlib-DA-Set-Types-1.0.0/lib/DA/Set/Types';
 import { configValueToSwitchOverMap } from '../components/forms/formValidators';
@@ -16,6 +16,10 @@ function lsToSet<T>(ls: T[]): DamlSet<T> {
     // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- This is actually representing Unit in Daml
     map: ls.reduce((acc, v) => acc.set(v, {}), damlTypes.emptyMap<T, {}>()),
   };
+}
+
+function nullIfAllNull<A extends Record<string, unknown>>(a: A): A | null {
+  return Object.values(a).some(v => v !== null) ? a : null;
 }
 
 /**

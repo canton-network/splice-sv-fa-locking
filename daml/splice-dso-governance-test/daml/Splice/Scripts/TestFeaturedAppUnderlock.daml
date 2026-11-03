@@ -9,7 +9,7 @@ import Daml.Script
 
 import Splice.Api.FeaturedAppRightV1 qualified as FAR1
 import Splice.Api.FeaturedAppRightV2 qualified as FAR2
-import Splice.Amulet (FeaturedAppActivityMarker)
+import Splice.Amulet (FeaturedAppActivityMarker, FeaturedAppRight)
 import Splice.DSO.GovernanceLockManagement
 import Splice.DSO.Instruction
 import Splice.DsoRules
@@ -17,6 +17,14 @@ import Splice.DsoRules
 import Splice.Scripts.DsoTestUtils
 import Splice.Scripts.TestGovernance (grantFeaturedAppRight)
 import Splice.Scripts.Util
+
+defaultGovernanceLockManagementConfig : GovernanceLockManagementConfig
+defaultGovernanceLockManagementConfig = GovernanceLockManagementConfig with
+  featuredAppUnderlockEnforcementEnabled = True
+  featuredAppBasicLockThreshold = None
+  featuredAppAssetMovingLockThreshold = None
+  featuredAppAssetLockThreshold = None
+  featuredAppUnderlockGracePeriod = None
 
 defaultGovernanceLockFeaturedAppUnderlockGracePeriod : RelTime
 defaultGovernanceLockFeaturedAppUnderlockGracePeriod = governanceLockFeaturedAppUnderlockGracePeriod None
@@ -77,8 +85,8 @@ testUnderlockEnforceBeforeDeadlineFails = do
   Some _ <- getFeaturedAppRight app provider
   pure ()
 
-testUnderlockEnforcePermanent : Script ()
-testUnderlockEnforcePermanent = do
+setupUnderlockEnforcePermanent : Script (AmuletApp, Party, Party, ContractId FeaturedAppRight)
+setupUnderlockEnforcePermanent = do
   (app, _, (sv1, _, _, _)) <- initMainNet
   provider <- allocateParty "provider"
   _ <- grantFeaturedAppRight app provider
@@ -87,6 +95,11 @@ testUnderlockEnforcePermanent = do
   passTime (defaultGovernanceLockFeaturedAppUnderlockGracePeriod + seconds 1)
 
   Some rightCid <- getFeaturedAppRight app provider
+  pure (app, sv1, provider, rightCid)
+
+testUnderlockEnforcePermanent : Script ()
+testUnderlockEnforcePermanent = do
+  (app, sv1, provider, rightCid) <- setupUnderlockEnforcePermanent
   svSubmits app sv1 $ \dsoRulesCid ->
     exerciseCmd dsoRulesCid DsoRules_EnforceFeaturedAppPermanentUnderlock with
       rightCid
@@ -95,6 +108,28 @@ testUnderlockEnforcePermanent = do
   -- the right is gone
   None <- getFeaturedAppRight app provider
   pure ()
+
+testUnderlockEnforcePermanentDisabled : Script ()
+testUnderlockEnforcePermanentDisabled = do
+  (app, sv1, provider, rightCid) <- setupUnderlockEnforcePermanent
+
+  [(_, dsoRules)] <- query @DsoRules app.dso
+  confirmAndExecutionAction app $ ARC_DsoRules with
+    dsoAction = SRARC_SetConfig DsoRules_SetConfig with
+      newConfig = dsoRules.config with
+        governanceLockManagementConfig = Some defaultGovernanceLockManagementConfig with
+          featuredAppUnderlockEnforcementEnabled = False
+      baseConfig = Some dsoRules.config
+  [(dsoRulesCid, _)] <- query @DsoRules app.dso
+
+  submitMustFail (actAs sv1 <> readAs app.dso) $
+    exerciseCmd dsoRulesCid DsoRules_EnforceFeaturedAppPermanentUnderlock with
+      rightCid
+      sv = sv1
+
+  -- the right is untouched
+  Some rightCid2 <- getFeaturedAppRight app provider
+  rightCid === rightCid2
 
 testUnderlockCure : Script ()
 testUnderlockCure = do
@@ -137,10 +172,7 @@ testUnderlockShorterGracePeriodTakesMinimum = do
 
   [(_, dsoRules)] <- query @DsoRules dso
   let shorterGracePeriod = days 1
-      governanceLockManagementConfig = GovernanceLockManagementConfig with
-        featuredAppBasicLockThreshold = None
-        featuredAppAssetMovingLockThreshold = None
-        featuredAppAssetLockThreshold = None
+      governanceLockManagementConfig = defaultGovernanceLockManagementConfig with
         featuredAppUnderlockGracePeriod = Some shorterGracePeriod
       newConfig = dsoRules.config with governanceLockManagementConfig = Some governanceLockManagementConfig
   confirmAndExecutionAction app $ ARC_DsoRules with

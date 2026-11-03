@@ -1249,7 +1249,9 @@ template DsoRules with
       do
         void $ getAndValidateSvParty this (Some sv)
         void $ fetchChecked (ForDso with dso) rightCid
-        void $ exercise rightCid FeaturedAppRight_EnforcePermanentUnderlock
+        if governanceLockFeaturedAppUnderlockEnforcementEnabled config.governanceLockManagementConfig
+          then void $ exercise rightCid FeaturedAppRight_EnforcePermanentUnderlock
+          else fail "Featured app underlock enforcement is disabled"
         pure DsoRules_EnforceFeaturedAppPermanentUnderlockResult
 
     nonconsuming choice DsoRules_ExpireFeaturedAppUnderlockInstruction : DsoRules_ExpireFeaturedAppUnderlockInstructionResult
@@ -2403,6 +2405,7 @@ instance Patchable LogicalSynchronizerUpgradeSchedule where
 
 instance Patchable GovernanceLockManagementConfig where
   patch new base current = GovernanceLockManagementConfig with
+    featuredAppUnderlockEnforcementEnabled = patchScalar new.featuredAppUnderlockEnforcementEnabled base.featuredAppUnderlockEnforcementEnabled current.featuredAppUnderlockEnforcementEnabled
     featuredAppBasicLockThreshold = patch new.featuredAppBasicLockThreshold base.featuredAppBasicLockThreshold current.featuredAppBasicLockThreshold
     featuredAppAssetMovingLockThreshold = patch new.featuredAppAssetMovingLockThreshold base.featuredAppAssetMovingLockThreshold current.featuredAppAssetMovingLockThreshold
     featuredAppAssetLockThreshold = patch new.featuredAppAssetLockThreshold base.featuredAppAssetLockThreshold current.featuredAppAssetLockThreshold

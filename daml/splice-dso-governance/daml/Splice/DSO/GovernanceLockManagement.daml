@@ -8,6 +8,8 @@ import DA.Optional (fromOptional)
 import DA.Time
 
 data GovernanceLockManagementConfig = GovernanceLockManagementConfig with
+    featuredAppUnderlockEnforcementEnabled : Bool
+      -- ^ Whether to enforce featured app underlocking. Default: true.
     featuredAppBasicLockThreshold : Optional Decimal
       -- ^ Amount of amulet a basic featured app must keep locked to retain its right. Default: 5M.
     featuredAppAssetMovingLockThreshold : Optional Decimal
@@ -18,6 +20,9 @@ data GovernanceLockManagementConfig = GovernanceLockManagementConfig with
       -- ^ How long an underlocked provider has to cure before its right becomes archivable.
       --   Default: 7 days.
   deriving (Eq, Show, Serializable)
+
+governanceLockFeaturedAppUnderlockEnforcementEnabled : Optional GovernanceLockManagementConfig -> Bool
+governanceLockFeaturedAppUnderlockEnforcementEnabled = optional True (.featuredAppUnderlockEnforcementEnabled)
 
 governanceLockFeaturedAppUnderlockGracePeriod : Optional GovernanceLockManagementConfig -> RelTime
 governanceLockFeaturedAppUnderlockGracePeriod config = fromOptional (days 7) $ config >>= (.featuredAppUnderlockGracePeriod)

@@ -159,3 +159,67 @@ describe('buildDsoRulesConfigFromChanges switch-over times', () => {
     expect(result.svOperationsSwitchOverTimes).toEqual({ 'amulet-v2': '2026-09-06T00:00:00Z' });
   });
 });
+
+describe('buildDsoRulesConfigFromChanges governance lock management config', () => {
+  const change = (fieldName: string, newValue: string): ConfigChange => ({
+    fieldName,
+    label: fieldName,
+    currentValue: '',
+    newValue,
+  });
+
+  it('builds the config from the provided changes', () => {
+    const result = buildDsoRulesConfigFromChanges([
+      change('governanceLockManagementFeaturedAppUnderlockEnforcementEnabled', 'true'),
+      change('governanceLockManagementConfigFeaturedAppBasicLockThreshold', '5000000'),
+      change('governanceLockManagementConfigFeaturedAppAssetMovingLockThreshold', '6000000'),
+      change('governanceLockManagementConfigFeaturedAppAssetLockThreshold', '25000000'),
+      change('governanceLockManagementConfigFeaturedAppUnderlockGracePeriod', '604800000000'),
+    ]);
+
+    expect(result.governanceLockManagementConfig).toEqual({
+      featuredAppUnderlockEnforcementEnabled: true,
+      featuredAppBasicLockThreshold: '5000000',
+      featuredAppAssetMovingLockThreshold: '6000000',
+      featuredAppAssetLockThreshold: '25000000',
+      featuredAppUnderlockGracePeriod: { microseconds: '604800000000' },
+    });
+  });
+
+  it('parses the enforcement flag case-insensitively', () => {
+    const result = buildDsoRulesConfigFromChanges([
+      change('governanceLockManagementFeaturedAppUnderlockEnforcementEnabled', 'FALSE'),
+    ]);
+    expect(result.governanceLockManagementConfig?.featuredAppUnderlockEnforcementEnabled).toBe(
+      false
+    );
+  });
+
+  it('uses true and nulls when the fields are absent', () => {
+    expect(buildDsoRulesConfigFromChanges([]).governanceLockManagementConfig).toEqual({
+      featuredAppUnderlockEnforcementEnabled: true,
+      featuredAppBasicLockThreshold: null,
+      featuredAppAssetMovingLockThreshold: null,
+      featuredAppAssetLockThreshold: null,
+      featuredAppUnderlockGracePeriod: null,
+    });
+  });
+
+  it('serializes empty values as null', () => {
+    const result = buildDsoRulesConfigFromChanges([
+      change('governanceLockManagementFeaturedAppUnderlockEnforcementEnabled', ''),
+      change('governanceLockManagementConfigFeaturedAppBasicLockThreshold', ''),
+      change('governanceLockManagementConfigFeaturedAppAssetMovingLockThreshold', ''),
+      change('governanceLockManagementConfigFeaturedAppAssetLockThreshold', ''),
+      change('governanceLockManagementConfigFeaturedAppUnderlockGracePeriod', ''),
+    ]);
+
+    expect(result.governanceLockManagementConfig).toEqual({
+      featuredAppUnderlockEnforcementEnabled: true,
+      featuredAppBasicLockThreshold: null,
+      featuredAppAssetMovingLockThreshold: null,
+      featuredAppAssetLockThreshold: null,
+      featuredAppUnderlockGracePeriod: null,
+    });
+  });
+});

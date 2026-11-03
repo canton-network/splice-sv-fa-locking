@@ -330,6 +330,7 @@ object InitialGovernanceLockConfig {
 }
 
 final case class InitialGovernanceLockManagementConfig(
+    featuredAppUnderlockEnforcementEnabled: Boolean = true,
     featuredAppBasicLockThreshold: Option[NonNegativeNumeric[BigDecimal]] = None,
     featuredAppAssetMovingLockThreshold: Option[NonNegativeNumeric[BigDecimal]] = None,
     featuredAppAssetLockThreshold: Option[NonNegativeNumeric[BigDecimal]] = None,
@@ -338,6 +339,7 @@ final case class InitialGovernanceLockManagementConfig(
   final def toGovernanceLockManagementConfig
       : splice.dso.governancelockmanagement.GovernanceLockManagementConfig =
     new splice.dso.governancelockmanagement.GovernanceLockManagementConfig(
+      featuredAppUnderlockEnforcementEnabled,
       featuredAppBasicLockThreshold.map(_.value.bigDecimal).toJava,
       featuredAppAssetMovingLockThreshold.map(_.value.bigDecimal).toJava,
       featuredAppAssetLockThreshold.map(_.value.bigDecimal).toJava,

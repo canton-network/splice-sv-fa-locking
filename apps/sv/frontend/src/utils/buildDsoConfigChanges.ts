@@ -215,6 +215,18 @@ export function buildDsoConfigChanges(
       newValue: after?.voteCooldownTime?.microseconds || '',
     },
     {
+      fieldName: 'governanceLockManagementFeaturedAppUnderlockEnforcementEnabled',
+      label: 'Governance lock management: Whether to enforce featured app underlocking',
+      currentValue:
+        before?.governanceLockManagementConfig?.featuredAppUnderlockEnforcementEnabled || 'true',
+      newValue:
+        after?.governanceLockManagementConfig?.featuredAppUnderlockEnforcementEnabled || 'true',
+      options: [
+        { label: 'True', value: 'true' },
+        { label: 'False', value: 'false' },
+      ],
+    },
+    {
       fieldName: 'governanceLockManagementConfigFeaturedAppBasicLockThreshold',
       label:
         'Governance lock management: Amount of amulet a basic featured app must keep locked to retain its right (default 5 million)',
