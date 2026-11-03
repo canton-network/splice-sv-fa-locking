@@ -224,7 +224,6 @@ governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{tran
         meta = emptyMetadata
       -}
     GovernanceLock_UnlockResult_Completed{..} -> do
-      potentiallyUnsafeArchive lockCid
       pure V1.TransferInstructionResult with
         output = case result.vestingLock of
           Some vestingLock -> V1.TransferInstructionResult_Pending with
