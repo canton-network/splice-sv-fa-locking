@@ -3,6 +3,7 @@
 
 module Splice.Scripts.TestFeaturedAppUnderlock where
 
+import DA.Action (when)
 import DA.Assert
 import DA.Time
 import Daml.Script
@@ -85,8 +86,8 @@ testUnderlockEnforceBeforeDeadlineFails = do
   Some _ <- getFeaturedAppRight app provider
   pure ()
 
-setupUnderlockEnforcePermanent : Script (AmuletApp, Party, Party, ContractId FeaturedAppRight)
-setupUnderlockEnforcePermanent = do
+setupUnderlockEnforcePermanent : Bool -> Script (AmuletApp, Party, Party, ContractId FeaturedAppRight)
+setupUnderlockEnforcePermanent enable = do
   (app, _, (sv1, _, _, _)) <- initMainNet
   provider <- allocateParty "provider"
   _ <- grantFeaturedAppRight app provider
@@ -94,12 +95,22 @@ setupUnderlockEnforcePermanent = do
 
   passTime (defaultGovernanceLockFeaturedAppUnderlockGracePeriod + seconds 1)
 
+  when enable do
+    [(_, dsoRules)] <- query @DsoRules app.dso
+    confirmAndExecutionAction app $ ARC_DsoRules with
+      dsoAction = SRARC_SetConfig DsoRules_SetConfig with
+        newConfig = dsoRules.config with
+          governanceLockManagementConfig = Some defaultGovernanceLockManagementConfig with
+            featuredAppUnderlockEnforcementEnabled = True
+        baseConfig = Some dsoRules.config
+
   Some rightCid <- getFeaturedAppRight app provider
   pure (app, sv1, provider, rightCid)
 
 testUnderlockEnforcePermanent : Script ()
 testUnderlockEnforcePermanent = do
-  (app, sv1, provider, rightCid) <- setupUnderlockEnforcePermanent
+  (app, sv1, provider, rightCid) <- setupUnderlockEnforcePermanent True
+
   svSubmits app sv1 $ \dsoRulesCid ->
     exerciseCmd dsoRulesCid DsoRules_EnforceFeaturedAppPermanentUnderlock with
       rightCid
@@ -111,17 +122,8 @@ testUnderlockEnforcePermanent = do
 
 testUnderlockEnforcePermanentDisabled : Script ()
 testUnderlockEnforcePermanentDisabled = do
-  (app, sv1, provider, rightCid) <- setupUnderlockEnforcePermanent
-
-  [(_, dsoRules)] <- query @DsoRules app.dso
-  confirmAndExecutionAction app $ ARC_DsoRules with
-    dsoAction = SRARC_SetConfig DsoRules_SetConfig with
-      newConfig = dsoRules.config with
-        governanceLockManagementConfig = Some defaultGovernanceLockManagementConfig with
-          featuredAppUnderlockEnforcementEnabled = False
-      baseConfig = Some dsoRules.config
+  (app, sv1, provider, rightCid) <- setupUnderlockEnforcePermanent False
   [(dsoRulesCid, _)] <- query @DsoRules app.dso
-
   submitMustFail (actAs sv1 <> readAs app.dso) $
     exerciseCmd dsoRulesCid DsoRules_EnforceFeaturedAppPermanentUnderlock with
       rightCid
@@ -352,14 +354,7 @@ testUnderlockInstructionExpiry = do
 
 testUnderlockRegrantedRightNotEnforceable : Script ()
 testUnderlockRegrantedRightNotEnforceable = do
-  (app, dso, (sv1, _, _, _)) <- initMainNet
-  provider <- allocateParty "provider"
-  _ <- grantFeaturedAppRight app provider
-
-  setUnderlockStatus app sv1 provider True
-  passTime (defaultGovernanceLockFeaturedAppUnderlockGracePeriod + seconds 1)
-
-  Some oldRight <- getFeaturedAppRight app provider
+  (app, sv1, provider, oldRight) <- setupUnderlockEnforcePermanent True
   _ <- svSubmits app sv1 $ \dsoRulesCid ->
     exerciseCmd dsoRulesCid DsoRules_EnforceFeaturedAppPermanentUnderlock with
       rightCid = oldRight
@@ -370,8 +365,8 @@ testUnderlockRegrantedRightNotEnforceable = do
   -- though we are now well past the old deadline
   _ <- grantFeaturedAppRight app provider
   Some newRight <- getFeaturedAppRight app provider
-  [(dsoRulesCid, _)] <- query @DsoRules dso
-  submitMustFail (actAs sv1 <> readAs dso) $
+  [(dsoRulesCid, _)] <- query @DsoRules app.dso
+  submitMustFail (actAs sv1 <> readAs app.dso) $
     exerciseCmd dsoRulesCid DsoRules_EnforceFeaturedAppPermanentUnderlock with
       rightCid = newRight
       sv = sv1

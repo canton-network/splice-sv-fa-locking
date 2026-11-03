@@ -195,9 +195,9 @@ describe('buildDsoRulesConfigFromChanges governance lock management config', () 
     );
   });
 
-  it('uses true and nulls when the fields are absent', () => {
+  it('uses false and nulls when the fields are absent', () => {
     expect(buildDsoRulesConfigFromChanges([]).governanceLockManagementConfig).toEqual({
-      featuredAppUnderlockEnforcementEnabled: true,
+      featuredAppUnderlockEnforcementEnabled: false,
       featuredAppBasicLockThreshold: null,
       featuredAppAssetMovingLockThreshold: null,
       featuredAppAssetLockThreshold: null,
@@ -215,7 +215,7 @@ describe('buildDsoRulesConfigFromChanges governance lock management config', () 
     ]);
 
     expect(result.governanceLockManagementConfig).toEqual({
-      featuredAppUnderlockEnforcementEnabled: true,
+      featuredAppUnderlockEnforcementEnabled: false,
       featuredAppBasicLockThreshold: null,
       featuredAppAssetMovingLockThreshold: null,
       featuredAppAssetLockThreshold: null,

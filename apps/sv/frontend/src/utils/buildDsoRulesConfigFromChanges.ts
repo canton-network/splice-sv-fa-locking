@@ -7,7 +7,7 @@ import type {
   SynchronizerState,
 } from '@daml.js/splice-dso-governance/lib/Splice/DSO/DecentralizedSynchronizer/module';
 import type { DsoRulesConfig } from '@daml.js/splice-dso-governance/lib/Splice/DsoRules';
-import { wrapMicroseconds } from './changes';
+import { wrapMicroseconds } from './governance';
 import type { ConfigChange } from './types';
 import { configValueToSwitchOverMap } from '../components/forms/formValidators';
 
@@ -59,11 +59,6 @@ export function buildDsoRulesConfigFromChanges(dsoConfigChanges: ConfigChange[])
   const svOperationsSwitchOverTimes = configValueToSwitchOverMap(
     getValue('svOperationsSwitchOverTimes', true)
   );
-
-  const governanceLockManagementFeaturedAppUnderlockEnforcementEnabled = getValue(
-    'governanceLockManagementFeaturedAppUnderlockEnforcementEnabled',
-    false
-  ).toLowerCase();
 
   const dsoConfig: DsoRulesConfig = {
     numUnclaimedRewardsThreshold: getValue('numUnclaimedRewardsThreshold', false),
@@ -134,8 +129,10 @@ export function buildDsoRulesConfigFromChanges(dsoConfigChanges: ConfigChange[])
     svOperationsSwitchOverTimes: svOperationsSwitchOverTimes,
     governanceLockManagementConfig: {
       featuredAppUnderlockEnforcementEnabled:
-        governanceLockManagementFeaturedAppUnderlockEnforcementEnabled === '' ||
-        governanceLockManagementFeaturedAppUnderlockEnforcementEnabled === 'true',
+        getValue(
+          'governanceLockManagementFeaturedAppUnderlockEnforcementEnabled',
+          false
+        ).toLowerCase() === 'true',
       featuredAppBasicLockThreshold: getValue(
         'governanceLockManagementConfigFeaturedAppBasicLockThreshold',
         true

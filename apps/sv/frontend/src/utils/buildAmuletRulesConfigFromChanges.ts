@@ -6,7 +6,7 @@ import { Tuple2 } from '@daml.js/daml-prim-DA-Types-1.0.0/lib/DA/Types';
 import * as damlTypes from '@daml/types';
 import { RelTime } from '@daml.js/daml-stdlib-DA-Time-Types-1.0.0/lib/DA/Time/Types';
 import { IssuanceConfig } from '@daml.js/splice-amulet/lib/Splice/Issuance';
-import { wrapMicroseconds } from './changes';
+import { wrapMicroseconds } from './governance';
 import { ConfigChange } from './types';
 import { Set as DamlSet } from '@daml.js/daml-stdlib-DA-Set-Types-1.0.0/lib/DA/Set/Types';
 import { configValueToSwitchOverMap } from '../components/forms/formValidators';

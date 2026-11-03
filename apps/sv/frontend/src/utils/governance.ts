@@ -442,3 +442,7 @@ export function buildAmuletRulesPendingConfigFields(
       }));
     });
 }
+
+export function wrapMicroseconds(microseconds: string | null): { microseconds: string } | null {
+  return microseconds !== null && microseconds !== '' ? { microseconds } : null;
+}

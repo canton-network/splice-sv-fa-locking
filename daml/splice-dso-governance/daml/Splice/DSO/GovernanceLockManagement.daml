@@ -9,7 +9,7 @@ import DA.Time
 
 data GovernanceLockManagementConfig = GovernanceLockManagementConfig with
     featuredAppUnderlockEnforcementEnabled : Bool
-      -- ^ Whether to enforce featured app underlocking. Default: true.
+      -- ^ Whether to enforce featured app underlocking. Default: false.
     featuredAppBasicLockThreshold : Optional Decimal
       -- ^ Amount of amulet a basic featured app must keep locked to retain its right. Default: 5M.
     featuredAppAssetMovingLockThreshold : Optional Decimal
@@ -22,7 +22,7 @@ data GovernanceLockManagementConfig = GovernanceLockManagementConfig with
   deriving (Eq, Show, Serializable)
 
 governanceLockFeaturedAppUnderlockEnforcementEnabled : Optional GovernanceLockManagementConfig -> Bool
-governanceLockFeaturedAppUnderlockEnforcementEnabled = optional True (.featuredAppUnderlockEnforcementEnabled)
+governanceLockFeaturedAppUnderlockEnforcementEnabled = optional False (.featuredAppUnderlockEnforcementEnabled)
 
 governanceLockFeaturedAppUnderlockGracePeriod : Optional GovernanceLockManagementConfig -> RelTime
 governanceLockFeaturedAppUnderlockGracePeriod config = fromOptional (days 7) $ config >>= (.featuredAppUnderlockGracePeriod)

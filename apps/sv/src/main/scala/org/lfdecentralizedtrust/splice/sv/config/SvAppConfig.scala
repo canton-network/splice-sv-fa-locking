@@ -330,7 +330,7 @@ object InitialGovernanceLockConfig {
 }
 
 final case class InitialGovernanceLockManagementConfig(
-    featuredAppUnderlockEnforcementEnabled: Boolean = true,
+    featuredAppUnderlockEnforcementEnabled: Boolean = false,
     featuredAppBasicLockThreshold: Option[NonNegativeNumeric[BigDecimal]] = None,
     featuredAppAssetMovingLockThreshold: Option[NonNegativeNumeric[BigDecimal]] = None,
     featuredAppAssetLockThreshold: Option[NonNegativeNumeric[BigDecimal]] = None,

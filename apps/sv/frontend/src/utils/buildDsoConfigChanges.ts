@@ -218,9 +218,9 @@ export function buildDsoConfigChanges(
       fieldName: 'governanceLockManagementFeaturedAppUnderlockEnforcementEnabled',
       label: 'Governance lock management: Whether to enforce featured app underlocking',
       currentValue:
-        before?.governanceLockManagementConfig?.featuredAppUnderlockEnforcementEnabled || 'true',
+        before?.governanceLockManagementConfig?.featuredAppUnderlockEnforcementEnabled || 'false',
       newValue:
-        after?.governanceLockManagementConfig?.featuredAppUnderlockEnforcementEnabled || 'true',
+        after?.governanceLockManagementConfig?.featuredAppUnderlockEnforcementEnabled || 'false',
       options: [
         { label: 'True', value: 'true' },
         { label: 'False', value: 'false' },
