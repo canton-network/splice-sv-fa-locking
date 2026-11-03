@@ -367,7 +367,7 @@ template UnlockProposal
               approvals = pendingApprovals
             pure $ UnlockProposal_ApproveResult $ GovernanceLock_UnlockResult_Pending with pendingProposal
           Right approved -> do
-            (lockCid, lock) <- fetchByKey @GovernanceLock target
+            FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks target context state reason
             approvedVestingStartTime <- effectiveVestingStartTime $ fmap snd approved
             governanceLockUnlockResult <- governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
               lockCid
