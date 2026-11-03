@@ -120,6 +120,7 @@ data GovernanceLockKind
   deriving (Eq, Show, Serializable)
 
 data ControllerSpecification = ControllerSpecification with
+    -- TODO: Use `Set.Set (Set.Set Party)`?
     controllers : [[Party]]
       -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
   deriving (Eq, Show, Serializable)
@@ -311,6 +312,11 @@ data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
   lock : GovernanceLock
   changeHolding : Optional (ContractId Amulet)
 
+data UnlockProposalKey = UnlockProposalKey with
+    target : GovernanceLockKey
+    amount : Decimal
+  deriving (Eq, Show, Serializable)
+
 template UnlockProposal
   with
     target : GovernanceLockKey
@@ -323,7 +329,9 @@ template UnlockProposal
   where
     signatory owner
     observer (Set.fromList $ concat controllerSpecification.controllers)
-    ensure amount > 0.0
+    ensure amount > 0.0 && either error (const True) (requireFullLock target.specification)
+    key (UnlockProposalKey with target; amount) : UnlockProposalKey
+    maintainer key.target.dso
 
     choice UnlockProposal_Approve : UnlockProposal_ApproveResult
       with
@@ -337,7 +345,7 @@ template UnlockProposal
           actors
           ()
           approvals
-          (\_ -> True)
+          (const True)
 
         case result of
           Left pendingApprovals -> do
@@ -345,9 +353,10 @@ template UnlockProposal
               approvals = pendingApprovals
             pure $ UnlockProposal_ApproveResult $ GovernanceLock_UnlockResult_Pending with pendingProposal
           Right _ -> do
+            -- TODO: what if enough time passed between proposal creation and now that vestingStartTime is no longer within deadline?
             assertWithinDeadline "vestingStartTime" vestingStartTime
             (governanceLockCid, governanceLock) <- fetchByKey @GovernanceLock target
-            governanceLockUnlockResult <- governanceLock_unlockImplInner governanceLockCid governanceLock amount vestingStartTime actors context state reason
+            governanceLockUnlockResult <- governanceLock_executeUnlock governanceLockCid governanceLock amount vestingStartTime context state reason
             pure $ UnlockProposal_ApproveResult governanceLockUnlockResult
 
 
@@ -486,14 +495,17 @@ fetchAndMergeGovernanceLocks key context state reason = do
   result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
   pure result
 
-isRequiredActors : [Party] -> [[Party]] -> Bool
-isRequiredActors actors allowedActors = any (\y -> Set.fromList actors == Set.fromList y) allowedActors
+isControllersSet : [Party] -> ControllerSpecification -> Bool
+isControllersSet actors controllers =
+  let actorsSet = Set.fromList actors
+  in any ((==) actorsSet . Set.fromList) controllers.controllers
 
 governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Optional Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update GovernanceLock_UnlockResult
 governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingStartTime actors context state reason
   = do
-    requireFullLock specification
-    let hasRequiredActors = isRequiredActors actors $ fromOptional [[owner]] specification.unlockControllers
+    fullSpec <- requireFullLock specification
+    let unlockControllers = ControllerSpecification $ optional [[owner]] (.controllers) fullSpec.unlockControllers
+    let hasRequiredActors = isControllersSet actors unlockControllers
 
     let vestingPeriod = vestingDurationFor (governanceLockKind specification) state.governanceLockConfig
     let hasNoVestingPeriod = vestingPeriod == days 0
@@ -506,16 +518,18 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingSt
 
     case hasRequiredActors of
       True ->
-        governanceLock_unlockImplInner self this unlockAmount vestingStartTime actors context state reason
+        governanceLock_executeUnlock self this unlockAmount vestingStartTime context state reason
       False -> do
-        optUnlockProposalCid <- lookupByKey @UnlockProposal (key this)
+        optUnlockProposalCid <- lookupByKey @UnlockProposal UnlockProposalKey with
+          target = key this
+          amount = unlockAmount
         case optUnlockProposalCid of
           None -> do
             pendingProposal <- create UnlockProposal with
               target = key this
               owner
               amount = unlockAmount
-              controllerSpecification = specification.unlockControllers
+              controllerSpecification = unlockControllers
               approvals = Map.fromList $ fmap (\x -> (x, ())) actors
               vestingStartTime
               reason
@@ -528,12 +542,9 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingSt
               state
             pure result
 
-
-
-
 -- | Unlocks `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks which have no vesting period.
-governanceLock_unlockImplInner : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update GovernanceLock_UnlockResult
-governanceLock_unlockImplInner self this@GovernanceLock{..} unlockAmount vestingStartTime actors context state reason
+governanceLock_executeUnlock : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update GovernanceLock_UnlockResult
+governanceLock_executeUnlock self this@GovernanceLock{..} unlockAmount vestingStartTime context state reason
     = do
         require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", amount)
         let isFullUnlock = unlockAmount == amount
@@ -888,13 +899,13 @@ targetLockMetaPrefix = "target-"
 -- | Metadata key that specifies the owner of a target lock.
 targetLockOwnerMetaKey = targetLockMetaPrefix <> "lock-owner"
 
--- |
+-- | Metadata key that specifies custom vesting controllers.
 vestingControllersMetaKey = "vesting-controllers"
 
--- |
+-- | Metadata key that specifies custom substitution controllers.
 substitutionControllersMetaKey = "substitution-controllers"
 
--- |
+-- | Metadata key that specifies custom unlock controllers.
 unlockControllersMetaKey = "unlock-controllers"
 
 -- | The metadata entries of the kind, subject and status of a lock, in the order of the CIP.
