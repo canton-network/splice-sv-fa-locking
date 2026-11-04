@@ -1362,3 +1362,113 @@ testGrantFeaturedAppRightWithConfig = do
         requestCid; amuletRulesCid = Some amuletRulesCid; sv = Some sv1
   [_] <- query @FeaturedAppRight provider
   pure ()
+
+testMergeFeaturedAppRights : Script ()
+testMergeFeaturedAppRights = do
+  (_, dso, (sv1, _, _, _)) <- initMainNet
+  let submitOpts = actAs sv1 <> readAs dso
+  provider <- allocateParty "provider"
+  otherProvider <- allocateParty "otherProvider"
+  ops1 <- allocateParty "ops1"
+  ops2 <- allocateParty "ops2"
+  ops3 <- allocateParty "ops3"
+  now <- getTime
+
+  let
+    baseRight = FeaturedAppRight with
+      dso
+      provider
+      activityWeight = None
+      appKind = None
+      opsParties = None
+      underlockPermanentAt = None
+
+    mergeCommands : [ContractId FeaturedAppRight] -> Script (Commands DsoRules_MergeFeaturedAppRightsResult)
+    mergeCommands rightCids = do
+      [(dsoRulesCid, _)] <- query @DsoRules dso
+      pure $ exerciseCmd dsoRulesCid DsoRules_MergeFeaturedAppRights with sv = sv1; rightCids
+
+    createAndMergeRights' : [FeaturedAppRight] -> Script ([ContractId FeaturedAppRight], Commands DsoRules_MergeFeaturedAppRightsResult)
+    createAndMergeRights' rights = do
+      rightCids <- forA rights \right -> submit dso (createCmd right)
+      cmds <- mergeCommands rightCids
+      pure (rightCids, cmds)
+
+    createAndMergeRights : [FeaturedAppRight] -> Script (Commands DsoRules_MergeFeaturedAppRightsResult)
+    createAndMergeRights rights = snd <$> createAndMergeRights' rights
+
+    submitAndGetMerged : Commands DsoRules_MergeFeaturedAppRightsResult -> Script (ContractId FeaturedAppRight, FeaturedAppRight)
+    submitAndGetMerged cmds = do
+      DsoRules_MergeFeaturedAppRightsResult{featuredAppRight = Some mergedCid} <- submit submitOpts cmds
+      Some merged <- queryContractId provider mergedCid
+      pure (mergedCid, merged)
+
+  -- Merging zero rights is a no-op
+  DsoRules_MergeFeaturedAppRightsResult{featuredAppRight = None} <- submit submitOpts =<< createAndMergeRights []
+
+  -- Merging a single right leaves it unchanged
+  ([rightCid], cmds) <- createAndMergeRights' [baseRight]
+  (mergedCid, merged) <- submitAndGetMerged cmds
+  mergedCid === rightCid
+  merged === baseRight
+
+  -- Merging identical rights leaves the first unchanged and archives others
+  ([firstCid, secondCid], cmds) <- createAndMergeRights' [baseRight, baseRight]
+  (mergedCid, merged) <- submitAndGetMerged cmds
+  mergedCid === firstCid
+  merged === baseRight
+  None <- queryContractId provider secondCid
+
+  -- Combination behavior when merging multiple rights:
+  --   1. The max value of activityWeight and appKind is preferred
+  --   2. The min value of underlockPermanentAt is preferred
+  --   3. All distinct opsParties are preserved
+  --
+  -- Non-default values lower than the defaults are given lower precedence than the defaults -- see the
+  -- "non-default values lower than defaults" test case below
+  (_, merged) <- submitAndGetMerged =<< createAndMergeRights
+    [ baseRight
+    , baseRight with
+        activityWeight = Some 3.0
+        appKind = Some FAK_AssetMoving
+        opsParties = Some [ops1]
+        underlockPermanentAt = Some $ now `addRelTime` days 2
+    , baseRight with
+        activityWeight = Some 2.0
+        appKind = Some FAK_Basic
+        opsParties = Some [ops2, ops3]
+        underlockPermanentAt = Some $ now `addRelTime` days 3
+    , baseRight with
+        activityWeight = Some 1.0
+        appKind = Some FAK_Asset
+        opsParties = Some [ops3]
+        underlockPermanentAt = Some $ now `addRelTime` days 1
+    ]
+  merged === baseRight with
+    activityWeight = Some 3.0
+    appKind = Some FAK_Asset
+    opsParties = Some [ops1, ops2, ops3]
+    underlockPermanentAt = Some $ now `addRelTime` days 1
+
+  -- Combination behavior when merged rights use default values: `None` is used in place of `Some defaultValue`
+  (_, merged) <- submitAndGetMerged =<< createAndMergeRights
+    [ baseRight
+    , baseRight with
+        activityWeight = Some defaultAppActivityWeight
+        appKind = Some defaultAppKind
+        opsParties = Some defaultOpsParties
+    ]
+  merged === baseRight
+
+  -- Combination behavior when merged rights use non-default values lower than defaults: the defaults are taken
+  (_, merged) <- submitAndGetMerged =<< createAndMergeRights [baseRight, baseRight with activityWeight = Some 0.3]
+  merged === baseRight
+
+  -- All rights must belong to the same provider
+  submitMustFail'' (expectMessageContains "Contract group identifier mismatch") submitOpts =<<
+    createAndMergeRights [baseRight, baseRight with provider = otherProvider]
+
+  -- All rightCids must be unique
+  submitMustFail'' (expectMessageContains "unique rightCids") submitOpts =<< do
+    ([rightCid], _) <- createAndMergeRights' [baseRight]
+    mergeCommands [rightCid, rightCid]
