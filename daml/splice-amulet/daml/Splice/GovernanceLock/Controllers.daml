@@ -4,7 +4,8 @@
 module Splice.GovernanceLock.Controllers (
   ControllersSpecification(..),
   validateControllersSpecification,
-  isControllersSubset,
+  allControllers,
+  satisfiesAnyControllersSet,
   updateControllersApprovals,
   controllersPendingApproval,
 ) where
@@ -18,7 +19,6 @@ import DA.Set qualified as Set
 import Splice.Util
 
 data ControllersSpecification = ControllersSpecification with
-    -- TODO: Use `Set.Set (Set.Set Party)`?
     controllers : [[Party]]
       -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
   deriving (Eq, Show, Serializable)
@@ -32,8 +32,11 @@ validateControllersSpecification controllerType (Some ControllersSpecification{c
   require (controllerType <> "Controllers must not be empty") (not $ null controllers)
   require (controllerType <> "Controllers must not contain an empty controller set") (all (not . null) controllers)
 
-isControllersSubset : [Party] -> ControllersSpecification -> Bool
-isControllersSubset actors controllers =
+allControllers : ControllersSpecification -> Set.Set Party
+allControllers spec = Set.fromList $ concat spec.controllers
+
+satisfiesAnyControllersSet : [Party] -> ControllersSpecification -> Bool
+satisfiesAnyControllersSet actors controllers =
   let actorsSet = Set.fromList actors
   in any (\cs -> (Set.fromList cs) `Set.isSubsetOf` actorsSet) controllers.controllers
 

@@ -84,6 +84,7 @@ import Prelude hiding (forA)
 import DA.Action (foldrA, unless)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
+import DA.Foldable (foldMap)
 import DA.Functor (($>))
 import DA.List qualified as List
 import DA.List.Total (head)
@@ -442,7 +443,6 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
     fullSpec <- requireFullLock lock.specification
     let target = key lock
         unlockControllers = ControllersSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
-        hasRequiredActors = isControllersSubset actors unlockControllers
         vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
         hasNoVestingPeriod = vestingPeriod == days 0
     vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
@@ -452,7 +452,7 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
             assertInNext24Hours "vestingStartTime" vestingStartTime
             pure vestingStartTime
 
-    if hasRequiredActors
+    if satisfiesAnyControllersSet actors unlockControllers
       then governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with ..
       else GovernanceLock_UnlockResult_Pending <$> create UnlockProposal with
         target
@@ -652,12 +652,10 @@ governanceLockObservers spec = case governanceLockKind spec of
   GLK_SuperValidatorRightsOwner _ -> []
 
 governanceLockControllers : GovernanceLockSpecification -> Set.Set Party
-governanceLockControllers specification = Set.fromList . concat $ getSpecControllers specification
-  where
-    getSpecControllers : GovernanceLockSpecification -> [[Party]]
-    getSpecControllers (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) =
-      concatMap (.controllers) $ catOptionals [unlockControllers, substitutionControllers, vestingControllers]
-    getSpecControllers (GLS_VestingLock (VestingLockSpecification _ _ _ vestingControllers)) = optional [[]] (.controllers) vestingControllers
+governanceLockControllers (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) =
+  foldMap allControllers $ catOptionals [unlockControllers, substitutionControllers, vestingControllers]
+governanceLockControllers (GLS_VestingLock (VestingLockSpecification _ _ _ vestingControllers)) =
+  optional Set.empty allControllers vestingControllers
 
 -- Lock properties for LockSubject types
 
@@ -807,13 +805,11 @@ data UnlockProposalApproveArgs = UnlockProposalApproveArgs with
 
 unlockProposal_approve : UnlockProposalApproveArgs -> Update GovernanceLock_UnlockResult
 unlockProposal_approve UnlockProposalApproveArgs{..} = do
+  let controllersContainingProposers = filter (\cs -> any (\p -> p `elem` cs) proposal.proposers) proposal.unlockControllers.controllers
+  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", controllersContainingProposers)
+
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext proposal.target.dso extraArgs.context
-  result <- updateControllersApprovals
-    proposal.unlockControllers
-    actors
-    ()
-    proposal.approvals
-    (const True)
+  result <- updateControllersApprovals proposal.unlockControllers actors () proposal.approvals (const True)
 
   case result of
     Left pendingApprovals -> do
