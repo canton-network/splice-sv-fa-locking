@@ -317,8 +317,6 @@ data UnlockProposalKey = UnlockProposalKey with
 template UnlockProposal
   with
     target : GovernanceLockKey
-    -- TODO: change this to proposers : [Party] and pass `actors` below?
-    owner : Party
     amount : Decimal -- ^ Amount being unlocked.
     unlockControllers : ControllersSpecification
     approvals : Map.Map Party () -- ^ Approvals recorded so far.
@@ -327,7 +325,7 @@ template UnlockProposal
     reason : Text
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
   where
-    signatory target.dso, owner
+    signatory target.dso, Map.keys approvals
     observer (Set.fromList $ concat unlockControllers.controllers)
     ensure amount > 0.0 && either error (const True) (requireFullLock target.specification)
     key (UnlockProposalKey with target; amount) : UnlockProposalKey
@@ -487,8 +485,6 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
           None -> do
             pendingProposal <- create UnlockProposal with
               target
-              -- TODO: is this correct? should it be the `actors`?
-              owner = lock.owner
               amount = unlockAmount
               unlockControllers
               approvals = Map.fromList $ fmap (, ()) actors
