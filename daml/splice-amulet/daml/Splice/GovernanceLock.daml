@@ -309,21 +309,6 @@ data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
   lock : GovernanceLock
   changeHolding : Optional (ContractId Amulet)
 
-template UnlockProposal
-  with
-    target : GovernanceLockKey
-    amount : Decimal -- ^ Amount being unlocked.
-    unlockControllers : ControllersSpecification
-    approvals : Map.Map Party () -- ^ Approvals recorded so far.
-    -- TODO: add release notes to mention departure from CIP; we're not accepting a vestingStartTime from each approver
-    vestingStartTime : Time -- ^ Time at which vesting is proposed to start.
-    reason : Text
-    expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
-  where
-    signatory target.dso, Map.keys approvals
-    observer (Set.fromList $ concat unlockControllers.controllers)
-    ensure amount > 0.0 && either error (const True) (requireFullLock target.specification)
-
 fetchAndMergeGovernanceLocks'
   :  Optional (Decimal, [ContractId Holding], Time)
     -- ^ New funds to lock: the amount, inputs, and requestedAt time.
@@ -460,37 +445,6 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
         vestingStartTime
         reason
         expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
-
-data UnlockProposalApproveArgs = UnlockProposalApproveArgs with
-  proposal : UnlockProposal
-  actors : [Party]
-  context : ExternalPartyTransferContext
-  state : ExternalPartyConfigState
-  reason : Text
-
-unlockProposal_approve : UnlockProposalApproveArgs -> Update GovernanceLock_UnlockResult
-unlockProposal_approve UnlockProposalApproveArgs{..} = do
-  result <- updateControllersApprovals
-    proposal.unlockControllers
-    actors
-    ()
-    proposal.approvals
-    (const True)
-
-  case result of
-    Left pendingApprovals -> do
-      pendingProposal <- create proposal with approvals = pendingApprovals
-      pure $ GovernanceLock_UnlockResult_Pending with pendingProposal
-    Right _ -> do
-      FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.target context state reason
-      governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
-        lockCid
-        lock
-        unlockAmount = proposal.amount
-        vestingStartTime = proposal.vestingStartTime
-        context
-        state
-        reason
 
 data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
   lockCid : ContractId GovernanceLock
@@ -739,6 +693,52 @@ governanceLock_dsoTransferImpl forOwner@ForOwner{..} lockCid transferredAmount r
         unlockedAmulet
     GT ->
       fail $ "transferred lock has less funds (" <> show amount <> ") than the amount proposed to be transferred (" <> show transferredAmount <> ")"
+
+template UnlockProposal
+  with
+    target : GovernanceLockKey
+    amount : Decimal -- ^ Amount being unlocked.
+    unlockControllers : ControllersSpecification
+    approvals : Map.Map Party () -- ^ Approvals recorded so far.
+    -- TODO: add release notes to mention departure from CIP; we're not accepting a vestingStartTime from each approver
+    vestingStartTime : Time -- ^ Time at which vesting is proposed to start.
+    reason : Text
+    expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
+  where
+    signatory target.dso, Map.keys approvals
+    observer (Set.fromList $ concat unlockControllers.controllers)
+    ensure amount > 0.0 && either error (const True) (requireFullLock target.specification)
+
+data UnlockProposalApproveArgs = UnlockProposalApproveArgs with
+  proposal : UnlockProposal
+  actors : [Party]
+  context : ExternalPartyTransferContext
+  state : ExternalPartyConfigState
+  reason : Text
+
+unlockProposal_approve : UnlockProposalApproveArgs -> Update GovernanceLock_UnlockResult
+unlockProposal_approve UnlockProposalApproveArgs{..} = do
+  result <- updateControllersApprovals
+    proposal.unlockControllers
+    actors
+    ()
+    proposal.approvals
+    (const True)
+
+  case result of
+    Left pendingApprovals -> do
+      pendingProposal <- create proposal with approvals = pendingApprovals
+      pure $ GovernanceLock_UnlockResult_Pending with pendingProposal
+    Right _ -> do
+      FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.target context state reason
+      governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
+        lockCid
+        lock
+        unlockAmount = proposal.amount
+        vestingStartTime = proposal.vestingStartTime
+        context
+        state
+        reason
 
 -- Helpers for handling LockedAmulet
 -- =================================
