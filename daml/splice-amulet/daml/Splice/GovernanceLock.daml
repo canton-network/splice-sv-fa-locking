@@ -80,12 +80,12 @@ module Splice.GovernanceLock (
 ) where
 
 import Prelude hiding (forA)
-import DA.Action (filterA, foldrA, unless)
+import DA.Action (foldrA, unless)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
 import DA.Functor (($>))
 import DA.List (sortOn)
-import DA.List.Total (head, minimumOn)
+import DA.List.Total (head)
 import DA.Map qualified as Map
 import DA.Optional
 import DA.Set qualified as Set
@@ -321,7 +321,9 @@ template UnlockProposal
     owner : Party
     amount : Decimal -- ^ Amount being unlocked.
     unlockControllers : ControllersSpecification
-    approvals : Map.Map Party Time -- ^ Approvals recorded so far, mapping the approver to the approved vesting start time.
+    approvals : Map.Map Party () -- ^ Approvals recorded so far.
+    -- TODO: add release notes to mention departure from CIP; we're not accepting a vestingStartTime from each approver
+    vestingStartTime : Time -- ^ Time at which vesting is proposed to start.
     reason : Text
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
   where
@@ -489,7 +491,8 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
               owner = lock.owner
               amount = unlockAmount
               unlockControllers
-              approvals = Map.fromList $ fmap (, vestingStartTime) actors
+              approvals = Map.fromList $ fmap (, ()) actors
+              vestingStartTime
               reason
               expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
             pure $ GovernanceLock_UnlockResult_Pending with pendingProposal
@@ -498,7 +501,6 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
             unlockProposal_approve UnlockProposalApproveArgs with
               proposal
               actors
-              vestingStartTime
               context
               state
               reason
@@ -506,7 +508,6 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
 data UnlockProposalApproveArgs = UnlockProposalApproveArgs with
   proposal : UnlockProposal
   actors : [Party]
-  vestingStartTime : Time
   context : ExternalPartyTransferContext
   state : ExternalPartyConfigState
   reason : Text
@@ -516,7 +517,7 @@ unlockProposal_approve UnlockProposalApproveArgs{..} = do
   result <- updateControllersApprovals
     proposal.unlockControllers
     actors
-    vestingStartTime
+    ()
     proposal.approvals
     (const True)
 
@@ -524,14 +525,13 @@ unlockProposal_approve UnlockProposalApproveArgs{..} = do
     Left pendingApprovals -> do
       pendingProposal <- create proposal with approvals = pendingApprovals
       pure $ GovernanceLock_UnlockResult_Pending with pendingProposal
-    Right approved -> do
+    Right _ -> do
       FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.target context state reason
-      approvedVestingStartTime <- effectiveVestingStartTime $ fmap snd approved
       governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
         lockCid
         lock
         unlockAmount = proposal.amount
-        vestingStartTime = approvedVestingStartTime
+        vestingStartTime = proposal.vestingStartTime
         context
         state
         reason
@@ -597,15 +597,6 @@ governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs{..}
           vestingLock
           governanceLock
           unlockedAmulet
-
-effectiveVestingStartTime : [Time] -> Update Time
-effectiveVestingStartTime times = do
-  futureTimes <- filterA isLedgerTimeLT times
-  case minimumOn identity futureTimes of
-    None -> assertFail "None of the approved unlock times is in the future"
-    Some earliest -> do
-      assertInNext24Hours "vestingStartTime" earliest
-      pure earliest
 
 vestingLock_withdrawImpl : ContractId GovernanceLock -> GovernanceLock -> Time -> [Party] -> ExternalPartyTransferContext -> Text -> Update VestingLock_WithdrawResult
 vestingLock_withdrawImpl self this@GovernanceLock{..} vestedUntilTime actors context reason
