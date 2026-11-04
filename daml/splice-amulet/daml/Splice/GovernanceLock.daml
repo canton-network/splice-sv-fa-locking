@@ -82,6 +82,7 @@ import Prelude hiding (forA, forA_)
 import DA.Action (foldrA, unless)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
+import DA.Either
 import DA.Foldable (forA_)
 import DA.Functor (($>))
 import DA.List (sortOn)
@@ -124,6 +125,9 @@ data ControllerSpecification = ControllerSpecification with
     controllers : [[Party]]
       -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
   deriving (Eq, Show, Serializable)
+
+defaultToOwner : Party -> Optional ControllerSpecification -> ControllerSpecification
+defaultToOwner owner controllerSpecification = fromOptional (ControllerSpecification [[owner]]) controllerSpecification
 
 instance Semigroup ControllerSpecification where
   (<>) (ControllerSpecification a) (ControllerSpecification b) = ControllerSpecification $ a <> b
@@ -315,16 +319,17 @@ data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
 template UnlockProposal
   with
     target : GovernanceLockKey
-    owner : Party
     amount : Decimal
-    controllerSpecification : ControllerSpecification
+    controllerSpecification : ControllerSpecification -- FIXME: do we want to remove? this is redundant with information in target.
     approvals : Map.Map Party ()
     vestingStartTime : Time
     reason : Text
   where
-    signatory owner
+    signatory Map.keys approvals
     observer (Set.fromList $ concat controllerSpecification.controllers)
-    ensure amount > 0.0
+    ensure amount > 0.0 && isRight (requireFullLock @(Either Text) target.specification)
+    key target : GovernanceLockKey
+    maintainer key.dso
 
     choice UnlockProposal_Approve : UnlockProposal_ApproveResult
       with
@@ -333,8 +338,10 @@ template UnlockProposal
         state : ExternalPartyConfigState
       controller actors
       do
+        fullLockSpecification <- requireFullLock target.specification
+        let unlockControllers = defaultToOwner target.owner fullLockSpecification.unlockControllers
         result <- updateApprovals
-          controllerSpecification
+          unlockControllers
           actors
           ()
           approvals
@@ -486,8 +493,9 @@ isRequiredActors actors allowedActors = any (\y -> Set.fromList actors == Set.fr
 governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Optional Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update GovernanceLock_UnlockResult
 governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingStartTime actors context state reason
   = do
-    requireFullLock specification
-    let hasRequiredActors = isRequiredActors actors $ fromOptional [[owner]] specification.unlockControllers
+    fullLockSpecification <- requireFullLock specification
+    let controllers = defaultToOwner owner fullLockSpecification.unlockControllers
+    let hasRequiredActors = isRequiredActors actors $ controllers.controllers
 
     let vestingPeriod = vestingDurationFor (governanceLockKind specification) state.governanceLockConfig
     let hasNoVestingPeriod = vestingPeriod == days 0
@@ -507,9 +515,8 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingSt
           None -> do
             pendingProposal <- create UnlockProposal with
               target = key this
-              owner
               amount = unlockAmount
-              controllerSpecification = specification.unlockControllers
+              controllerSpecification = controllers
               approvals = Map.fromList $ fmap (\x -> (x, ())) actors
               vestingStartTime
               reason
@@ -527,7 +534,7 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingSt
 
 -- | Unlocks `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks which have no vesting period.
 governanceLock_unlockImplInner : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update GovernanceLock_UnlockResult
-governanceLock_unlockImplInner self this@GovernanceLock{..} unlockAmount vestingStartTime actors context state reason
+governanceLock_unlockImplInner self this@GovernanceLock{..} unlockAmount vestingStartTime _actors context state reason
     = do
         require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", amount)
         let isFullUnlock = unlockAmount == amount
