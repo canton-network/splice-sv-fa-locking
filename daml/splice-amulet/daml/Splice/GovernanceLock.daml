@@ -730,7 +730,7 @@ template UnlockProposal
   where
     signatory target.dso, proposers
     observer target.owner, (Set.fromList $ concat unlockControllers.controllers)
-    ensure amount > 0.0 && length proposers > 0 && either error (const True) (requireFullLock target.specification)
+    ensure amount > 0.0 && (not $ null proposers) && either error (const True) (requireFullLock target.specification)
 
     interface instance V1.TransferInstruction for UnlockProposal where
       view = V1.TransferInstructionView with
