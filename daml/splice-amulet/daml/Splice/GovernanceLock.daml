@@ -309,11 +309,6 @@ data FetchAndMergeLocksResult = FetchAndMergeLocksResult with
   lock : GovernanceLock
   changeHolding : Optional (ContractId Amulet)
 
-data UnlockProposalKey = UnlockProposalKey with
-    target : GovernanceLockKey
-    amount : Decimal
-  deriving (Eq, Show, Serializable)
-
 template UnlockProposal
   with
     target : GovernanceLockKey
@@ -328,8 +323,6 @@ template UnlockProposal
     signatory target.dso, Map.keys approvals
     observer (Set.fromList $ concat unlockControllers.controllers)
     ensure amount > 0.0 && either error (const True) (requireFullLock target.specification)
-    key (UnlockProposalKey with target; amount) : UnlockProposalKey
-    maintainer key.target.dso
 
 fetchAndMergeGovernanceLocks'
   :  Optional (Decimal, [ContractId Holding], Time)
@@ -428,26 +421,6 @@ fetchAndMergeGovernanceLocks key context state reason = do
   result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
   pure result
 
-fetchAndMergeUnlockProposals : UnlockProposalKey -> Update (Optional (ContractId UnlockProposal, UnlockProposal))
-fetchAndMergeUnlockProposals key = do
-  proposals <- lookupNByKey @UnlockProposal 20 key
-  case proposals of
-    [] -> pure None
-    [proposal] -> pure $ Some proposal
-    (firstProposalCid, firstProposal) :: otherProposals -> do
-      potentiallyUnsafeArchive firstProposalCid
-      (approvals, expiresAt) <- foldrA
-        (\(proposalCid, proposal) (accApprovals, accExpiresAt) -> do
-          -- Fetched above via `lookupNByKey`
-          potentiallyUnsafeArchive proposalCid
-          pure (Map.unionWith max accApprovals proposal.approvals, max accExpiresAt proposal.expiresAt))
-        (firstProposal.approvals, firstProposal.expiresAt)
-        otherProposals
-
-      let newProposal = firstProposal with approvals; expiresAt
-      newProposalCid <- create newProposal
-      pure $ Some (newProposalCid, newProposal)
-
 data GovernanceLockProposeUnlockArgs = GovernanceLockProposeUnlockArgs with
   lockCid : ContractId GovernanceLock
   lock : GovernanceLock
@@ -479,27 +452,14 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
 
     if hasRequiredActors
       then governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with ..
-      else do
-        optProposal <- fetchAndMergeUnlockProposals UnlockProposalKey with target; amount = unlockAmount
-        case optProposal of
-          None -> do
-            pendingProposal <- create UnlockProposal with
-              target
-              amount = unlockAmount
-              unlockControllers
-              approvals = Map.fromList $ fmap (, ()) actors
-              vestingStartTime
-              reason
-              expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
-            pure $ GovernanceLock_UnlockResult_Pending with pendingProposal
-          Some (proposalCid, proposal) -> do
-            potentiallyUnsafeArchive proposalCid -- safe as we did a checked fetch in `fetchAndMergeUnlockProposals`
-            unlockProposal_approve UnlockProposalApproveArgs with
-              proposal
-              actors
-              context
-              state
-              reason
+      else GovernanceLock_UnlockResult_Pending <$> create UnlockProposal with
+        target
+        amount = unlockAmount
+        unlockControllers
+        approvals = Map.fromList $ fmap (, ()) actors
+        vestingStartTime
+        reason
+        expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
 
 data UnlockProposalApproveArgs = UnlockProposalApproveArgs with
   proposal : UnlockProposal
