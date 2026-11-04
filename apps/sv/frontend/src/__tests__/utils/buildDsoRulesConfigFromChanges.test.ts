@@ -195,19 +195,22 @@ describe('buildDsoRulesConfigFromChanges governance lock management config', () 
     );
   });
 
-  it('uses false and nulls when the fields are absent', () => {
-    expect(buildDsoRulesConfigFromChanges([]).governanceLockManagementConfig).toEqual({
-      featuredAppUnderlockEnforcementEnabled: false,
-      featuredAppBasicLockThreshold: null,
-      featuredAppAssetMovingLockThreshold: null,
-      featuredAppAssetLockThreshold: null,
-      featuredAppUnderlockGracePeriod: null,
-    });
+  it('uses null when the fields are absent or empty`', () => {
+    expect(buildDsoRulesConfigFromChanges([]).governanceLockManagementConfig).toEqual(null);
+    expect(
+      buildDsoRulesConfigFromChanges([
+        change('governanceLockManagementFeaturedAppUnderlockEnforcementEnabled', ''),
+        change('governanceLockManagementConfigFeaturedAppBasicLockThreshold', ''),
+        change('governanceLockManagementConfigFeaturedAppAssetMovingLockThreshold', ''),
+        change('governanceLockManagementConfigFeaturedAppAssetLockThreshold', ''),
+        change('governanceLockManagementConfigFeaturedAppUnderlockGracePeriod', ''),
+      ]).governanceLockManagementConfig
+    ).toEqual(null);
   });
 
-  it('serializes empty values correctly', () => {
+  it('serializes empty values as null', () => {
     const result = buildDsoRulesConfigFromChanges([
-      change('governanceLockManagementFeaturedAppUnderlockEnforcementEnabled', ''),
+      change('governanceLockManagementFeaturedAppUnderlockEnforcementEnabled', 'true'),
       change('governanceLockManagementConfigFeaturedAppBasicLockThreshold', ''),
       change('governanceLockManagementConfigFeaturedAppAssetMovingLockThreshold', ''),
       change('governanceLockManagementConfigFeaturedAppAssetLockThreshold', ''),
@@ -215,7 +218,7 @@ describe('buildDsoRulesConfigFromChanges governance lock management config', () 
     ]);
 
     expect(result.governanceLockManagementConfig).toEqual({
-      featuredAppUnderlockEnforcementEnabled: false,
+      featuredAppUnderlockEnforcementEnabled: true,
       featuredAppBasicLockThreshold: null,
       featuredAppAssetMovingLockThreshold: null,
       featuredAppAssetLockThreshold: null,

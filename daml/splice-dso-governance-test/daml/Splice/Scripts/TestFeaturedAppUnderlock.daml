@@ -21,7 +21,7 @@ import Splice.Scripts.Util
 
 defaultGovernanceLockManagementConfig : GovernanceLockManagementConfig
 defaultGovernanceLockManagementConfig = GovernanceLockManagementConfig with
-  featuredAppUnderlockEnforcementEnabled = True
+  featuredAppUnderlockEnforcementEnabled = None
   featuredAppBasicLockThreshold = None
   featuredAppAssetMovingLockThreshold = None
   featuredAppAssetLockThreshold = None
@@ -101,7 +101,7 @@ setupUnderlockEnforcePermanent enable = do
       dsoAction = SRARC_SetConfig DsoRules_SetConfig with
         newConfig = dsoRules.config with
           governanceLockManagementConfig = Some defaultGovernanceLockManagementConfig with
-            featuredAppUnderlockEnforcementEnabled = True
+            featuredAppUnderlockEnforcementEnabled = Some True
         baseConfig = Some dsoRules.config
 
   Some rightCid <- getFeaturedAppRight app provider

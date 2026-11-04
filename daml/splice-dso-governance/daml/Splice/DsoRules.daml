@@ -1228,7 +1228,7 @@ template DsoRules with
         now <- getTime
 
         -- We don't check whether FA underlock enforcement is enabled here because it is checked in both
-        -- the permanent enforcement below and in the automation that updates underlock status
+        -- the permanent enforcement below and in the automation that creates the instruction
         let grace = governanceLockFeaturedAppUnderlockGracePeriod config.governanceLockManagementConfig
             newDeadline = now `addRelTime` grace
             newUnderlockPermanentAt

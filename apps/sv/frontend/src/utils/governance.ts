@@ -446,3 +446,7 @@ export function buildAmuletRulesPendingConfigFields(
 export function wrapMicroseconds(microseconds: string | null): { microseconds: string } | null {
   return microseconds !== null && microseconds !== '' ? { microseconds } : null;
 }
+
+export function nullIfAllNull<A extends Record<string, unknown>>(a: A): A | null {
+  return Object.values(a).some(v => v !== null) ? a : null;
+}
