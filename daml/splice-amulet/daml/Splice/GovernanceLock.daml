@@ -1025,15 +1025,26 @@ encodeCommonLockMetadataEntries kind state =
      , (lockStatusMetaKey, lockStateToText state)
      ]
 
+encodeControllersSpecificationMetadataEntries : Text -> Optional ControllersSpecification -> [(Text, Text)]
+encodeControllersSpecificationMetadataEntries _ None = []
+encodeControllersSpecificationMetadataEntries key (Some ControllersSpecification{controllers}) =
+  [(key, Text.intercalate ";" (fmap (Text.intercalate "," . fmap partyToText) controllers))]
+
 -- | The metadata entries of a lock specification, in the order of the CIP.
 encodeGovernanceLockSpecMetadataEntries : GovernanceLockSpecification -> [(Text, Text)]
-encodeGovernanceLockSpecMetadataEntries (GLS_FullLock spec) = encodeCommonLockMetadataEntries spec.kind LS_Locked
-encodeGovernanceLockSpecMetadataEntries (GLS_VestingLock VestingLockSpecification{..}) =
+encodeGovernanceLockSpecMetadataEntries (GLS_FullLock (FullLockSpecification kind unlockControllers substitutionControllers vestingControllers)) =
+  encodeCommonLockMetadataEntries kind LS_Locked <>
+    foldMap (uncurry encodeControllersSpecificationMetadataEntries)
+      [ (unlockControllersMetaKey, unlockControllers)
+      , (substitutionControllersMetaKey, substitutionControllers)
+      , (vestingControllersMetaKey, vestingControllers)
+      ]
+encodeGovernanceLockSpecMetadataEntries (GLS_VestingLock (VestingLockSpecification kind vestingPeriod endTime vestingControllers)) =
   encodeCommonLockMetadataEntries kind LS_Vesting <>
     [ (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
     , (lockVestingEndTimeMetaKey, encodeTime endTime)
     , (lockVestingInfoMetaKey, "\"vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime <> "\"")
-    ]
+    ] <> encodeControllersSpecificationMetadataEntries vestingControllersMetaKey vestingControllers
 
 encodeGovernanceLockMetadata : GovernanceLock -> Metadata
 encodeGovernanceLockMetadata GovernanceLock{specification} =
