@@ -203,6 +203,7 @@ governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{tran
         specification = GLS_FullLock specification
       reason = reasonFromMeta transfer.meta
   FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks key context state reason
+  potentiallyUnsafeArchive lockCid
   result <- governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs with
     lockCid
     lock
