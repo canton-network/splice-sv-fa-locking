@@ -508,7 +508,6 @@ governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs{..}
             (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (unlockAmount, endTime) context reason
             pure (Some vestingLockedAmulet, optStillLocked, None)
 
-        potentiallyUnsafeArchive lockCid
         governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
           lock with
             lockedAmulet
