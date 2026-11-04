@@ -348,6 +348,7 @@ object SpliceUtil {
     Optional.empty(), // voteCooldownTime
     Optional.empty(), // nextScheduledLogicalSynchronizerUpgrade
     Optional.empty(), // svOperationsSwitchOverTimes
+    Optional.empty(), // governanceLockManagementConfig
   )
 
   def defaultAmuletConfig(

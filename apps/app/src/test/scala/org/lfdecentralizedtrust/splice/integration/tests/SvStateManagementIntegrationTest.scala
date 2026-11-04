@@ -384,32 +384,35 @@ class SvStateManagementIntegrationTest extends SvIntegrationTestBase with Trigge
 
     val (_, (voteRequestCid, initialNumUnclaimedRewardsThreshold)) = actAndCheck(
       "SV1 create a vote request for a new DsoRules Configuration", {
+        val dsoInfo = sv1Backend.getDsoInfo()
+        val dsoRulesConf = dsoInfo.dsoRules.payload.config
         val newConfig = new DsoRulesConfig(
           newNumUnclaimedRewardsThreshold,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.numMemberTrafficContractsThreshold,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.actionConfirmationTimeout,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.svOnboardingRequestTimeout,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.svOnboardingConfirmedTimeout,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.voteRequestTimeout,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.dsoDelegateInactiveTimeout,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.synchronizerNodeConfigLimits,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.maxTextLength,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.decentralizedSynchronizer,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.nextScheduledSynchronizerUpgrade,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.voteCooldownTime,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.nextScheduledLogicalSynchronizerUpgrade,
-          sv1Backend.getDsoInfo().dsoRules.payload.config.svOperationsSwitchOverTimes,
+          dsoRulesConf.numMemberTrafficContractsThreshold,
+          dsoRulesConf.actionConfirmationTimeout,
+          dsoRulesConf.svOnboardingRequestTimeout,
+          dsoRulesConf.svOnboardingConfirmedTimeout,
+          dsoRulesConf.voteRequestTimeout,
+          dsoRulesConf.dsoDelegateInactiveTimeout,
+          dsoRulesConf.synchronizerNodeConfigLimits,
+          dsoRulesConf.maxTextLength,
+          dsoRulesConf.decentralizedSynchronizer,
+          dsoRulesConf.nextScheduledSynchronizerUpgrade,
+          dsoRulesConf.voteCooldownTime,
+          dsoRulesConf.nextScheduledLogicalSynchronizerUpgrade,
+          dsoRulesConf.svOperationsSwitchOverTimes,
+          dsoRulesConf.governanceLockManagementConfig,
         )
 
         val action: ActionRequiringConfirmation =
           new ARC_DsoRules(new SRARC_SetConfig(new DsoRules_SetConfig(newConfig, Optional.empty())))
 
         sv1Backend.createVoteRequest(
-          sv1Backend.getDsoInfo().svParty.toProtoPrimitive,
+          dsoInfo.svParty.toProtoPrimitive,
           action,
           "url",
           "description",
-          sv1Backend.getDsoInfo().dsoRules.payload.config.voteRequestTimeout,
+          dsoRulesConf.voteRequestTimeout,
           None,
         )
       },

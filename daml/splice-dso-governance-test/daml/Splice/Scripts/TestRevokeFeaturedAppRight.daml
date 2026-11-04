@@ -1,0 +1,103 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.Scripts.TestRevokeFeaturedAppRight where
+
+import DA.Assert
+import DA.Time
+import Daml.Script
+
+import Splice.DSO.Instruction
+import Splice.DsoRules
+
+import Splice.Scripts.DsoTestUtils
+import Splice.Scripts.TestGovernance (grantFeaturedAppRight)
+import Splice.Scripts.Util
+
+createRevokeInstruction : AmuletApp -> Party -> Script (ContractId RevokeFeaturedAppRightInstruction, RevokeFeaturedAppRightInstruction)
+createRevokeInstruction app provider = do
+  confirmAndExecutionAction app $ ARC_DsoRules with
+    dsoAction = SRARC_CreateRevokeFeaturedAppRightInstruction DsoRules_CreateRevokeFeaturedAppRightInstruction with
+      provider
+  [instruction] <- queryFilter @RevokeFeaturedAppRightInstruction app.dso (\i -> i.provider == provider)
+  pure instruction
+
+testRevokeFeaturedAppRight : Script ()
+testRevokeFeaturedAppRight = do
+  (app, dso, (sv1, _, _, _)) <- initMainNet
+  provider <- allocateParty "provider"
+  otherProvider <- allocateParty "otherProvider"
+  (rightCid, _) <- grantFeaturedAppRight app provider
+  (otherRightCid, _) <- grantFeaturedAppRight app otherProvider
+
+  (instructionCid, _) <- createRevokeInstruction app provider
+
+  -- only SVs can execute it
+  [(dsoRulesCid, _)] <- query @DsoRules dso
+  submitMustFail (actAs dso) $
+    exerciseCmd dsoRulesCid DsoRules_ExecuteRevokeFeaturedAppRightInstruction with
+      instructionCid; rightCid; sv = dso
+
+  _ <- svSubmits app sv1 $ \dsoRulesCid ->
+    exerciseCmd dsoRulesCid DsoRules_ExecuteRevokeFeaturedAppRightInstruction with
+      instructionCid; rightCid; sv = sv1
+
+  -- the right and the instruction are gone
+  None <- getFeaturedAppRight app provider
+  [] <- queryFilter @RevokeFeaturedAppRightInstruction dso (\i -> i.provider == provider)
+
+  -- the other provider's right is untouched
+  Some otherRightCid' <- getFeaturedAppRight app otherProvider
+  otherRightCid' === otherRightCid
+
+testRevokeFeaturedAppRightWrongProviderFails : Script ()
+testRevokeFeaturedAppRightWrongProviderFails = do
+  (app, dso, (sv1, _, _, _)) <- initMainNet
+  alice <- allocateParty "alice"
+  bob <- allocateParty "bob"
+  _ <- grantFeaturedAppRight app alice
+  (bobRightCid, _) <- grantFeaturedAppRight app bob
+
+  (instructionCid, _) <- createRevokeInstruction app alice
+
+  [(dsoRulesCid, _)] <- query @DsoRules dso
+  submitMustFail (actAs sv1 <> readAs dso) $
+    exerciseCmd dsoRulesCid DsoRules_ExecuteRevokeFeaturedAppRightInstruction with
+      instructionCid; rightCid = bobRightCid; sv = sv1
+
+  -- both rights survive
+  Some _ <- getFeaturedAppRight app alice
+  Some _ <- getFeaturedAppRight app bob
+  pure ()
+
+testRevokeFeaturedAppRightInstructionExpiry : Script ()
+testRevokeFeaturedAppRightInstructionExpiry = do
+  (app, dso, (sv1, sv2, _, _)) <- initMainNet
+  provider <- allocateParty "provider"
+  (rightCid, _) <- grantFeaturedAppRight app provider
+  [(dsoRulesCid, dsoRules)] <- query @DsoRules dso
+
+  now <- getTime
+  (instructionCid, instruction) <- createRevokeInstruction app provider
+  instruction.expiresAt === now `addRelTime` dsoRules.config.voteRequestTimeout
+
+  -- cannot be expired before expiresAt
+  submitMustFail (actAs sv1 <> readAs dso) $
+    exerciseCmd dsoRulesCid DsoRules_ExpireRevokeFeaturedAppRightInstruction with
+      instructionCid; sv = sv1
+
+  passTime dsoRules.config.voteRequestTimeout
+
+  -- only SVs can expire it
+  submitMustFail (actAs dso) $
+    exerciseCmd dsoRulesCid DsoRules_ExpireRevokeFeaturedAppRightInstruction with
+      instructionCid; sv = dso
+  _ <- svSubmits app sv2 $ \dsoRulesCid ->
+    exerciseCmd dsoRulesCid DsoRules_ExpireRevokeFeaturedAppRightInstruction with
+      instructionCid; sv = sv2
+
+  [] <- queryFilter @RevokeFeaturedAppRightInstruction dso (\i -> i.provider == provider)
+
+  -- the right is untouched
+  Some rightCid' <- getFeaturedAppRight app provider
+  rightCid' === rightCid

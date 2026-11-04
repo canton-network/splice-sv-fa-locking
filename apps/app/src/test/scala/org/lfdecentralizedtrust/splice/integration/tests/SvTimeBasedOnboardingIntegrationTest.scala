@@ -186,31 +186,24 @@ class SvTimeBasedOnboardingIntegrationTest
       clue("archive expired `VoteRequest` contracts") {
         actAndCheck(
           "sv1 creates a new vote request", {
+            val dsoInfo = sv1Backend.getDsoInfo()
+            val dsoRulesConf = dsoInfo.dsoRules.payload.config
             val newConfig = new DsoRulesConfig(
-              sv1Backend.getDsoInfo().dsoRules.payload.config.numUnclaimedRewardsThreshold,
-              sv1Backend.getDsoInfo().dsoRules.payload.config.numMemberTrafficContractsThreshold,
-              sv1Backend.getDsoInfo().dsoRules.payload.config.actionConfirmationTimeout,
-              sv1Backend.getDsoInfo().dsoRules.payload.config.svOnboardingRequestTimeout,
-              sv1Backend.getDsoInfo().dsoRules.payload.config.svOnboardingConfirmedTimeout,
-              sv1Backend.getDsoInfo().dsoRules.payload.config.voteRequestTimeout,
-              sv1Backend.getDsoInfo().dsoRules.payload.config.dsoDelegateInactiveTimeout,
-              sv1Backend.getDsoInfo().dsoRules.payload.config.synchronizerNodeConfigLimits,
-              sv1Backend.getDsoInfo().dsoRules.payload.config.maxTextLength,
-              sv1Backend.getDsoInfo().dsoRules.payload.config.decentralizedSynchronizer,
-              sv1Backend.getDsoInfo().dsoRules.payload.config.nextScheduledSynchronizerUpgrade,
-              sv1Backend.getDsoInfo().dsoRules.payload.config.voteCooldownTime,
-              sv1Backend
-                .getDsoInfo()
-                .dsoRules
-                .payload
-                .config
-                .nextScheduledLogicalSynchronizerUpgrade,
-              sv1Backend
-                .getDsoInfo()
-                .dsoRules
-                .payload
-                .config
-                .svOperationsSwitchOverTimes,
+              dsoRulesConf.numUnclaimedRewardsThreshold,
+              dsoRulesConf.numMemberTrafficContractsThreshold,
+              dsoRulesConf.actionConfirmationTimeout,
+              dsoRulesConf.svOnboardingRequestTimeout,
+              dsoRulesConf.svOnboardingConfirmedTimeout,
+              dsoRulesConf.voteRequestTimeout,
+              dsoRulesConf.dsoDelegateInactiveTimeout,
+              dsoRulesConf.synchronizerNodeConfigLimits,
+              dsoRulesConf.maxTextLength,
+              dsoRulesConf.decentralizedSynchronizer,
+              dsoRulesConf.nextScheduledSynchronizerUpgrade,
+              dsoRulesConf.voteCooldownTime,
+              dsoRulesConf.nextScheduledLogicalSynchronizerUpgrade,
+              dsoRulesConf.svOperationsSwitchOverTimes,
+              dsoRulesConf.governanceLockManagementConfig,
             )
 
             val action: ActionRequiringConfirmation =
@@ -219,11 +212,11 @@ class SvTimeBasedOnboardingIntegrationTest
               )
 
             sv1Backend.createVoteRequest(
-              sv1Backend.getDsoInfo().svParty.toProtoPrimitive,
+              dsoInfo.svParty.toProtoPrimitive,
               action,
               "url",
               "description",
-              sv1Backend.getDsoInfo().dsoRules.payload.config.voteRequestTimeout,
+              dsoRulesConf.voteRequestTimeout,
               None,
             )
           },

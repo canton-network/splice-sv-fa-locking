@@ -1,0 +1,31 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Code for managing governance locks, e.g., automatic underlocking enforcement.
+module Splice.DSO.GovernanceLockManagement where
+
+import DA.Optional (fromOptional)
+import DA.Time
+
+data GovernanceLockManagementConfig = GovernanceLockManagementConfig with
+    featuredAppUnderlockEnforcementEnabled : Optional Bool
+      -- ^ Whether to enforce featured app underlocking. Default: false.
+    featuredAppBasicLockThreshold : Optional Decimal
+      -- ^ Amount of amulet a basic featured app must keep locked to retain its right. Default: 5M.
+    featuredAppAssetMovingLockThreshold : Optional Decimal
+      -- ^ Amount of amulet a featured asset mover must keep locked to retain its right. Default: 5M.
+    featuredAppAssetLockThreshold : Optional Decimal
+      -- ^ Amount of amulet a featured asset must keep locked to retain its right. Default: 25M.
+    featuredAppUnderlockGracePeriod : Optional RelTime
+      -- ^ How long an underlocked provider has to cure before its right becomes archivable.
+      --   Default: 7 days.
+  deriving (Eq, Show, Serializable)
+
+getGovernanceLockManagementConfigValue : a -> (GovernanceLockManagementConfig -> Optional a) -> Optional GovernanceLockManagementConfig -> a
+getGovernanceLockManagementConfigValue defaultValue getValue config = fromOptional defaultValue $ config >>= getValue
+
+governanceLockFeaturedAppUnderlockEnforcementEnabled : Optional GovernanceLockManagementConfig -> Bool
+governanceLockFeaturedAppUnderlockEnforcementEnabled = getGovernanceLockManagementConfigValue False (.featuredAppUnderlockEnforcementEnabled)
+
+governanceLockFeaturedAppUnderlockGracePeriod : Optional GovernanceLockManagementConfig -> RelTime
+governanceLockFeaturedAppUnderlockGracePeriod = getGovernanceLockManagementConfigValue (days 7) (.featuredAppUnderlockGracePeriod)

@@ -1747,6 +1747,7 @@ trait AmuletTransferUtil { self: StoreTestBase =>
         Optional.empty(), // voteCooldownTime
         Optional.empty(), // nextScheduledLogicalSynchronizerUpgrade
         Optional.empty(), // svOperationsSwitchOverTimes
+        Optional.empty(), // governanceLockManagementConfig
       ),
       Collections.emptyMap(),
       true,

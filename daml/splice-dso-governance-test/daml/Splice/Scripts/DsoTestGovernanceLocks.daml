@@ -132,6 +132,7 @@ setupGovernanceLock kind = do
     activityWeight = None
     appKind = None
     opsParties = None
+    underlockPermanentAt = None
 
   pure GovernanceLockEnv with ..
 
@@ -329,6 +330,7 @@ testDsoRulesConvertProvisionalFeaturedAppLockWrongFeaturedAppRight = do
     activityWeight = None
     appKind = None
     opsParties = None
+    underlockPermanentAt = None
 
   submitMustFail (actAs env.sv1 <> readAs env.app.dso) $
     exerciseCmd env.dsoRulesCid DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock with
@@ -354,6 +356,7 @@ testDsoRulesConvertProvisionalFeaturedAppLockRejectsForeignDso = do
     activityWeight = None
     appKind = None
     opsParties = None
+    underlockPermanentAt = None
 
   actionMustFail (expectMessageContains "Contract group identifier mismatch") do
     r <- trySubmit (actAs env.sv1 <> readAs env.app.dso) $

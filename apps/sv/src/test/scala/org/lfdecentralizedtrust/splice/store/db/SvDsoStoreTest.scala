@@ -2481,6 +2481,7 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
         Optional.empty(), // voteCooldownTime`
         Optional.empty(), // nextScheduledLogicalSynchronizerUpgrade`
         Optional.empty(), // svOperationsSwitchOverTimes
+        Optional.empty(), // governanceLockManagementConfig
       ),
       Collections.emptyMap(),
       true,
