@@ -257,6 +257,9 @@ object SvUtil {
       acsCommitmentReconciliationInterval: PositiveDurationSeconds,
       switchOverTimes: Option[Map[String, CantonTimestamp]],
       packageConfig: SvOnboardingConfig.InitialPackageConfig,
+      governanceLockManagementConfig: Option[
+        dso.governancelockmanagement.GovernanceLockManagementConfig
+      ],
   ): DsoRulesConfig = {
     // This runs too early to do a proper topology version check so just check the config here.
     val supportsSwitchoverTimes = PackageVersion.assertFromString(
@@ -284,6 +287,7 @@ object SvUtil {
         .map(_.view.mapValues(_.toInstant).toMap.asJava)
         .filter(_ => supportsSwitchoverTimes)
         .toJava,
+      governanceLockManagementConfig.toJava,
     )
   }
 

@@ -158,6 +158,7 @@ class FeaturedAppRightSwitchOverTimeBasedIntegrationTest
       Optional.of(
         Map(SwitchOverTimes.NoFeaturedAppChoiceContext -> switchOverTime.toInstant).asJava
       ),
+      config.governanceLockManagementConfig,
     )
     sv1Backend.createVoteRequest(
       sv1Backend.getDsoInfo().svParty.toProtoPrimitive,

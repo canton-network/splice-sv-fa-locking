@@ -658,6 +658,7 @@ class SV1Initializer(
         sv1Config.acsCommitmentReconciliationInterval,
         sv1Config.initialSvOperationsSwitchOverTimes,
         sv1Config.initialPackageConfig,
+        sv1Config.initialGovernanceLockManagementConfig.map(_.toGovernanceLockManagementConfig),
       )
       for {
         (participantId, trafficStateForAllMembers, amuletRules, dsoRules) <- (

@@ -38,6 +38,7 @@ import Splice.Ans
 import Splice.SvOnboarding
 import Splice.DSO.AmuletPrice
 import Splice.DSO.DecentralizedSynchronizer
+import Splice.DSO.GovernanceLockManagement
 import Splice.DSO.Instruction
 import Splice.DSO.SvState
 import Splice.Schedule
@@ -128,6 +129,9 @@ data DsoRules_ActionRequiringConfirmation
     -- ^ Update a specific featured app right.
   | SRARC_CreateFeaturedAppConfigUpdateInstruction DsoRules_CreateFeaturedAppConfigUpdateInstruction
     -- ^ Voted action to change to a featured app right's config.
+  | SRARC_CreateFeaturedAppUnderlockInstruction DsoRules_CreateFeaturedAppUnderlockInstruction
+    -- ^ Record that a featured app provider has been observed underlocked.
+  | SRARC_CreateRevokeFeaturedAppRightInstruction DsoRules_CreateRevokeFeaturedAppRightInstruction
   deriving (Eq, Show, Serializable)
 
 data AnsEntryContext_ActionRequiringConfirmation
@@ -251,6 +255,29 @@ data DsoRules_ExecuteFeaturedAppConfigUpdateInstructionResult = DsoRules_Execute
   deriving (Serializable)
 
 data DsoRules_ExpireFeaturedAppConfigUpdateInstructionResult = DsoRules_ExpireFeaturedAppConfigUpdateInstructionResult
+  deriving (Serializable)
+
+data DsoRules_CreateFeaturedAppUnderlockInstructionResult = DsoRules_CreateFeaturedAppUnderlockInstructionResult with
+    instructionCid : ContractId FeaturedAppUnderlockInstruction
+  deriving (Serializable)
+
+data DsoRules_ExecuteFeaturedAppUnderlockInstructionResult = DsoRules_ExecuteFeaturedAppUnderlockInstructionResult {}
+  deriving (Serializable)
+
+data DsoRules_EnforceFeaturedAppPermanentUnderlockResult = DsoRules_EnforceFeaturedAppPermanentUnderlockResult {}
+  deriving (Serializable)
+
+data DsoRules_ExpireFeaturedAppUnderlockInstructionResult = DsoRules_ExpireFeaturedAppUnderlockInstructionResult {}
+  deriving (Serializable)
+
+data DsoRules_CreateRevokeFeaturedAppRightInstructionResult = DsoRules_CreateRevokeFeaturedAppRightInstructionResult with
+    instructionCid : ContractId RevokeFeaturedAppRightInstruction
+  deriving (Serializable)
+
+data DsoRules_ExecuteRevokeFeaturedAppRightInstructionResult = DsoRules_ExecuteRevokeFeaturedAppRightInstructionResult {}
+  deriving (Serializable)
+
+data DsoRules_ExpireRevokeFeaturedAppRightInstructionResult = DsoRules_ExpireRevokeFeaturedAppRightInstructionResult {}
   deriving (Serializable)
 
 data DsoRules_OnboardValidatorResult = DsoRules_OnboardValidatorResult with
@@ -574,6 +601,7 @@ data DsoRulesConfig = DsoRulesConfig with
     voteCooldownTime : Optional RelTime -- ^ The minimum time between two votes by the same SV.
     nextScheduledLogicalSynchronizerUpgrade: Optional LogicalSynchronizerUpgradeSchedule
     svOperationsSwitchOverTimes : Optional (TextMap Time) -- ^ Timepoints for synchronized switch-overs of amulet functionality both on and off-ledger.
+    governanceLockManagementConfig : Optional GovernanceLockManagementConfig
   deriving (Eq, Show, Serializable)
 
 -- | Read the `voteCooldownTime` from the `DsoRulesConfig` with a default value of 1 minute.
@@ -1113,6 +1141,7 @@ template DsoRules with
           activityWeight
           appKind
           opsParties
+          underlockPermanentAt = None
         return DsoRules_GrantFeaturedAppRightResult with ..
 
     nonconsuming choice DsoRules_RevokeFeaturedAppRight : DsoRules_RevokeFeaturedAppRightResult
@@ -1175,6 +1204,101 @@ template DsoRules with
         void $ exercise instructionCid FeaturedAppConfigUpdateInstruction_Expire
         pure DsoRules_ExpireFeaturedAppConfigUpdateInstructionResult
 
+    nonconsuming choice DsoRules_CreateFeaturedAppUnderlockInstruction : DsoRules_CreateFeaturedAppUnderlockInstructionResult
+      with
+        provider : Party
+        underlocked : Bool
+      controller dso
+      do
+        now <- getTime
+        let expiresAt = now `addRelTime` config.voteRequestTimeout
+        instructionCid <- create FeaturedAppUnderlockInstruction with dso; provider; underlocked; expiresAt
+        pure DsoRules_CreateFeaturedAppUnderlockInstructionResult with instructionCid
+
+    nonconsuming choice DsoRules_ExecuteFeaturedAppUnderlockInstruction : DsoRules_ExecuteFeaturedAppUnderlockInstructionResult
+      with
+        instructionCid : ContractId FeaturedAppUnderlockInstruction
+        rightCid : ContractId FeaturedAppRight
+        sv : Party
+      controller sv
+      do
+        void $ getAndValidateSvParty this (Some sv)
+        instruction <- fetchAndArchive (ForDso dso) instructionCid
+        right <- fetchButArchiveLater (ForOwner with dso; owner = instruction.provider) rightCid
+        now <- getTime
+
+        -- We don't check whether FA underlock enforcement is enabled here because it is checked in both
+        -- the permanent enforcement below and in the automation that creates the instruction
+        let grace = governanceLockFeaturedAppUnderlockGracePeriod config.governanceLockManagementConfig
+            newDeadline = now `addRelTime` grace
+            newUnderlockPermanentAt
+              | instruction.underlocked =
+                  Some $ optional newDeadline (min newDeadline) right.underlockPermanentAt
+              | otherwise = None
+
+        unless (right.underlockPermanentAt == newUnderlockPermanentAt) do
+          potentiallyUnsafeArchive rightCid -- safe as we did a checked fetch earlier
+          create right with underlockPermanentAt = newUnderlockPermanentAt
+          pure ()
+
+        pure DsoRules_ExecuteFeaturedAppUnderlockInstructionResult
+
+    nonconsuming choice DsoRules_EnforceFeaturedAppPermanentUnderlock : DsoRules_EnforceFeaturedAppPermanentUnderlockResult
+      with
+        rightCid : ContractId FeaturedAppRight
+        sv : Party
+      controller sv
+      do
+        void $ getAndValidateSvParty this (Some sv)
+        void $ fetchChecked (ForDso with dso) rightCid
+        require "featured app underlock enforcement is enabled" $
+          governanceLockFeaturedAppUnderlockEnforcementEnabled config.governanceLockManagementConfig
+        void $ exercise rightCid FeaturedAppRight_EnforcePermanentUnderlock
+        pure DsoRules_EnforceFeaturedAppPermanentUnderlockResult
+
+    nonconsuming choice DsoRules_ExpireFeaturedAppUnderlockInstruction : DsoRules_ExpireFeaturedAppUnderlockInstructionResult
+      with
+        instructionCid : ContractId FeaturedAppUnderlockInstruction
+        sv : Party
+      controller sv
+      do
+        void $ getAndValidateSvParty this (Some sv)
+        void $ fetchChecked (ForDso dso) instructionCid
+        void $ exercise instructionCid FeaturedAppUnderlockInstruction_Expire
+        pure DsoRules_ExpireFeaturedAppUnderlockInstructionResult
+
+    nonconsuming choice DsoRules_CreateRevokeFeaturedAppRightInstruction : DsoRules_CreateRevokeFeaturedAppRightInstructionResult
+      with
+        provider : Party
+      controller dso
+      do
+        now <- getTime
+        let expiresAt = now `addRelTime` config.voteRequestTimeout
+        instructionCid <- create RevokeFeaturedAppRightInstruction with dso; provider; expiresAt
+        pure DsoRules_CreateRevokeFeaturedAppRightInstructionResult with instructionCid
+
+    nonconsuming choice DsoRules_ExecuteRevokeFeaturedAppRightInstruction : DsoRules_ExecuteRevokeFeaturedAppRightInstructionResult
+      with
+        instructionCid : ContractId RevokeFeaturedAppRightInstruction
+        rightCid : ContractId FeaturedAppRight
+        sv : Party
+      controller sv
+      do
+        void $ getAndValidateSvParty this (Some sv)
+        instruction <- fetchAndArchive (ForDso dso) instructionCid
+        void $ fetchAndArchive (ForOwner with dso; owner = instruction.provider) rightCid
+        pure DsoRules_ExecuteRevokeFeaturedAppRightInstructionResult
+
+    nonconsuming choice DsoRules_ExpireRevokeFeaturedAppRightInstruction : DsoRules_ExpireRevokeFeaturedAppRightInstructionResult
+      with
+        instructionCid : ContractId RevokeFeaturedAppRightInstruction
+        sv : Party
+      controller sv
+      do
+        void $ getAndValidateSvParty this (Some sv)
+        void $ fetchChecked (ForDso dso) instructionCid
+        void $ exercise instructionCid RevokeFeaturedAppRightInstruction_Expire
+        pure DsoRules_ExpireRevokeFeaturedAppRightInstructionResult
 
     -- Validator onboarding
     -----------------------
@@ -2026,6 +2150,8 @@ executeActionRequiringConfirmation dso dsoRulesCid amuletRulesCid act = case act
       SRARC_CreateUnallocatedUnclaimedActivityRecord choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_CreateBootstrapExternalPartyConfigStateInstruction choiceArg -> void $ exercise dsoRulesCid choiceArg
       SRARC_CreateFeaturedAppConfigUpdateInstruction choiceArg -> void $ exercise dsoRulesCid choiceArg
+      SRARC_CreateFeaturedAppUnderlockInstruction choiceArg -> void $ exercise dsoRulesCid choiceArg
+      SRARC_CreateRevokeFeaturedAppRightInstruction choiceArg -> void $ exercise dsoRulesCid choiceArg
   ARC_AnsEntryContext with .. -> do
     void $ fetchChecked (ForDso with dso) ansEntryContextCid
     case ansEntryContextAction of
@@ -2262,6 +2388,7 @@ instance Patchable DsoRulesConfig where
     nextScheduledLogicalSynchronizerUpgrade = patch new.nextScheduledLogicalSynchronizerUpgrade base.nextScheduledLogicalSynchronizerUpgrade current.nextScheduledLogicalSynchronizerUpgrade
     voteCooldownTime = patch new.voteCooldownTime base.voteCooldownTime current.voteCooldownTime
     svOperationsSwitchOverTimes = patch new.svOperationsSwitchOverTimes base.svOperationsSwitchOverTimes current.svOperationsSwitchOverTimes
+    governanceLockManagementConfig = patch new.governanceLockManagementConfig base.governanceLockManagementConfig current.governanceLockManagementConfig
 
 instance Patchable SynchronizerUpgradeSchedule where
   patch new base current = SynchronizerUpgradeSchedule with
@@ -2277,3 +2404,11 @@ instance Patchable LogicalSynchronizerUpgradeSchedule where
         upgradeTime = patch new.upgradeTime base.upgradeTime current.upgradeTime
         newPhysicalSynchronizerSerial = patch new.newPhysicalSynchronizerSerial base.newPhysicalSynchronizerSerial current.newPhysicalSynchronizerSerial
         newPhysicalSynchronizerProtocolVersion = patch new.newPhysicalSynchronizerProtocolVersion base.newPhysicalSynchronizerProtocolVersion current.newPhysicalSynchronizerProtocolVersion
+
+instance Patchable GovernanceLockManagementConfig where
+  patch new base current = GovernanceLockManagementConfig with
+    featuredAppUnderlockEnforcementEnabled = patchScalar new.featuredAppUnderlockEnforcementEnabled base.featuredAppUnderlockEnforcementEnabled current.featuredAppUnderlockEnforcementEnabled
+    featuredAppBasicLockThreshold = patch new.featuredAppBasicLockThreshold base.featuredAppBasicLockThreshold current.featuredAppBasicLockThreshold
+    featuredAppAssetMovingLockThreshold = patch new.featuredAppAssetMovingLockThreshold base.featuredAppAssetMovingLockThreshold current.featuredAppAssetMovingLockThreshold
+    featuredAppAssetLockThreshold = patch new.featuredAppAssetLockThreshold base.featuredAppAssetLockThreshold current.featuredAppAssetLockThreshold
+    featuredAppUnderlockGracePeriod = patch new.featuredAppUnderlockGracePeriod base.featuredAppUnderlockGracePeriod current.featuredAppUnderlockGracePeriod

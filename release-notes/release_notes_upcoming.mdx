@@ -20,6 +20,10 @@
       (helm: `useTokenStandardTransfer: true`) in the sweep config. The transfer completes directly if the receiver
       has a transfer preapproval, otherwise it creates a transfer instruction that the receiver must accept.
 
+  - SV App
+
+    - Support changing the `governanceLockManagementConfig` fields in `DsoRules` config vote requests.
+
 ## Upcoming for next minor release (template):
 
 {/* If you introduce any breaking changes in the next minor release,
@@ -42,3 +46,38 @@
     - Protocol Changes:
 
     - Daml Model Changes:
+
+      - Add underlock enforcement for featured app rights, as specified in
+        [CIP-127](https://github.com/canton-foundation/cips/blob/main/cip-0127/cip-0127.md).
+        A featured app provider that does not keep enough Amulet locked loses its featured status:
+
+        - Add the optional `underlockPermanentAt` field to `FeaturedAppRight`. If it is set, the featured app right is suspended:
+          `FeaturedAppRight_CreateActivityMarker` creates no activity markers,
+          and transfers do not record the provider as a featured app provider.
+
+        - Add the `SRARC_CreateFeaturedAppUnderlockInstruction` vote action. It creates a `FeaturedAppUnderlockInstruction`
+          that records that SVs observed a provider to be underlocked, or to have recovered from an underlock.
+          SVs execute it with `DsoRules_ExecuteFeaturedAppUnderlockInstruction`, which sets
+          `underlockPermanentAt` to the end of the grace period, or clears it after a recovery.
+
+        - Add `DsoRules_EnforceFeaturedAppPermanentUnderlock`, which archives a suspended featured app right
+          after its `underlockPermanentAt` deadline passes.
+
+        - Add the `SRARC_CreateRevokeFeaturedAppRightInstruction` vote action. It creates a `RevokeFeaturedAppRightInstruction`,
+          which SVs execute with `DsoRules_ExecuteRevokeFeaturedAppRightInstruction` to archive the featured app right of a provider.
+
+            This is required to ensure that revocation votes do not refer to the featured app right by its contract-id, which risks
+            the votes becoming stale as the right may be mutated, which results in a new contract-id. The existing
+            `SRARC_RevokeFeaturedAppRight` action is susceptible to this risk, and is therefore deprecated.
+
+        - Both instruction templates expire after the vote request timeout.
+          SVs archive expired instructions with `DsoRules_ExpireFeaturedAppUnderlockInstruction`
+          and `DsoRules_ExpireRevokeFeaturedAppRightInstruction`.
+
+      - Add the optional `governanceLockManagementConfig` field to `DsoRulesConfig` with these fields:
+
+        - `featuredAppUnderlockEnforcementEnabled` (default true)
+        - `featuredAppBasicLockThreshold` (default 5M CC)
+        - `featuredAppAssetMovingLockThreshold` (default 5M CC)
+        - `featuredAppAssetLockThreshold` (default 25M CC)
+        - `featuredAppUnderlockGracePeriod` (default 7 days)
