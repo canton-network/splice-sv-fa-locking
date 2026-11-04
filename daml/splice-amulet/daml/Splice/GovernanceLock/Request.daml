@@ -47,6 +47,7 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
@@ -350,7 +351,7 @@ governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{
 -- `join ((\a b c -> pure . f $ E) <$> pa <*> pb <*> pc)` coming from
 -- `do { pa; pb; pc; pure . f $ E}` where `f` is itself pure.
 data Parser i o = Parser (i -> Validation Text o)
-type ControllerSpecificationParser = Parser Metadata (Optional ControllerSpecification)
+type ControllersSpecificationParser = Parser Metadata (Optional ControllersSpecification)
 
 runParser : Parser i o -> i -> Validation Text o
 runParser (Parser f) input = f input
@@ -452,20 +453,20 @@ governanceLockMetadataParser = do
 parseGovernanceLockMetadata : CanAssert m => Metadata -> m Metadata
 parseGovernanceLockMetadata = assertParsed governanceLockMetadataParser
 
-controllersParser : Text -> ControllerSpecificationParser
+controllersParser : Text -> ControllersSpecificationParser
 controllersParser key =
-    optionalMetadataParser key >>= mapA (fmap ControllerSpecification . partiesParser)
+    optionalMetadataParser key >>= mapA (fmap ControllersSpecification . partiesParser)
   where
     partiesParser : Text -> Parser Metadata [[Party]]
     partiesParser t = forA (Text.splitOn ";" t) \ps -> forA (Text.splitOn "," ps) (partyFromTextParser key)
 
-vestingControllersParser : ControllerSpecificationParser
+vestingControllersParser : ControllersSpecificationParser
 vestingControllersParser = controllersParser vestingControllersMetaKey
 
-substitutionControllersParser : ControllerSpecificationParser
+substitutionControllersParser : ControllersSpecificationParser
 substitutionControllersParser = controllersParser substitutionControllersMetaKey
 
-unlockControllersParser : ControllerSpecificationParser
+unlockControllersParser : ControllersSpecificationParser
 unlockControllersParser = controllersParser unlockControllersMetaKey
 
 fullLockSpecificationParser : Parser Metadata FullLockSpecification

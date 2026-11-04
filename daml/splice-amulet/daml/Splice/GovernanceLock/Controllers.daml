@@ -1,0 +1,70 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.GovernanceLock.Controllers (
+  ControllersSpecification(..),
+  validateControllersSpecification,
+  updateControllersApprovals,
+  isControllersSubset,
+) where
+
+import Prelude hiding (forA_)
+import DA.Foldable (forA_)
+import DA.Map qualified as Map
+import DA.Optional
+import DA.Set qualified as Set
+
+import Splice.Util
+
+data ControllersSpecification = ControllersSpecification with
+    -- TODO: Use `Set.Set (Set.Set Party)`?
+    controllers : [[Party]]
+      -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
+  deriving (Eq, Show, Serializable)
+
+instance Semigroup ControllersSpecification where
+  (<>) (ControllersSpecification a) (ControllersSpecification b) = ControllersSpecification $ a <> b
+
+validateControllersSpecification : CanAssert m => Text -> Optional ControllersSpecification -> m ()
+validateControllersSpecification _ None = pure ()
+validateControllersSpecification controllerType (Some ControllersSpecification{controllers}) = do
+  require (controllerType <> "Controllers must not be empty") (not $ null controllers)
+  require (controllerType <> "Controllers must not contain an empty controller set") (all (not . null) controllers)
+
+isControllersSubset : [Party] -> ControllersSpecification -> Bool
+isControllersSubset actors controllers =
+  let actorsSet = Set.fromList actors
+  in any (\cs -> (Set.fromList cs) `Set.isSubsetOf` actorsSet) controllers.controllers
+
+-- | Updates approvals to include the approval of actors and checks if the
+-- updated approvals satisfy one of the sets of controllers.
+--
+-- A set of controllers is considered satisfied when all of its parties have a
+-- value within the updated approvals for which approvalIsValid holds true.
+--
+-- If any controller set is satisfied, the superset of all satisfied controller
+-- sets, along with their approvals, is returned as an approved Right value.
+--
+-- If no controller sets are satisfied, the updated approvals map is returned as
+-- a still-pending Left value.
+updateControllersApprovals
+  :  (CanAssert m, Eq a)
+  => ControllersSpecification -- ^ The sets of controllers that can authorize the current action.
+  -> [Party] -- ^ The set of actors that have authorized the current action.
+  -> a -- ^ The approval authorized by these actors.
+  -> Map.Map Party a -- ^ The pre-existing set of pending approvals.
+  -> (a -> Bool) -- ^ Whether an approval should be considered valid.
+  -> m (Either (Map.Map Party a) [(Party, a)])
+updateControllersApprovals ControllersSpecification{controllers} actors approval approvals approvalIsValid = do
+  require "actors must not be empty" (not $ null actors)
+  forA_ actors $ \actor ->
+    require ("actor " <> partyToText actor <> " must be a controller") (any (actor `elem`) controllers)
+  -- Reject calls that change no approval; otherwise a repeated call would re-create the lock and invalidate its contract id for others
+  require "at least one actor's approval must change"
+    (any (\actor -> Map.lookup actor approvals /= Some approval) actors)
+  let updated = foldl (\m actor -> Map.insert actor approval m) approvals actors
+      approvedBy p = optional False approvalIsValid (Map.lookup p updated)
+      satisfiedControllers = ControllersSpecification $ filter (all approvedBy) controllers
+  pure $ if null satisfiedControllers.controllers
+    then Left updated
+    else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (concat satisfiedControllers.controllers)
