@@ -746,7 +746,7 @@ template UnlockProposal
           requestedAt
           executeBefore = expiresAt
           inputHoldingCids = [toInterfaceContractId lockedAmulet]
-          meta = emptyMetadata -- TODO
+          meta = unlockProposalMetadata target.specification
         status = V1.TransferPendingInternalWorkflow with
           pendingActions =
             let pendingControllers = List.dedupSort $ concat (controllersPendingApproval approvals unlockControllers).controllers
@@ -794,6 +794,9 @@ template UnlockProposal
       transferInstruction_acceptExtraObservers _ = observer this
       transferInstruction_rejectExtraObservers _ = observer this
       transferInstruction_withdrawExtraObservers _ = observer this
+
+unlockProposalMetadata : GovernanceLockSpecification -> Metadata
+unlockProposalMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-unlock-lock"
 
 data UnlockProposalApproveArgs = UnlockProposalApproveArgs with
   proposalCid : ContractId UnlockProposal
