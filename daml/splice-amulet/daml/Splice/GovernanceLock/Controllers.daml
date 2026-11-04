@@ -4,8 +4,9 @@
 module Splice.GovernanceLock.Controllers (
   ControllersSpecification(..),
   validateControllersSpecification,
-  updateControllersApprovals,
   isControllersSubset,
+  updateControllersApprovals,
+  controllersPendingApproval,
 ) where
 
 import Prelude hiding (forA_)
@@ -68,3 +69,7 @@ updateControllersApprovals ControllersSpecification{controllers} actors approval
   pure $ if null satisfiedControllers.controllers
     then Left updated
     else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (concat satisfiedControllers.controllers)
+
+controllersPendingApproval : Map.Map Party a -> ControllersSpecification -> ControllersSpecification
+controllersPendingApproval approvals controllers =
+  ControllersSpecification $ filter (not . null) $ fmap (filter (\p -> not $ Map.member p approvals)) controllers.controllers

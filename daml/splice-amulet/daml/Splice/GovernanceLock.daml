@@ -32,6 +32,7 @@ module Splice.GovernanceLock (
   FetchAndMergeLocksResult(..),
   fetchAndMergeGovernanceLocks,
   GovernanceLock_UnlockResult(..),
+  governanceLock_unlockResult_transferInstructionResult,
   GovernanceLockProposeUnlockArgs(..),
   governanceLock_proposeUnlock,
   vestingLock_withdrawImpl,
@@ -84,7 +85,7 @@ import DA.Action (foldrA, unless)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
 import DA.Functor (($>))
-import DA.List (sortOn)
+import DA.List qualified as List
 import DA.List.Total (head)
 import DA.Map qualified as Map
 import DA.Optional
@@ -266,6 +267,22 @@ data GovernanceLock_UnlockResult
       unlockedAmulet : Optional (ContractId Amulet)
   deriving (Eq, Show, Serializable)
 
+governanceLock_unlockResult_transferInstructionResult : GovernanceLock_UnlockResult -> V2.TransferInstructionResult
+governanceLock_unlockResult_transferInstructionResult result =
+  let
+    (senderChangeCids, output) = case result of
+      GovernanceLock_UnlockResult_Pending{..} ->
+        ([], V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId pendingProposal)
+      GovernanceLock_UnlockResult_Completed{..} ->
+        (
+          toInterfaceContractId <$> optionalToList unlockedAmulet,
+          case vestingLock of
+            Some v -> V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId v
+            None -> V2.TransferInstructionResult_Completed with receiverHoldingCids = []
+        )
+
+  in V2.TransferInstructionResult with output; senderChangeCids; meta = emptyMetadata
+
 data VestingLock_WithdrawResult
   = VestingLock_WithdrawResult with
       vestingLock : Optional (ContractId GovernanceLock)
@@ -322,7 +339,7 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
     defaultNumberToMerge = 20
 
     sortLocks : [(ContractId GovernanceLock, GovernanceLock)] -> [(ContractId GovernanceLock, GovernanceLock)]
-    sortLocks = sortOn $ negate . (.amount) . snd
+    sortLocks = List.sortOn $ negate . (.amount) . snd
 
     merge : Time -> [(ContractId GovernanceLock, GovernanceLock)] -> Update FetchAndMergeLocksResult
     merge requestedAt locks = do
@@ -439,12 +456,16 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
       then governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with ..
       else GovernanceLock_UnlockResult_Pending <$> create UnlockProposal with
         target
+        proposers = List.dedupSort actors
         amount = unlockAmount
+        lockedAmulet = lock.lockedAmulet
         unlockControllers
         approvals = Map.fromList $ fmap (, ()) actors
         vestingStartTime
         reason
+        requestedAt
         expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
+        originalProposalCid = None
 
 data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
   lockCid : ContractId GovernanceLock
@@ -697,27 +718,93 @@ governanceLock_dsoTransferImpl forOwner@ForOwner{..} lockCid transferredAmount r
 template UnlockProposal
   with
     target : GovernanceLockKey
+    proposers: [Party]
     amount : Decimal -- ^ Amount being unlocked.
+    lockedAmulet : ContractId LockedAmulet
     unlockControllers : ControllersSpecification
     approvals : Map.Map Party () -- ^ Approvals recorded so far.
     -- TODO: add release notes to mention departure from CIP; we're not accepting a vestingStartTime from each approver
     vestingStartTime : Time -- ^ Time at which vesting is proposed to start.
     reason : Text
+    requestedAt : Time -- ^ Time of the request to create the proposal.
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
+    originalProposalCid : Optional (ContractId UnlockProposal)
+      -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
-    signatory target.dso, Map.keys approvals
-    observer (Set.fromList $ concat unlockControllers.controllers)
-    ensure amount > 0.0 && either error (const True) (requireFullLock target.specification)
+    signatory target.dso, proposers
+    observer target.owner, (Set.fromList $ concat unlockControllers.controllers)
+    ensure amount > 0.0 && length proposers > 0 && either error (const True) (requireFullLock target.specification)
+
+    interface instance V1.TransferInstruction for UnlockProposal where
+      view = V1.TransferInstructionView with
+        originalInstructionCid = toInterfaceContractId <$> originalProposalCid
+        transfer = V1.Transfer with
+          sender = List.head proposers
+          receiver = lockManagerParty
+          amount
+          instrumentId = amuletInstrumentId target.dso
+          requestedAt
+          executeBefore = expiresAt
+          inputHoldingCids = [toInterfaceContractId lockedAmulet]
+          meta = emptyMetadata -- TODO
+        status = V1.TransferPendingInternalWorkflow with
+          pendingActions =
+            let pendingControllers = List.dedupSort $ concat (controllersPendingApproval approvals unlockControllers).controllers
+            in Map.fromListWithR (\x y -> x <> "; " <> y) $
+              fmap (, "accept unlock") pendingControllers <>
+              fmap (, "reject unlock") pendingControllers <>
+              fmap (, "withdraw unlock") proposers
+        meta = emptyMetadata
+
+      transferInstruction_acceptImpl self V1.TransferInstruction_Accept{..} =
+        downcast . governanceLock_unlockResult_transferInstructionResult <$> unlockProposal_approve UnlockProposalApproveArgs with
+          proposalCid = fromInterfaceContractId self
+          proposal = this
+          actors = proposers -- TODO: what goes here?
+          reason
+          extraArgs
+
+      transferInstruction_rejectImpl = error "TODO"
+      transferInstruction_withdrawImpl = error "TODO"
+      transferInstruction_updateImpl _ _ = assertFail "Transfers representing unlock proposals cannot be updated"
+
+    interface instance V2.TransferInstruction for UnlockProposal where
+      view =
+        let v1View = view @V1.TransferInstruction (toInterface this)
+        in V2.TransferInstructionView with
+          originalInstructionCid = toInterfaceContractId <$> originalProposalCid
+          transfer = upcast v1View.transfer
+          expiresAt = Some expiresAt
+          availableActions =
+            let pendingControllers = (controllersPendingApproval approvals unlockControllers).controllers
+            in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [proposers])]
+          meta = v1View.meta
+
+      transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} =
+        governanceLock_unlockResult_transferInstructionResult <$> unlockProposal_approve UnlockProposalApproveArgs with
+          proposalCid = fromInterfaceContractId self
+          proposal = this
+          actors
+          reason
+          extraArgs
+
+      transferInstruction_rejectImpl = error "TODO"
+      transferInstruction_withdrawImpl = error "TODO"
+
+      transferInstruction_acceptExtraObservers _ = observer this
+      transferInstruction_rejectExtraObservers _ = observer this
+      transferInstruction_withdrawExtraObservers _ = observer this
 
 data UnlockProposalApproveArgs = UnlockProposalApproveArgs with
+  proposalCid : ContractId UnlockProposal
   proposal : UnlockProposal
   actors : [Party]
-  context : ExternalPartyTransferContext
-  state : ExternalPartyConfigState
   reason : Text
+  extraArgs : ExtraArgs
 
 unlockProposal_approve : UnlockProposalApproveArgs -> Update GovernanceLock_UnlockResult
 unlockProposal_approve UnlockProposalApproveArgs{..} = do
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext proposal.target.dso extraArgs.context
   result <- updateControllersApprovals
     proposal.unlockControllers
     actors
@@ -727,7 +814,9 @@ unlockProposal_approve UnlockProposalApproveArgs{..} = do
 
   case result of
     Left pendingApprovals -> do
-      pendingProposal <- create proposal with approvals = pendingApprovals
+      pendingProposal <- create proposal with
+        approvals = pendingApprovals
+        originalProposalCid = Some $ fromOptional proposalCid proposal.originalProposalCid
       pure $ GovernanceLock_UnlockResult_Pending with pendingProposal
     Right _ -> do
       FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.target context state reason
