@@ -763,7 +763,14 @@ template UnlockProposal
           extraArgs
 
       transferInstruction_rejectImpl = error "TODO"
-      transferInstruction_withdrawImpl = error "TODO"
+
+      transferInstruction_withdrawImpl self _ = do
+        unlockProposal_withdraw UnlockProposalWithdrawArgs with
+          proposalCid = fromInterfaceContractId self
+          proposal = this
+          actors = proposers -- TODO: what goes here?
+        pure $ downcast unlockProposal_transferResult_failed
+
       transferInstruction_updateImpl _ _ = assertFail "Transfers representing unlock proposals cannot be updated"
 
     interface instance V2.TransferInstruction for UnlockProposal where
@@ -778,7 +785,10 @@ template UnlockProposal
             in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [proposers])]
           meta = v1View.meta
 
-      transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} =
+      transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} = do
+        -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
+        -- unlockProposal_approve will create a new proposal when necessary
+        potentiallyUnsafeArchive self
         governanceLock_unlockResult_transferInstructionResult <$> unlockProposal_approve UnlockProposalApproveArgs with
           proposalCid = fromInterfaceContractId self
           proposal = this
@@ -787,7 +797,15 @@ template UnlockProposal
           extraArgs
 
       transferInstruction_rejectImpl = error "TODO"
-      transferInstruction_withdrawImpl = error "TODO"
+
+      transferInstruction_withdrawImpl self V2.TransferInstruction_Withdraw{..} = do
+        -- V2.TransferInstruction_Withdraw is nonconsuming so we need to archive explicitly here
+        potentiallyUnsafeArchive self
+        unlockProposal_withdraw UnlockProposalWithdrawArgs with
+          proposalCid = fromInterfaceContractId self
+          proposal = this
+          actors
+        pure unlockProposal_transferResult_failed
 
       transferInstruction_acceptExtraObservers _ = observer this
       transferInstruction_rejectExtraObservers _ = observer this
@@ -795,6 +813,12 @@ template UnlockProposal
 
 unlockProposalMetadata : GovernanceLockSpecification -> Metadata
 unlockProposalMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-unlock-lock"
+
+unlockProposal_transferResult_failed : V2.TransferInstructionResult
+unlockProposal_transferResult_failed = V2.TransferInstructionResult with
+  output = V2.TransferInstructionResult_Failed
+  senderChangeCids = []
+  meta = emptyMetadata
 
 data UnlockProposalApproveArgs = UnlockProposalApproveArgs with
   proposalCid : ContractId UnlockProposal
@@ -827,6 +851,15 @@ unlockProposal_approve UnlockProposalApproveArgs{..} = do
         context
         state
         reason
+
+data UnlockProposalWithdrawArgs = UnlockProposalWithdrawArgs with
+  proposalCid : ContractId UnlockProposal
+  proposal : UnlockProposal
+  actors : [Party]
+
+unlockProposal_withdraw : UnlockProposalWithdrawArgs -> Update ()
+unlockProposal_withdraw UnlockProposalWithdrawArgs{..} = do
+  require' ("actors", actors) isSubsetOfR ("proposers", proposal.proposers)
 
 -- Helpers for handling LockedAmulet
 -- =================================
