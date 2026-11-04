@@ -762,7 +762,11 @@ template UnlockProposal
           reason
           extraArgs
 
-      transferInstruction_rejectImpl = error "TODO"
+      transferInstruction_rejectImpl self V1.TransferInstruction_Reject{..} =
+        downcast . governanceLock_unlockResult_transferInstructionResult <$> unlockProposal_reject UnlockProposalRejectArgs with
+          proposalCid = fromInterfaceContractId self
+          proposal = this
+          actors = proposers -- TODO: what goes here?
 
       transferInstruction_withdrawImpl self _ = do
         unlockProposal_withdraw UnlockProposalWithdrawArgs with
@@ -796,7 +800,14 @@ template UnlockProposal
           reason
           extraArgs
 
-      transferInstruction_rejectImpl = error "TODO"
+      transferInstruction_rejectImpl self V2.TransferInstruction_Reject{..} = do
+        -- V2.TransferInstruction_Reject is nonconsuming so we need to archive explicitly here
+        -- unlockProposal_reject will create a new proposal when necessary
+        potentiallyUnsafeArchive self
+        governanceLock_unlockResult_transferInstructionResult <$> unlockProposal_reject UnlockProposalRejectArgs with
+          proposalCid = fromInterfaceContractId self
+          proposal = this
+          actors
 
       transferInstruction_withdrawImpl self V2.TransferInstruction_Withdraw{..} = do
         -- V2.TransferInstruction_Withdraw is nonconsuming so we need to archive explicitly here
@@ -814,6 +825,11 @@ template UnlockProposal
 unlockProposalMetadata : GovernanceLockSpecification -> Metadata
 unlockProposalMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-unlock-lock"
 
+-- | Get the sets of controllers of an UnlockProposal that contain at least one of its proposers.
+unlockProposal_relevantControllersSets : UnlockProposal -> [[Party]]
+unlockProposal_relevantControllersSets UnlockProposal{..} =
+  filter (\cs -> any (\p -> p `elem` cs) proposers) unlockControllers.controllers
+
 unlockProposal_transferResult_failed : V2.TransferInstructionResult
 unlockProposal_transferResult_failed = V2.TransferInstructionResult with
   output = V2.TransferInstructionResult_Failed
@@ -829,18 +845,15 @@ data UnlockProposalApproveArgs = UnlockProposalApproveArgs with
 
 unlockProposal_approve : UnlockProposalApproveArgs -> Update GovernanceLock_UnlockResult
 unlockProposal_approve UnlockProposalApproveArgs{..} = do
-  let controllersContainingProposers = filter (\cs -> any (\p -> p `elem` cs) proposal.proposers) proposal.unlockControllers.controllers
-  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", controllersContainingProposers)
-
+  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", unlockProposal_relevantControllersSets proposal)
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext proposal.target.dso extraArgs.context
-  result <- updateControllersApprovals proposal.unlockControllers actors () proposal.approvals (const True)
+  result <- addControllersApprovals proposal.unlockControllers actors () proposal.approvals
 
   case result of
-    Left pendingApprovals -> do
-      pendingProposal <- create proposal with
+    Left pendingApprovals ->
+      GovernanceLock_UnlockResult_Pending <$> create proposal with
         approvals = pendingApprovals
         originalProposalCid = Some $ fromOptional proposalCid proposal.originalProposalCid
-      pure $ GovernanceLock_UnlockResult_Pending with pendingProposal
     Right _ -> do
       FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.target context state reason
       governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
@@ -851,6 +864,19 @@ unlockProposal_approve UnlockProposalApproveArgs{..} = do
         context
         state
         reason
+
+data UnlockProposalRejectArgs = UnlockProposalRejectArgs with
+  proposalCid : ContractId UnlockProposal
+  proposal : UnlockProposal
+  actors : [Party]
+
+unlockProposal_reject : UnlockProposalRejectArgs -> Update GovernanceLock_UnlockResult
+unlockProposal_reject UnlockProposalRejectArgs{..} = do
+  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", unlockProposal_relevantControllersSets proposal)
+  pendingApprovals <- removeControllersApprovals proposal.unlockControllers actors proposal.approvals
+  GovernanceLock_UnlockResult_Pending <$> create proposal with
+    approvals = pendingApprovals
+    originalProposalCid = Some $ fromOptional proposalCid proposal.originalProposalCid
 
 data UnlockProposalWithdrawArgs = UnlockProposalWithdrawArgs with
   proposalCid : ContractId UnlockProposal

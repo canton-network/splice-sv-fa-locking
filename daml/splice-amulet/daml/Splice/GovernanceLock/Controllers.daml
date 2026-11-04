@@ -6,7 +6,8 @@ module Splice.GovernanceLock.Controllers (
   validateControllersSpecification,
   allControllers,
   satisfiesAnyControllersSet,
-  updateControllersApprovals,
+  addControllersApprovals,
+  removeControllersApprovals,
   controllersPendingApproval,
 ) where
 
@@ -40,7 +41,7 @@ satisfiesAnyControllersSet actors controllers =
   let actorsSet = Set.fromList actors
   in any (\cs -> (Set.fromList cs) `Set.isSubsetOf` actorsSet) controllers.controllers
 
--- | Updates approvals to include the approval of actors and checks if the
+-- | Updates approvals to record the action taken by the given actors and checks if the
 -- updated approvals satisfy one of the sets of controllers.
 --
 -- A set of controllers is considered satisfied when all of its parties have a
@@ -53,25 +54,45 @@ satisfiesAnyControllersSet actors controllers =
 -- a still-pending Left value.
 updateControllersApprovals
   :  (CanAssert m, Eq a)
+  => (Party -> Map.Map Party a -> Map.Map Party a)
+  -> ControllersSpecification -- ^ The sets of controllers that can authorize the current action.
+  -> [Party] -- ^ The set of actors that have authorized the current action.
+  -> Map.Map Party a -- ^ The pre-existing set of pending approvals.
+  -> m (Either (Map.Map Party a) [(Party, a)])
+updateControllersApprovals update ControllersSpecification{controllers} actors approvals = do
+  require "actors must not be empty" (not $ null actors)
+  forA_ actors $ \actor ->
+    require ("actor " <> partyToText actor <> " must be a controller") (any (actor `elem`) controllers)
+  let updated = foldr update approvals actors
+      approvedBy p = Map.member p updated
+      satisfiedControllers = ControllersSpecification $ filter (all approvedBy) controllers
+  require "at least one actor's approval must change" (approvals /= updated)
+  pure $ if null satisfiedControllers.controllers
+    then Left updated
+    else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (concat satisfiedControllers.controllers)
+
+addControllersApprovals
+  :  (CanAssert m, Eq a)
   => ControllersSpecification -- ^ The sets of controllers that can authorize the current action.
   -> [Party] -- ^ The set of actors that have authorized the current action.
   -> a -- ^ The approval authorized by these actors.
   -> Map.Map Party a -- ^ The pre-existing set of pending approvals.
-  -> (a -> Bool) -- ^ Whether an approval should be considered valid.
   -> m (Either (Map.Map Party a) [(Party, a)])
-updateControllersApprovals ControllersSpecification{controllers} actors approval approvals approvalIsValid = do
-  require "actors must not be empty" (not $ null actors)
-  forA_ actors $ \actor ->
-    require ("actor " <> partyToText actor <> " must be a controller") (any (actor `elem`) controllers)
-  -- Reject calls that change no approval; otherwise a repeated call would re-create the lock and invalidate its contract id for others
-  require "at least one actor's approval must change"
-    (any (\actor -> Map.lookup actor approvals /= Some approval) actors)
-  let updated = foldl (\m actor -> Map.insert actor approval m) approvals actors
-      approvedBy p = optional False approvalIsValid (Map.lookup p updated)
-      satisfiedControllers = ControllersSpecification $ filter (all approvedBy) controllers
-  pure $ if null satisfiedControllers.controllers
-    then Left updated
-    else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (concat satisfiedControllers.controllers)
+addControllersApprovals controllers actors approval approvals =
+  updateControllersApprovals (\actor -> Map.insert actor approval) controllers actors approvals
+
+removeControllersApprovals
+  :  (CanAssert m, Eq a, Show a)
+  => ControllersSpecification -- ^ The sets of controllers that can authorize the current action.
+  -> [Party] -- ^ The set of actors that have authorized the current action.
+  -> Map.Map Party a -- ^ The pre-existing set of pending approvals.
+  -> m (Map.Map Party a)
+removeControllersApprovals controllers actors approvals =
+  updateControllersApprovals Map.delete controllers actors approvals >>= \case
+    Left updated -> pure updated
+    -- If removing the actors approvals yields a `Right approved` value it means there was a bug
+    -- elsewhere since the `Right approved` should have been produced and processed earlier
+    Right approved -> assertFail $ "Unexpected completed approvals: " <> show approved
 
 controllersPendingApproval : Map.Map Party a -> ControllersSpecification -> ControllersSpecification
 controllersPendingApproval approvals controllers =
