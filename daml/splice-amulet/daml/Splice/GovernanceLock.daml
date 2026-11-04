@@ -16,7 +16,6 @@ module Splice.GovernanceLock (
   -- * Lock specifications and state
   GovernanceLockKind(..),
   GovernanceLockSpecification(..),
-  ControllerSpecification(..),
   FullLockSpecification(..),
   VestingLockSpecification(..),
   GovernanceLockKey(..),
@@ -80,11 +79,10 @@ module Splice.GovernanceLock (
   assertInPast24Hours,
 ) where
 
-import Prelude hiding (forA, forA_)
+import Prelude hiding (forA)
 import DA.Action (filterA, foldrA, unless)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
-import DA.Foldable (forA_)
 import DA.Functor (($>))
 import DA.List (sortOn)
 import DA.List.Total (head, minimumOn)
@@ -105,8 +103,9 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.Expiry hiding (maxTime)
-import Splice.Fees (relTimeToDays, relTimeToSeconds)
 import Splice.ExternalPartyConfigState
+import Splice.Fees (relTimeToDays, relTimeToSeconds)
+import Splice.GovernanceLock.Controllers
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
 import Splice.Types
@@ -121,33 +120,18 @@ data GovernanceLockKind
       svName : Text  -- ^ Name of the SV rights owner for whom the funds are locked.
   deriving (Eq, Show, Serializable)
 
-data ControllerSpecification = ControllerSpecification with
-    -- TODO: Use `Set.Set (Set.Set Party)`?
-    controllers : [[Party]]
-      -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
-  deriving (Eq, Show, Serializable)
-
-validateControllerSpecification : CanAssert m => Text -> Optional ControllerSpecification -> m ()
-validateControllerSpecification _ None = pure ()
-validateControllerSpecification controllerType (Some ControllerSpecification{controllers}) = do
-  require (controllerType <> "Controllers must not be empty") (not $ null controllers)
-  require (controllerType <> "Controllers must not contain an empty controller set") (all (not . null) controllers)
-
-instance Semigroup ControllerSpecification where
-  (<>) (ControllerSpecification a) (ControllerSpecification b) = ControllerSpecification $ a <> b
-
 data VestingLockSpecification = VestingLockSpecification with
     kind : GovernanceLockKind
     vestingPeriod : RelTime -- ^ Duration over which the amount vests in a linear fashion.
     endTime : Time -- ^ Time at which vesting completes.
-    vestingControllers : Optional ControllerSpecification
+    vestingControllers : Optional ControllersSpecification
   deriving (Eq, Show, Serializable)
 
 data FullLockSpecification = FullLockSpecification with
     kind : GovernanceLockKind
-    unlockControllers : Optional ControllerSpecification
-    substitutionControllers : Optional ControllerSpecification
-    vestingControllers : Optional ControllerSpecification
+    unlockControllers : Optional ControllersSpecification
+    substitutionControllers : Optional ControllersSpecification
+    vestingControllers : Optional ControllersSpecification
   deriving (Eq, Show, Serializable)
 
 data GovernanceLockSpecification
@@ -157,12 +141,12 @@ data GovernanceLockSpecification
 
 validateGovernanceLockSpecification : CanAssert m => GovernanceLockSpecification -> m ()
 validateGovernanceLockSpecification (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) = do
-  validateControllerSpecification "unlock" unlockControllers
-  validateControllerSpecification "substitution" substitutionControllers
-  validateControllerSpecification "vesting" vestingControllers
+  validateControllersSpecification "unlock" unlockControllers
+  validateControllersSpecification "substitution" substitutionControllers
+  validateControllersSpecification "vesting" vestingControllers
 validateGovernanceLockSpecification (GLS_VestingLock (VestingLockSpecification _ vestingPeriod _ vestingControllers)) = do
   assertMsg "vestingPeriod is positive" $ vestingPeriod >= aunit
-  validateControllerSpecification "vesting" vestingControllers
+  validateControllersSpecification "vesting" vestingControllers
 
 requireFullLock : CanAssert m => GovernanceLockSpecification -> m FullLockSpecification
 requireFullLock (GLS_FullLock spec) = pure spec
@@ -336,7 +320,7 @@ template UnlockProposal
     -- TODO: change this to proposers : [Party] and pass `actors` below?
     owner : Party
     amount : Decimal -- ^ Amount being unlocked.
-    unlockControllers : ControllerSpecification
+    unlockControllers : ControllersSpecification
     approvals : Map.Map Party Time -- ^ Approvals recorded so far, mapping the approver to the approved vesting start time.
     reason : Text
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
@@ -346,39 +330,6 @@ template UnlockProposal
     ensure amount > 0.0 && either error (const True) (requireFullLock target.specification)
     key (UnlockProposalKey with target; amount) : UnlockProposalKey
     maintainer key.target.dso
-
--- | Updates approvals to include the approval of actors and checks if the
--- updated approvals satisfy one of the sets of controllers.
---
--- A set of controllers is considered satisfied when all of its parties have a
--- value within the updated approvals for which approvalIsValid holds true.
---
--- If any controller set is satisfied, the superset of all satisfied controller
--- sets, along with their approvals, is returned as an approved Right value.
---
--- If no controller sets are satisfied, the updated approvals map is returned as
--- a still-pending Left value.
-updateApprovals
-  :  (CanAssert m, Eq a)
-  => ControllerSpecification -- ^ The sets of controllers that can authorize the current action.
-  -> [Party] -- ^ The set of actors that have authorized the current action.
-  -> a -- ^ The approval authorized by these actors.
-  -> Map.Map Party a -- ^ The pre-existing set of pending approvals.
-  -> (a -> Bool) -- ^ Whether an approval should be considered valid.
-  -> m (Either (Map.Map Party a) [(Party, a)])
-updateApprovals ControllerSpecification{controllers} actors approval approvals approvalIsValid = do
-  require "actors must not be empty" (not $ null actors)
-  forA_ actors $ \actor ->
-    require ("actor " <> partyToText actor <> " must be a controller") (any (actor `elem`) controllers)
-  -- Reject calls that change no approval; otherwise a repeated call would re-create the lock and invalidate its contract id for others
-  require "at least one actor's approval must change"
-    (any (\actor -> Map.lookup actor approvals /= Some approval) actors)
-  let updated = foldl (\m actor -> Map.insert actor approval m) approvals actors
-      approvedBy p = optional False approvalIsValid (Map.lookup p updated)
-      satisfiedControllers = ControllerSpecification $ filter (all approvedBy) controllers
-  pure $ if null satisfiedControllers.controllers
-    then Left updated
-    else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (concat satisfiedControllers.controllers)
 
 fetchAndMergeGovernanceLocks'
   :  Optional (Decimal, [ContractId Holding], Time)
@@ -497,11 +448,6 @@ fetchAndMergeUnlockProposals key = do
       newProposalCid <- create newProposal
       pure $ Some (newProposalCid, newProposal)
 
-isControllersSubset : [Party] -> ControllerSpecification -> Bool
-isControllersSubset actors controllers =
-  let actorsSet = Set.fromList actors
-  in any (\cs -> (Set.fromList cs) `Set.isSubsetOf` actorsSet) controllers.controllers
-
 data GovernanceLockProposeUnlockArgs = GovernanceLockProposeUnlockArgs with
   lockCid : ContractId GovernanceLock
   lock : GovernanceLock
@@ -520,7 +466,7 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
     assertInPast24Hours "requestedAt" requestedAt
     fullSpec <- requireFullLock lock.specification
     let target = key lock
-        unlockControllers = ControllerSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
+        unlockControllers = ControllersSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
         hasRequiredActors = isControllersSubset actors unlockControllers
         vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
         hasNoVestingPeriod = vestingPeriod == days 0
@@ -547,7 +493,7 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
               reason
               expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
             pure $ GovernanceLock_UnlockResult_Pending with pendingProposal
-          Some (proposalCid, proposal) ->
+          Some (proposalCid, proposal) -> do
             potentiallyUnsafeArchive proposalCid -- safe as we did a checked fetch in `fetchAndMergeUnlockProposals`
             unlockProposal_approve UnlockProposalApproveArgs with
               proposal
@@ -567,7 +513,7 @@ data UnlockProposalApproveArgs = UnlockProposalApproveArgs with
 
 unlockProposal_approve : UnlockProposalApproveArgs -> Update GovernanceLock_UnlockResult
 unlockProposal_approve UnlockProposalApproveArgs{..} = do
-  result <- updateApprovals
+  result <- updateControllersApprovals
     proposal.unlockControllers
     actors
     vestingStartTime
