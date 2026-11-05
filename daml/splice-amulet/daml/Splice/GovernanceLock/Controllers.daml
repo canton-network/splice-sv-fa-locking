@@ -7,10 +7,10 @@ module Splice.GovernanceLock.Controllers (
   validateControllersSpecification,
   encodeControllersSpecification,
   allControllers,
-  satisfiesAnyControllersSet,
   ProposalApprovalResult(..),
   updateProposalApprovals,
   controllersPendingApproval,
+  checkPendingControllers,
 ) where
 
 import DA.Action (foldrA)
@@ -55,11 +55,6 @@ validateControllersSpecification controllerType (Some ControllersSpecification{c
 
 allControllers : ControllersSpecification -> Set.Set Party
 allControllers spec = Set.fromList $ concat spec.controllers
-
-satisfiesAnyControllersSet : [Party] -> ControllersSpecification -> Bool
-satisfiesAnyControllersSet actors controllers =
-  let actorsSet = Set.fromList actors
-  in any (\cs -> (Set.fromList cs) `Set.isSubsetOf` actorsSet) controllers.controllers
 
 data ProposalApprovalResult
   = PAR_Pending with
@@ -110,3 +105,7 @@ updateProposalApprovals controllers proposers approved actors approvals = do
 controllersPendingApproval : Map.Map Party a -> ControllersSpecification -> ControllersSpecification
 controllersPendingApproval approvals controllers =
   ControllersSpecification $ filter (not . null) $ fmap (filter (\p -> not $ Map.member p approvals)) controllers.controllers
+
+checkPendingControllers : ControllersSpecification -> [Party] -> Map.Map Party Bool -> Update ()
+checkPendingControllers controllers actors approvals =
+  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", (controllersPendingApproval approvals controllers).controllers)

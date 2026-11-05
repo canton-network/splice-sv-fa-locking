@@ -25,14 +25,12 @@ module Splice.GovernanceLock (
   governanceLockObservers,
   governanceLockExpiresAt,
   vestingDurationFor,
-  calculateUnvestedAmount,
   lockManagerParty,
 
   -- * Lock operations
   governanceLock_lockForGovernance_impl,
   FetchAndMergeLocksResult(..),
   fetchAndMergeGovernanceLocks,
-  vestingLock_withdrawImpl,
   governanceLock_dsoSubstituteImpl,
   governanceLock_dsoSplitForSubstitutionImpl,
   governanceLock_dsoTransferImpl,
@@ -80,7 +78,6 @@ module Splice.GovernanceLock (
   assertInNext24Hours,
 ) where
 
-import Prelude hiding (forA)
 import DA.Action (foldrA)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
@@ -92,7 +89,6 @@ import DA.Optional
 import DA.Set qualified as Set
 import DA.Text qualified as Text
 import DA.Time
-import DA.Traversable (forA)
 
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
@@ -105,7 +101,7 @@ import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.Expiry hiding (maxTime)
 import Splice.ExternalPartyConfigState
-import Splice.Fees (relTimeToDays, relTimeToSeconds)
+import Splice.Fees (relTimeToDays)
 import Splice.GovernanceLock.Controllers
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
@@ -261,13 +257,6 @@ template GovernanceLock
       transferInstruction_rejectExtraObservers _ = observer this
       transferInstruction_withdrawExtraObservers _ = observer this
 
-data VestingLock_WithdrawResult
-  = VestingLock_WithdrawResult with
-      vestingLock : Optional (ContractId GovernanceLock)
-        -- ^ Contract ID of the continuing vesting lock with remaining funds.
-      vested : ContractId Holding
-        -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
-
 data GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
    = GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult {}
    deriving (Serializable)
@@ -400,40 +389,6 @@ fetchAndMergeGovernanceLocks key context state reason = do
   -- `changeHolding` should always be `None` since no new funds are passed
   result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
   pure result
-
-vestingLock_withdrawImpl : ContractId GovernanceLock -> GovernanceLock -> Time -> [Party] -> ExternalPartyTransferContext -> Text -> Update VestingLock_WithdrawResult
-vestingLock_withdrawImpl self this@GovernanceLock{..} vestedUntilTime actors context reason
-    = do
-        vestingSpec <- requireVestingLock specification
-        checkActors actors [[owner]]
-        assertDeadlineExceeded "vestedUntilTime" vestedUntilTime
-        let unvestedAmount = calculateUnvestedAmount vestedUntilTime amount vestingSpec
-
-        case unvestedAmount of
-          None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
-            pure VestingLock_WithdrawResult with
-              vestingLock = None
-              vested = toInterfaceContractId lockedAmulet
-          Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
-            let withdrawAmount = amount - stillLockedAmount
-            require' ("withdraw amount", withdrawAmount) isGreaterR ("zero", 0.0)
-            (lockedOpt, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet withdrawAmount context reason
-            vestingLock <- forA lockedOpt (\(lockedAmulet, vestingAmount) -> create this with
-              lockedAmulet
-              specification = GLS_VestingLock vestingSpec with
-                vestingPeriod = vestingSpec.endTime `subTime` vestedUntilTime
-              amount = vestingAmount
-              originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid)
-            pure VestingLock_WithdrawResult with
-              vestingLock
-              vested = toInterfaceContractId unlocked
-
--- | Uses `None` to represent that no amount remains.
-calculateUnvestedAmount : Time -> Decimal -> VestingLockSpecification -> Optional Decimal
-calculateUnvestedAmount currentTime vestingAmount VestingLockSpecification{..}
-    | currentTime <= (endTime `addRelTime` (- vestingPeriod)) = Some vestingAmount
-    | currentTime >= endTime = None
-    | otherwise = Some $ (vestingAmount * relTimeToSeconds (endTime `subTime` currentTime)) / relTimeToSeconds vestingPeriod
 
 -- | Create a `GovernanceLock`, used by the core implementation of token standard interfaces.
 governanceLock_lockForGovernance_impl

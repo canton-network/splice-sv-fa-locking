@@ -51,6 +51,7 @@ import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock
+import Splice.GovernanceLock.Withdraw
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.Util
 
@@ -264,13 +265,17 @@ governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso V1.TransferFactory_
       reason = reasonFromMeta transfer.meta
   FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks key context state reason
   potentiallyUnsafeArchive lockCid
-  result <- vestingLock_withdrawImpl lockCid lock vestedUntilTime [transfer.sender] context reason
-  pure V1.TransferInstructionResult with
-    output = case result.vestingLock of
-      Some vestingLock -> V1.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId vestingLock
-      None -> V1.TransferInstructionResult_Completed with receiverHoldingCids = []
-    senderChangeCids = [result.vested]
-    meta = emptyMetadata
+  result <- vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs with
+    lockCid
+    lock
+    vestedUntilTime
+    actors = [transfer.sender]
+    context
+    state
+    reason
+    requestedAt = transfer.requestedAt
+
+  pure $ downcast $ vestingLock_withdrawResult_transferInstructionResult result
 
 governanceLock_transferFactoryV1_substituteImpl
   :  Party

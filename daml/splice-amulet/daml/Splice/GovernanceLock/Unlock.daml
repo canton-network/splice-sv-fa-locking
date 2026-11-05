@@ -52,7 +52,6 @@ governanceLock_unlockResult_transferInstructionResult result =
             Some v -> V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId v
             None -> V2.TransferInstructionResult_Completed with receiverHoldingCids = []
         )
-
   in V2.TransferInstructionResult with output; senderChangeCids; meta = emptyMetadata
 
 data GovernanceLockProposeUnlockArgs = GovernanceLockProposeUnlockArgs with
@@ -71,12 +70,8 @@ governanceLock_proposeUnlock : GovernanceLockProposeUnlockArgs -> Update Governa
 governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
   assertInPast24Hours "requestedAt" requestedAt
   fullSpec <- requireFullLock lock.specification
-  let unlockControllers = makeControllersSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
-      proposers = List.dedupSort actors
-      emptyApprovals = Map.empty
-  unlockProposal_checkPendingActors unlockControllers proposers emptyApprovals
-  let target = key lock
-      vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
+
+  let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
       hasNoVestingPeriod = vestingPeriod == days 0
   vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
         (True, _) -> pure $ fromOptional minBound optVestingStartTime
@@ -85,13 +80,19 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
           assertInNext24Hours "vestingStartTime" vestingStartTime
           pure vestingStartTime
 
+  let specification = UnlockProposalSpecification with
+        target = key lock
+        amount = unlockAmount
+        vestingStartTime
+      proposers = List.dedupSort actors
+      emptyApprovals = Map.empty
+
+  checkPendingControllers (unlockProposalControllers specification) proposers emptyApprovals
+
   let updateArgs = UnlockProposalUpdateArgs with
         proposalCid = None
         proposal = UnlockProposal with
-          specification = UnlockProposalSpecification with
-            target
-            amount = unlockAmount
-            vestingStartTime
+          specification
           proposers
           lockedAmulet = lock.lockedAmulet
           approvals = emptyApprovals
@@ -188,7 +189,7 @@ unlockProposalControllers UnlockProposalSpecification{target} =
 template UnlockProposal
   with
     specification : UnlockProposalSpecification
-    proposers: [Party]
+    proposers : [Party]
     lockedAmulet : ContractId LockedAmulet
     approvals : Map.Map Party Bool -- ^ Approvals recorded so far.
     requestedAt : Time -- ^ Time of the request to create the proposal.
@@ -243,10 +244,6 @@ template UnlockProposal
 
 unlockProposalMetadata : GovernanceLockSpecification -> Metadata
 unlockProposalMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-unlock-lock"
-
-unlockProposal_checkPendingActors : ControllersSpecification -> [Party] -> Map.Map Party Bool -> Update ()
-unlockProposal_checkPendingActors unlockControllers actors approvals =
-  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", (controllersPendingApproval approvals unlockControllers).controllers)
 
 data UnlockProposalUpdateArgs = UnlockProposalUpdateArgs with
   proposalCid : Optional (ContractId UnlockProposal)
@@ -303,13 +300,13 @@ unlockProposal_update =
 
 unlockProposal_approve : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
 unlockProposal_approve proposalCid proposal@UnlockProposal{specification, approvals} actors extraArgs = do
-  unlockProposal_checkPendingActors (unlockProposalControllers specification) actors approvals
+  checkPendingControllers (unlockProposalControllers specification) actors approvals
   args <- makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs
   unlockProposal_update args True
 
 unlockProposal_reject : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
 unlockProposal_reject proposalCid proposal@UnlockProposal{specification, approvals} actors extraArgs = do
-  unlockProposal_checkPendingActors (unlockProposalControllers specification) actors approvals
+  checkPendingControllers (unlockProposalControllers specification) actors approvals
   args <- makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs
   unlockProposal_update args False
 
