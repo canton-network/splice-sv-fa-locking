@@ -68,50 +68,49 @@ data GovernanceLockProposeUnlockArgs = GovernanceLockProposeUnlockArgs with
 
 -- | Proposes to unlock `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks that have no vesting period.
 governanceLock_proposeUnlock : GovernanceLockProposeUnlockArgs -> Update GovernanceLock_UnlockResult
-governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
-  = do
-    assertInPast24Hours "requestedAt" requestedAt
-    fullSpec <- requireFullLock lock.specification
-    let unlockControllers = makeControllersSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
-        proposers = List.dedupSort actors
-        emptyApprovals = Map.empty
-    unlockProposal_checkPendingActors unlockControllers proposers emptyApprovals
-    let target = key lock
-        vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
-        hasNoVestingPeriod = vestingPeriod == days 0
-    vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
-          (True, _) -> pure $ fromOptional minBound optVestingStartTime
-          (False, None) -> assertFail "Missing vestingStartTime"
-          (False, Some vestingStartTime) -> do
-            assertInNext24Hours "vestingStartTime" vestingStartTime
-            pure vestingStartTime
+governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
+  assertInPast24Hours "requestedAt" requestedAt
+  fullSpec <- requireFullLock lock.specification
+  let unlockControllers = makeControllersSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
+      proposers = List.dedupSort actors
+      emptyApprovals = Map.empty
+  unlockProposal_checkPendingActors unlockControllers proposers emptyApprovals
+  let target = key lock
+      vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
+      hasNoVestingPeriod = vestingPeriod == days 0
+  vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
+        (True, _) -> pure $ fromOptional minBound optVestingStartTime
+        (False, None) -> assertFail "Missing vestingStartTime"
+        (False, Some vestingStartTime) -> do
+          assertInNext24Hours "vestingStartTime" vestingStartTime
+          pure vestingStartTime
 
-    let updateArgs = UnlockProposalUpdateArgs with
-          proposalCid = None
-          proposal = UnlockProposal with
-            specification = UnlockProposalSpecification with
-              target
-              amount = unlockAmount
-              vestingStartTime
-            proposers
-            lockedAmulet = lock.lockedAmulet
-            unlockControllers
-            approvals = emptyApprovals
-            requestedAt
-            expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
-            originalProposalCid = None
-          actors = proposers
-          context
-          state
-          reason
+  let updateArgs = UnlockProposalUpdateArgs with
+        proposalCid = None
+        proposal = UnlockProposal with
+          specification = UnlockProposalSpecification with
+            target
+            amount = unlockAmount
+            vestingStartTime
+          proposers
+          lockedAmulet = lock.lockedAmulet
+          unlockControllers
+          approvals = emptyApprovals
+          requestedAt
+          expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
+          originalProposalCid = None
+        actors = proposers
+        context
+        state
+        reason
 
-    -- A rejected proposal is unexpected here
-    --
-    -- The proposal should either be accepted, if `actors` is a superset of one of the controller sets,
-    -- or pending, if `actors` is a subset of one of the controller sets.
-    --
-    -- A rejected proposal means that `actors` is not in any of the controller sets, which we assert against above
-    unlockProposal_update' identity (\rejectors -> fail ("Unexpected proposal rejection by rejectors: " <> show rejectors)) updateArgs True
+  -- A rejected proposal is unexpected here
+  --
+  -- The proposal should either be accepted, if `actors` is a superset of one of the controller sets,
+  -- or pending, if `actors` is a subset of one of the controller sets.
+  --
+  -- A rejected proposal means that `actors` is not in any of the controller sets, which we assert against above
+  unlockProposal_update' identity (\rejectors -> fail ("Unexpected proposal rejection by rejectors: " <> show rejectors)) updateArgs True
 
 data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
   lockCid : ContractId GovernanceLock
