@@ -78,12 +78,12 @@ vestingLock_proposeWithdraw : VestingLockProposeWithdrawArgs -> Update VestingLo
 vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
   assertDeadlineExceeded "vestedUntilTime" vestedUntilTime
   let lock = merged.lock
-  vestingSpec <- requireVestingLock lock.specification
+  requireVestingLock lock.specification
 
   let target = key lock
       specification = WithdrawVestedFundsSpecification with
         target
-        amount = fromOptional lock.amount $ calculateUnvestedAmount vestedUntilTime lock.amount vestingSpec
+        lockedAmount = lock.amount
         vestedUntilTime
       proposers = List.dedupSort actors
       emptyApprovals = Map.empty
@@ -115,7 +115,6 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
 
 data VestingLockExecuteWithdrawArgs = VestingLockExecuteWithdrawArgs with
   merged : FetchAndMergeLocksResult
-  amount : Decimal
   vestedUntilTime : Time
   context : ExternalPartyTransferContext
   reason : Text
@@ -126,14 +125,16 @@ vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs{..} = do
   potentiallyUnsafeArchive lockCid -- safe as the lock was checked when fetched/merged
 
   vestingSpec <- requireVestingLock lock.specification
-  let GovernanceLock{dso, owner, lockedAmulet, originalLockCid} = lock
-  if amount >= lock.amount
-    then do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
+  let GovernanceLock{dso, owner, amount, lockedAmulet, originalLockCid} = lock
+      unvestedAmount = calculateUnvestedAmount vestedUntilTime amount vestingSpec
+
+  case unvestedAmount of
+    None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
       pure VestingLock_WithdrawResult_Completed with
         vestingLock = None
         vested = toInterfaceContractId lockedAmulet
-    else do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
-      let withdrawAmount = lock.amount - amount
+    Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
+      let withdrawAmount = amount - stillLockedAmount
       require' ("withdraw amount", withdrawAmount) isGreaterR ("zero", 0.0)
       (lockedOpt, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet withdrawAmount context reason
       vestingLock <- forA lockedOpt (\(lockedAmulet, vestingAmount) -> create lock with
@@ -148,7 +149,7 @@ vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs{..} = do
 
 data WithdrawVestedFundsSpecification = WithdrawVestedFundsSpecification with
     target : GovernanceLockKey
-    amount : Decimal
+    lockedAmount : Decimal
     -- TODO: add release notes to mention departure from CIP; we're not accepting a vestedUntilTime from each approver
     vestedUntilTime : Time
   deriving (Eq, Show, Serializable)
@@ -180,7 +181,9 @@ template WithdrawVestedFunds
         transfer = V2.Transfer with
           sender = basicAccount (List.head proposers)
           receiver = basicAccount lockManagerParty
-          amount = specification.amount
+          amount = case requireVestingLock @(Either Text) specification.target.specification of
+            Left _ -> 0.0
+            Right v -> fromOptional 0.0 $ calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount v
           instrumentId = amuletInstrumentIdV2 specification.target.dso
           requestedAt
           executeBefore = expiresAt
@@ -255,7 +258,6 @@ withdrawVestedFunds_update' onPendingOrAccepted onRejected WithdrawVestedFundsUp
       merged <- fetchAndMergeGovernanceLocks proposal.specification.target context state reason
       onPendingOrAccepted <$> vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs with
         merged
-        amount = proposal.specification.amount
         vestedUntilTime = proposal.specification.vestedUntilTime
         context
         reason
