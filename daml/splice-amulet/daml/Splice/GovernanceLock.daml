@@ -437,7 +437,7 @@ data GovernanceLockProposeUnlockArgs = GovernanceLockProposeUnlockArgs with
   reason : Text
   requestedAt : Time
 
--- | Proposes to unlock `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks with have no vesting period.
+-- | Proposes to unlock `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks that have no vesting period.
 governanceLock_proposeUnlock : GovernanceLockProposeUnlockArgs -> Update GovernanceLock_UnlockResult
 governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
   = do
