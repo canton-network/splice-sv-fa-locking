@@ -55,8 +55,7 @@ governanceLock_unlockResult_transferInstructionResult result =
   in V2.TransferInstructionResult with output; senderChangeCids; meta = emptyMetadata
 
 data GovernanceLockProposeUnlockArgs = GovernanceLockProposeUnlockArgs with
-  lockCid : ContractId GovernanceLock
-  lock : GovernanceLock
+  merged : FetchAndMergeLocksResult
   unlockAmount : Decimal
   optVestingStartTime : Optional Time
   actors : [Party]
@@ -69,6 +68,7 @@ data GovernanceLockProposeUnlockArgs = GovernanceLockProposeUnlockArgs with
 governanceLock_proposeUnlock : GovernanceLockProposeUnlockArgs -> Update GovernanceLock_UnlockResult
 governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
   assertInPast24Hours "requestedAt" requestedAt
+  let lock = merged.lock
   fullSpec <- requireFullLock lock.specification
 
   let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
@@ -113,8 +113,7 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
   unlockProposal_update' identity (\rejectors -> fail ("Unexpected proposal rejection by rejectors: " <> show rejectors)) updateArgs True
 
 data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
-  lockCid : ContractId GovernanceLock
-  lock : GovernanceLock
+  merged : FetchAndMergeLocksResult
   unlockAmount : Decimal
   vestingStartTime : Time
   context : ExternalPartyTransferContext
@@ -124,6 +123,9 @@ data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
 -- | Unlocks `unlockAmount` of a governance lock.
 governanceLock_executeUnlock : GovernanceLockExecuteUnlockArgs -> Update GovernanceLock_UnlockResult
 governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs{..} = do
+  let FetchAndMergeLocksResult{lockCid, lock} = merged
+  potentiallyUnsafeArchive lockCid -- safe as the lock was checked when fetched/merged
+
   require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", lock.amount)
   let isFullUnlock = unlockAmount == lock.amount
   require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
@@ -278,10 +280,9 @@ unlockProposal_update' onPendingOrAccepted onRejected UnlockProposalUpdateArgs{.
         originalProposalCid = optional proposalCid Some proposal.originalProposalCid
 
     PAR_Accepted{} -> do
-      FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.specification.target context state reason
+      merged <- fetchAndMergeGovernanceLocks proposal.specification.target context state reason
       onPendingOrAccepted <$> governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
-        lockCid
-        lock
+        merged
         unlockAmount = proposal.specification.amount
         vestingStartTime = proposal.specification.vestingStartTime
         context
