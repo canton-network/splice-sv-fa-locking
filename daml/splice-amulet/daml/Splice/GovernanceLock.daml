@@ -754,7 +754,8 @@ template UnlockProposal
         expiresAt = Some expiresAt
         availableActions =
           let pendingControllers = (controllersPendingApproval approvals unlockControllers).controllers
-          in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [proposers])]
+              pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
+          in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [pendingProposers])]
         meta = emptyMetadata
 
       transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} = do
