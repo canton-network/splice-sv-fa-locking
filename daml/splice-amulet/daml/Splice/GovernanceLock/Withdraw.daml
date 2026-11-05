@@ -24,6 +24,7 @@ import Splice.AmuletConfig (getTokenStandardMaxTTL)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.ExternalPartyConfigState
 import Splice.Fees (relTimeToSeconds)
@@ -175,26 +176,48 @@ template WithdrawVestedFunds
     observer specification.target.owner, (Set.fromList $ concat (withdrawVestedFundsControllers specification).controllers)
     ensure (not $ null proposers) && either error (const True) (requireVestingLock specification.target.specification)
 
-    interface instance V2.TransferInstruction for WithdrawVestedFunds where
-      view = V2.TransferInstructionView with
+    interface instance V1.TransferInstruction for WithdrawVestedFunds where
+      view = V1.TransferInstructionView with
         originalInstructionCid = toInterfaceContractId <$> originalProposalCid
-        transfer = V2.Transfer with
-          sender = basicAccount (List.head proposers)
-          receiver = basicAccount lockManagerParty
+        transfer = V1.Transfer with
+          sender = List.head proposers
+          receiver = lockManagerParty
           amount = case requireVestingLock @(Either Text) specification.target.specification of
             Left _ -> 0.0
             Right v -> fromOptional 0.0 $ calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount v
-          instrumentId = amuletInstrumentIdV2 specification.target.dso
+          instrumentId = amuletInstrumentId specification.target.dso
           requestedAt
           executeBefore = expiresAt
           inputHoldingCids = [toInterfaceContractId lockedAmulet]
           meta = withdrawVestedFundsMetadata specification.target.specification
-        expiresAt = Some expiresAt
-        availableActions =
-          let pendingControllers = (controllersPendingApproval approvals $ withdrawVestedFundsControllers specification).controllers
-              pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
-          in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [pendingProposers])]
+        status = V1.TransferPendingInternalWorkflow with
+          pendingActions =
+            let pendingControllers = List.dedupSort $ concat (controllersPendingApproval approvals $ withdrawVestedFundsControllers specification).controllers
+                pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
+            in Map.fromListWithR (\x y -> x <> "; " <> y) $
+              fmap (, "accept withdrawal") pendingControllers <>
+              fmap (, "reject withdrawal") pendingControllers <>
+              fmap (, "withdraw withdrawal") pendingProposers
         meta = emptyMetadata
+
+      transferInstruction_acceptImpl _ _ = fail "Transfers representing withdrawal proposals cannot be accepted through Token Standard v1"
+      transferInstruction_rejectImpl _ _ = fail "Transfers representing withdrawal proposals cannot be rejected through Token Standard v1"
+      transferInstruction_updateImpl _ _ = fail "Transfers representing withdrawal proposals cannot be updated"
+      transferInstruction_withdrawImpl self V1.TransferInstruction_Withdraw{..} =
+        downcast <$> withdrawVestedFunds_withdraw (fromInterfaceContractId self) this proposers extraArgs
+
+    interface instance V2.TransferInstruction for WithdrawVestedFunds where
+      view =
+        let v1View = view @V1.TransferInstruction (toInterface this)
+        in V2.TransferInstructionView with
+          originalInstructionCid = toInterfaceContractId <$> originalProposalCid
+          transfer = upcast v1View.transfer
+          expiresAt = Some expiresAt
+          availableActions =
+            let pendingControllers = (controllersPendingApproval approvals $ withdrawVestedFundsControllers specification).controllers
+                pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
+            in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [pendingProposers])]
+          meta = emptyMetadata
 
       transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} = do
         -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
