@@ -438,7 +438,7 @@ parseGovernanceLockMetadata = assertParsed governanceLockMetadataParser
 
 controllersParser : Text -> ControllersSpecificationParser
 controllersParser key =
-    optionalMetadataParser key >>= mapA (fmap ControllersSpecification . partiesParser)
+    optionalMetadataParser key >>= mapA (fmap makeControllersSpecification . partiesParser)
   where
     partiesParser : Text -> Parser Metadata [[Party]]
     partiesParser t = forA (Text.splitOn ";" t) \ps -> forA (Text.splitOn "," ps) (partyFromTextParser key)

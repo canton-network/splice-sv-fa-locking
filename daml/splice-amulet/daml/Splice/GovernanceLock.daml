@@ -444,7 +444,7 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
     assertInPast24Hours "requestedAt" requestedAt
     fullSpec <- requireFullLock lock.specification
     let target = key lock
-        unlockControllers = ControllersSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
+        unlockControllers = makeControllersSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
         vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
         hasNoVestingPeriod = vestingPeriod == days 0
     vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
@@ -976,8 +976,7 @@ encodeCommonLockMetadataEntries kind state =
 
 encodeControllersSpecificationMetadataEntries : Text -> Optional ControllersSpecification -> [(Text, Text)]
 encodeControllersSpecificationMetadataEntries _ None = []
-encodeControllersSpecificationMetadataEntries key (Some ControllersSpecification{controllers}) =
-  [(key, Text.intercalate ";" (fmap (Text.intercalate "," . fmap partyToText) controllers))]
+encodeControllersSpecificationMetadataEntries key (Some controllers) = [(key, encodeControllersSpecification controllers)]
 
 -- | The metadata entries of a lock specification, in the order of the CIP.
 encodeGovernanceLockSpecMetadataEntries : GovernanceLockSpecification -> [(Text, Text)]
