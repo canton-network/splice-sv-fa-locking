@@ -2,8 +2,10 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 module Splice.GovernanceLock.Controllers (
-  ControllersSpecification(..),
+  ControllersSpecification,
+  makeControllersSpecification,
   validateControllersSpecification,
+  encodeControllersSpecification,
   allControllers,
   satisfiesAnyControllersSet,
   ProposalApprovalResult(..),
@@ -14,16 +16,36 @@ module Splice.GovernanceLock.Controllers (
 import DA.Action (foldrA)
 import DA.Map qualified as Map
 import DA.Set qualified as Set
+import DA.Text qualified as Text
 
 import Splice.TokenStandard.Utils
 
+-- | Specification of controllers that can jointly authorize an action.
+-- Serializable so it can be encoded on templates, but should not be constructed directly; use ControllerSets.
 data ControllersSpecification = ControllersSpecification with
     controllers : [[Party]]
       -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
   deriving (Eq, Show, Serializable)
 
-instance Semigroup ControllersSpecification where
-  (<>) (ControllersSpecification a) (ControllersSpecification b) = ControllersSpecification $ a <> b
+-- | Sets of controllers that can jointly authorize an action.
+-- This is the form of ControllersSpecification that all callers must go through to ensure deduplication.
+data ControllerSets = ControllerSets (Set.Set (Set.Set Party))
+
+makeControllerSets : [[Party]] -> ControllerSets
+makeControllerSets controllers = ControllerSets $ Set.fromList $ fmap Set.fromList controllers
+
+getControllersSpecification : ControllerSets -> ControllersSpecification
+getControllersSpecification (ControllerSets controllers) = ControllersSpecification $ fmap Set.toList $ Set.toList controllers
+
+makeControllersSpecification : [[Party]] -> ControllersSpecification
+makeControllersSpecification = getControllersSpecification . makeControllerSets
+
+encodeControllerSets : ControllerSets -> Text
+encodeControllerSets controllers =
+  Text.intercalate ";" (fmap (Text.intercalate "," . fmap partyToText) (getControllersSpecification controllers).controllers)
+
+encodeControllersSpecification : ControllersSpecification -> Text
+encodeControllersSpecification = encodeControllerSets . makeControllerSets . (.controllers)
 
 validateControllersSpecification : CanAssert m => Text -> Optional ControllersSpecification -> m ()
 validateControllersSpecification _ None = pure ()
