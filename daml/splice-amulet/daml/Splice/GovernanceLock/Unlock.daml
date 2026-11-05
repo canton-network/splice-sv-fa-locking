@@ -123,55 +123,54 @@ data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
 
 -- | Unlocks `unlockAmount` of a governance lock.
 governanceLock_executeUnlock : GovernanceLockExecuteUnlockArgs -> Update GovernanceLock_UnlockResult
-governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs{..}
-    = do
-        require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", lock.amount)
-        let isFullUnlock = unlockAmount == lock.amount
-        require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
-        unless isFullUnlock $ do
-          requireMinimumLock state unlockAmount
-          requireMinimumLock state (lock.amount - unlockAmount)
+governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs{..} = do
+  require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", lock.amount)
+  let isFullUnlock = unlockAmount == lock.amount
+  require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
+  unless isFullUnlock $ do
+    requireMinimumLock state unlockAmount
+    requireMinimumLock state (lock.amount - unlockAmount)
 
-        fullSpec <- requireFullLock lock.specification
-        let GovernanceLock{dso, owner, lockedAmulet, originalLockCid} = lock
+  fullSpec <- requireFullLock lock.specification
+  let GovernanceLock{dso, owner, lockedAmulet, originalLockCid} = lock
 
-        let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
-        let hasNoVestingPeriod = vestingPeriod == days 0
-        let endTime = vestingStartTime `addRelTime` vestingPeriod
-        let specification = GLS_VestingLock VestingLockSpecification with
-              kind = fullSpec.kind
-              vestingPeriod
-              endTime
-              vestingControllers = fullSpec.vestingControllers
-        let forOwner = ForOwner with dso; owner
+  let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
+  let hasNoVestingPeriod = vestingPeriod == days 0
+  let endTime = vestingStartTime `addRelTime` vestingPeriod
+  let specification = GLS_VestingLock VestingLockSpecification with
+        kind = fullSpec.kind
+        vestingPeriod
+        endTime
+        vestingControllers = fullSpec.vestingControllers
+  let forOwner = ForOwner with dso; owner
 
-        (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if hasNoVestingPeriod
-          then do
-            (optStillLocked, unlockedAmulet) <- partialUnlock forOwner lockedAmulet unlockAmount context reason
-            pure (None, optStillLocked, Some unlockedAmulet)
-          else do
-            (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (unlockAmount, endTime) context reason
-            pure (Some vestingLockedAmulet, optStillLocked, None)
+  (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if hasNoVestingPeriod
+    then do
+      (optStillLocked, unlockedAmulet) <- partialUnlock forOwner lockedAmulet unlockAmount context reason
+      pure (None, optStillLocked, Some unlockedAmulet)
+    else do
+      (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (unlockAmount, endTime) context reason
+      pure (Some vestingLockedAmulet, optStillLocked, None)
 
-        governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
-          lock with
-            lockedAmulet
-            amount = stillLockedAmount
-            originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid)
+  governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
+    lock with
+      lockedAmulet
+      amount = stillLockedAmount
+      originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid)
 
-        vestingLock <- forA optVestingLockedAmulet (\(lockedAmulet, amount) -> create GovernanceLock with
-          dso
-          owner
-          lockedAmulet
-          amount
-          specification
-          originalLockCid = guard isFullUnlock $> fromOptional (toAnyContractId lockCid) originalLockCid
-          requestedAt = endTime `addRelTime` (- vestingPeriod))
+  vestingLock <- forA optVestingLockedAmulet (\(lockedAmulet, amount) -> create GovernanceLock with
+    dso
+    owner
+    lockedAmulet
+    amount
+    specification
+    originalLockCid = guard isFullUnlock $> fromOptional (toAnyContractId lockCid) originalLockCid
+    requestedAt = endTime `addRelTime` (- vestingPeriod))
 
-        pure GovernanceLock_UnlockResult_Completed with
-          vestingLock
-          governanceLock
-          unlockedAmulet
+  pure GovernanceLock_UnlockResult_Completed with
+    vestingLock
+    governanceLock
+    unlockedAmulet
 
 data UnlockProposalSpecification = UnlockProposalSpecification with
     target : GovernanceLockKey
