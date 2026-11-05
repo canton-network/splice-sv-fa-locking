@@ -25,6 +25,7 @@ import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Request
 import Splice.GovernanceLock.Transfer
+import Splice.GovernanceLock.Withdraw
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.MultiRegistry qualified as MultiRegistry
@@ -791,7 +792,11 @@ isVestingLock lock = case lock.specification of
   GLS_VestingLock _ -> True
 
 fullLockSpecification : GovernanceLockKind -> GovernanceLockSpecification
-fullLockSpecification kind = GLS_FullLock FullLockSpecification with kind
+fullLockSpecification kind = GLS_FullLock FullLockSpecification with
+  kind
+  unlockControllers = None
+  substitutionControllers = None
+  vestingControllers = None
 
 lockTargetMetaEntries : GovernanceLockSpecification -> [(Text, Text)]
 lockTargetMetaEntries (GLS_FullLock _) = []
