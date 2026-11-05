@@ -457,13 +457,14 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
     if satisfiesAnyControllersSet actors unlockControllers
       then governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with ..
       else GovernanceLock_UnlockResult_Pending <$> create UnlockProposal with
-        target
+        specification = UnlockProposalSpecification with
+          target
+          amount = unlockAmount
+          vestingStartTime
         proposers = List.dedupSort actors
-        amount = unlockAmount
         lockedAmulet = lock.lockedAmulet
         unlockControllers
         approvals = Map.fromList $ fmap (, True) actors
-        vestingStartTime
         reason
         requestedAt
         expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
@@ -714,25 +715,29 @@ governanceLock_dsoTransferImpl forOwner@ForOwner{..} lockCid transferredAmount r
     GT ->
       fail $ "transferred lock has less funds (" <> show amount <> ") than the amount proposed to be transferred (" <> show transferredAmount <> ")"
 
+data UnlockProposalSpecification = UnlockProposalSpecification with
+    target : GovernanceLockKey
+    amount : Decimal -- ^ Amount being unlocked.
+    -- TODO: add release notes to mention departure from CIP; we're not accepting a vestingStartTime from each approver
+    vestingStartTime : Time -- ^ Time at which vesting is proposed to start.
+  deriving (Eq, Show, Serializable)
+
 template UnlockProposal
   with
-    target : GovernanceLockKey
+    specification : UnlockProposalSpecification
     proposers: [Party]
-    amount : Decimal -- ^ Amount being unlocked.
     lockedAmulet : ContractId LockedAmulet
     unlockControllers : ControllersSpecification
     approvals : Map.Map Party Bool -- ^ Approvals recorded so far.
-    -- TODO: add release notes to mention departure from CIP; we're not accepting a vestingStartTime from each approver
-    vestingStartTime : Time -- ^ Time at which vesting is proposed to start.
     reason : Text
     requestedAt : Time -- ^ Time of the request to create the proposal.
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
     originalProposalCid : Optional (ContractId UnlockProposal)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
-    signatory target.dso, proposers
-    observer target.owner, (Set.fromList $ concat unlockControllers.controllers)
-    ensure amount > 0.0 && (not $ null proposers) && either error (const True) (requireFullLock target.specification)
+    signatory specification.target.dso, proposers
+    observer specification.target.owner, (Set.fromList $ concat unlockControllers.controllers)
+    ensure specification.amount > 0.0 && (not $ null proposers) && either error (const True) (requireFullLock specification.target.specification)
 
     interface instance V2.TransferInstruction for UnlockProposal where
       view = V2.TransferInstructionView with
@@ -740,12 +745,12 @@ template UnlockProposal
         transfer = V2.Transfer with
           sender = basicAccount (List.head proposers)
           receiver = basicAccount lockManagerParty
-          amount
-          instrumentId = amuletInstrumentIdV2 target.dso
+          amount = specification.amount
+          instrumentId = amuletInstrumentIdV2 specification.target.dso
           requestedAt
           executeBefore = expiresAt
           inputHoldingCids = [toInterfaceContractId lockedAmulet]
-          meta = unlockProposalMetadata target.specification
+          meta = unlockProposalMetadata specification.target.specification
         expiresAt = Some expiresAt
         availableActions =
           let pendingControllers = (controllersPendingApproval approvals unlockControllers).controllers
@@ -805,13 +810,13 @@ unlockProposal_update UnlockProposalUpdateArgs{..} approved = do
         originalProposalCid = Some $ fromOptional proposalCid proposal.originalProposalCid
 
     PAR_Accepted{} -> do
-      (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext proposal.target.dso extraArgs.context
-      FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.target context state proposal.reason
+      (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext proposal.specification.target.dso extraArgs.context
+      FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.specification.target context state proposal.reason
       governanceLock_unlockResult_transferInstructionResult <$> governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
         lockCid
         lock
-        unlockAmount = proposal.amount
-        vestingStartTime = proposal.vestingStartTime
+        unlockAmount = proposal.specification.amount
+        vestingStartTime = proposal.specification.vestingStartTime
         context
         state
         reason = proposal.reason
