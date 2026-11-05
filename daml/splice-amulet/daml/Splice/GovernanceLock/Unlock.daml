@@ -100,10 +100,10 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
             requestedAt
             expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
             originalProposalCid = None
-            reason
           actors = proposers
           context
           state
+          reason
 
     -- A rejected proposal is unexpected here
     --
@@ -188,7 +188,6 @@ template UnlockProposal
     lockedAmulet : ContractId LockedAmulet
     unlockControllers : ControllersSpecification
     approvals : Map.Map Party Bool -- ^ Approvals recorded so far.
-    reason : Text
     requestedAt : Time -- ^ Time of the request to create the proposal.
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
     originalProposalCid : Optional (ContractId UnlockProposal)
@@ -252,6 +251,7 @@ data UnlockProposalUpdateArgs = UnlockProposalUpdateArgs with
   actors : [Party]
   context : ExternalPartyTransferContext
   state : ExternalPartyConfigState
+  reason : Text
 
 makeUnlockProposalUpdateArgs : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update UnlockProposalUpdateArgs
 makeUnlockProposalUpdateArgs proposalCid proposal@UnlockProposal{..} actors extraArgs = do
@@ -260,6 +260,7 @@ makeUnlockProposalUpdateArgs proposalCid proposal@UnlockProposal{..} actors extr
     proposalCid = Some proposalCid
     proposal
     actors
+    reason = reasonFromMeta $ unlockProposalMetadata specification.target.specification
     context
     state
 
@@ -278,7 +279,7 @@ unlockProposal_update' onPendingOrAccepted onRejected UnlockProposalUpdateArgs{.
         originalProposalCid = optional proposalCid Some proposal.originalProposalCid
 
     PAR_Accepted{} -> do
-      FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.specification.target context state proposal.reason
+      FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.specification.target context state reason
       onPendingOrAccepted <$> governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
         lockCid
         lock
@@ -286,7 +287,7 @@ unlockProposal_update' onPendingOrAccepted onRejected UnlockProposalUpdateArgs{.
         vestingStartTime = proposal.specification.vestingStartTime
         context
         state
-        reason = proposal.reason
+        reason
 
     PAR_Rejected{rejectors} -> onRejected rejectors
 
