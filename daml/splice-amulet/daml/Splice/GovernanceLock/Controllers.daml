@@ -6,18 +6,16 @@ module Splice.GovernanceLock.Controllers (
   validateControllersSpecification,
   allControllers,
   satisfiesAnyControllersSet,
-  addControllersApprovals,
-  removeControllersApprovals,
+  ProposalApprovalResult(..),
+  updateProposalApprovals,
   controllersPendingApproval,
 ) where
 
-import Prelude hiding (forA_)
-import DA.Foldable (forA_)
+import DA.Action (foldrA)
 import DA.Map qualified as Map
-import DA.Optional
 import DA.Set qualified as Set
 
-import Splice.Util
+import Splice.TokenStandard.Utils
 
 data ControllersSpecification = ControllersSpecification with
     controllers : [[Party]]
@@ -41,58 +39,51 @@ satisfiesAnyControllersSet actors controllers =
   let actorsSet = Set.fromList actors
   in any (\cs -> (Set.fromList cs) `Set.isSubsetOf` actorsSet) controllers.controllers
 
--- | Updates approvals to record the action taken by the given actors and checks if the
--- updated approvals satisfy one of the sets of controllers.
+data ProposalApprovalResult
+  = PAR_Pending with
+      pendingApprovals : Map.Map Party Bool
+  | PAR_Accepted with
+      acceptors : [Party]
+  | PAR_Rejected with
+      rejectors : [Party]
+
+-- | Checks the state of the given approvals.
 --
--- A set of controllers is considered satisfied when all of its parties have a
--- value within the updated approvals for which approvalIsValid holds true.
+-- A proposal is considered rejected when all of the proposers have rejected it
+-- or when all controllers from any controllers set have rejected it.
 --
--- If any controller set is satisfied, the superset of all satisfied controller
--- sets, along with their approvals, is returned as an approved Right value.
+-- A proposal is considered accepted when all controllers from any controllers set have accepted it.
 --
--- If no controller sets are satisfied, the updated approvals map is returned as
--- a still-pending Left value.
-updateControllersApprovals
-  :  (CanAssert m, Eq a)
-  => (Party -> Map.Map Party a -> Map.Map Party a)
-  -> ControllersSpecification -- ^ The sets of controllers that can authorize the current action.
-  -> [Party] -- ^ The set of actors that have authorized the current action.
-  -> Map.Map Party a -- ^ The pre-existing set of pending approvals.
-  -> m (Either (Map.Map Party a) [(Party, a)])
-updateControllersApprovals update ControllersSpecification{controllers} actors approvals = do
-  require "actors must not be empty" (not $ null actors)
-  forA_ actors $ \actor ->
-    require ("actor " <> partyToText actor <> " must be a controller") (any (actor `elem`) controllers)
-  let updated = foldr update approvals actors
-      approvedBy p = Map.member p updated
-      satisfiedControllers = ControllersSpecification $ filter (all approvedBy) controllers
+-- Otherwise the proposal is still pending.
+proposalApprovalResult : ControllersSpecification -> [Party] -> Map.Map Party Bool -> ProposalApprovalResult
+proposalApprovalResult ControllersSpecification{controllers} proposers approvals =
+  let
+    checkControllersSet : (Bool -> Bool) -> [Party] -> Bool
+    checkControllersSet f = all (\p -> optional False f (Map.lookup p approvals))
+
+    allProposersRejected = checkControllersSet not proposers
+    rejectedControllersSet = find (checkControllersSet not) controllers
+    acceptedControllersSet = find (checkControllersSet identity) controllers
+  in
+    case (allProposersRejected, rejectedControllersSet, acceptedControllersSet) of
+      (True, _, _) -> PAR_Rejected with rejectors = proposers
+      (False, Some rejectors, _) -> PAR_Rejected with rejectors
+      (False, None, Some acceptors) -> PAR_Accepted with acceptors
+      (False, None, None) -> PAR_Pending with pendingApprovals = approvals
+
+-- | Updates approvals to record the action taken by the given actor.
+updateProposalApproval : ControllersSpecification -> Bool -> Party -> Map.Map Party Bool -> Update (Map.Map Party Bool)
+updateProposalApproval ControllersSpecification{controllers} approved actor approvals = do
+  require' ("actor", actor) isMemberR ("controllers", concat controllers)
+  let updated = Map.insert actor approved approvals
   require "at least one actor's approval must change" (approvals /= updated)
-  pure $ if null satisfiedControllers.controllers
-    then Left updated
-    else Right $ mapOptional (\p -> (p,) <$> Map.lookup p updated) (concat satisfiedControllers.controllers)
+  pure updated
 
-addControllersApprovals
-  :  (CanAssert m, Eq a)
-  => ControllersSpecification -- ^ The sets of controllers that can authorize the current action.
-  -> [Party] -- ^ The set of actors that have authorized the current action.
-  -> a -- ^ The approval authorized by these actors.
-  -> Map.Map Party a -- ^ The pre-existing set of pending approvals.
-  -> m (Either (Map.Map Party a) [(Party, a)])
-addControllersApprovals controllers actors approval approvals =
-  updateControllersApprovals (\actor -> Map.insert actor approval) controllers actors approvals
-
-removeControllersApprovals
-  :  (CanAssert m, Eq a, Show a)
-  => ControllersSpecification -- ^ The sets of controllers that can authorize the current action.
-  -> [Party] -- ^ The set of actors that have authorized the current action.
-  -> Map.Map Party a -- ^ The pre-existing set of pending approvals.
-  -> m (Map.Map Party a)
-removeControllersApprovals controllers actors approvals =
-  updateControllersApprovals Map.delete controllers actors approvals >>= \case
-    Left updated -> pure updated
-    -- If removing the actors approvals yields a `Right approved` value it means there was a bug
-    -- elsewhere since the `Right approved` should have been produced and processed earlier
-    Right approved -> assertFail $ "Unexpected completed approvals: " <> show approved
+-- | Updates approvals to record the action taken by the given actors, and checks the state of the updated approvals.
+updateProposalApprovals : ControllersSpecification -> [Party] -> Bool -> [Party] -> Map.Map Party Bool -> Update ProposalApprovalResult
+updateProposalApprovals controllers proposers approved actors approvals = do
+  updatedApprovals <- foldrA (updateProposalApproval controllers approved) approvals actors
+  pure $ proposalApprovalResult controllers proposers updatedApprovals
 
 controllersPendingApproval : Map.Map Party a -> ControllersSpecification -> ControllersSpecification
 controllersPendingApproval approvals controllers =
