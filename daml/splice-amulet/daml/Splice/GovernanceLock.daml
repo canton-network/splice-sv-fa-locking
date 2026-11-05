@@ -150,7 +150,7 @@ validateGovernanceLockSpecification (GLS_FullLock (FullLockSpecification _ unloc
   validateControllersSpecification "substitution" substitutionControllers
   validateControllersSpecification "vesting" vestingControllers
 validateGovernanceLockSpecification (GLS_VestingLock (VestingLockSpecification _ vestingPeriod _ vestingControllers)) = do
-  assertMsg "vestingPeriod is positive" $ vestingPeriod >= aunit
+  assertMsg "vestingPeriod is positive" $ vestingPeriod > aunit
   validateControllersSpecification "vesting" vestingControllers
 
 requireFullLock : CanAssert m => GovernanceLockSpecification -> m FullLockSpecification
