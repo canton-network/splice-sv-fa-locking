@@ -65,8 +65,7 @@ calculateUnvestedAmount currentTime vestingAmount VestingLockSpecification{..}
     | otherwise = Some $ (vestingAmount * relTimeToSeconds (endTime `subTime` currentTime)) / relTimeToSeconds vestingPeriod
 
 data VestingLockProposeWithdrawArgs = VestingLockProposeWithdrawArgs with
-  lockCid : ContractId GovernanceLock
-  lock : GovernanceLock
+  merged : FetchAndMergeLocksResult
   vestedUntilTime : Time
   actors : [Party]
   context : ExternalPartyTransferContext
@@ -78,6 +77,7 @@ data VestingLockProposeWithdrawArgs = VestingLockProposeWithdrawArgs with
 vestingLock_proposeWithdraw : VestingLockProposeWithdrawArgs -> Update VestingLock_WithdrawResult
 vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
   assertDeadlineExceeded "vestedUntilTime" vestedUntilTime
+  let lock = merged.lock
   vestingSpec <- requireVestingLock lock.specification
 
   let target = key lock
@@ -114,8 +114,7 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
   withdrawVestedFunds_update' identity (\rejectors -> fail ("Unexpected proposal rejection by rejectors: " <> show rejectors)) updateArgs True
 
 data VestingLockExecuteWithdrawArgs = VestingLockExecuteWithdrawArgs with
-  lockCid : ContractId GovernanceLock
-  lock : GovernanceLock
+  merged : FetchAndMergeLocksResult
   amount : Decimal
   vestedUntilTime : Time
   context : ExternalPartyTransferContext
@@ -123,6 +122,9 @@ data VestingLockExecuteWithdrawArgs = VestingLockExecuteWithdrawArgs with
 
 vestingLock_executeWithdraw : VestingLockExecuteWithdrawArgs -> Update VestingLock_WithdrawResult
 vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs{..} = do
+  let FetchAndMergeLocksResult{lockCid, lock} = merged
+  potentiallyUnsafeArchive lockCid -- safe as the lock was checked when fetched/merged
+
   vestingSpec <- requireVestingLock lock.specification
   let GovernanceLock{dso, owner, lockedAmulet, originalLockCid} = lock
   if amount >= lock.amount
@@ -250,10 +252,9 @@ withdrawVestedFunds_update' onPendingOrAccepted onRejected WithdrawVestedFundsUp
         originalProposalCid = optional proposalCid Some proposal.originalProposalCid
 
     PAR_Accepted{} -> do
-      FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.specification.target context state reason
+      merged <- fetchAndMergeGovernanceLocks proposal.specification.target context state reason
       onPendingOrAccepted <$> vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs with
-        lockCid
-        lock
+        merged
         amount = proposal.specification.amount
         vestedUntilTime = proposal.specification.vestedUntilTime
         context

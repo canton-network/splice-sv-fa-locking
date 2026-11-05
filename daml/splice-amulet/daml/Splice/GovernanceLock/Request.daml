@@ -53,7 +53,6 @@ import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock
 import Splice.GovernanceLock.Withdraw
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
-import Splice.Util
 
 data GovernanceLockRequest
   = GLR_CreateGovernanceLock with
@@ -204,11 +203,9 @@ governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{tran
         owner = transfer.sender
         specification = GLS_FullLock specification
       reason = reasonFromMeta transfer.meta
-  FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks key context state reason
-  potentiallyUnsafeArchive lockCid
+  merged <- fetchAndMergeGovernanceLocks key context state reason
   result <- governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs with
-    lockCid
-    lock
+    merged
     unlockAmount
     optVestingStartTime
     actors = [transfer.sender]
@@ -263,11 +260,9 @@ governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso V1.TransferFactory_
         owner = transfer.sender
         specification = GLS_VestingLock specification
       reason = reasonFromMeta transfer.meta
-  FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks key context state reason
-  potentiallyUnsafeArchive lockCid
+  merged <- fetchAndMergeGovernanceLocks key context state reason
   result <- vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs with
-    lockCid
-    lock
+    merged
     vestedUntilTime
     actors = [transfer.sender]
     context
