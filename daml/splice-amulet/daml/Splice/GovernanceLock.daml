@@ -19,6 +19,7 @@ module Splice.GovernanceLock (
   FullLockSpecification(..),
   VestingLockSpecification(..),
   GovernanceLockKey(..),
+  requireFullLock,
   requireVestingLock,
   governanceLockKind,
   governanceLockObservers,
@@ -31,10 +32,6 @@ module Splice.GovernanceLock (
   governanceLock_lockForGovernance_impl,
   FetchAndMergeLocksResult(..),
   fetchAndMergeGovernanceLocks,
-  GovernanceLock_UnlockResult(..),
-  governanceLock_unlockResult_transferInstructionResult,
-  GovernanceLockProposeUnlockArgs(..),
-  governanceLock_proposeUnlock,
   vestingLock_withdrawImpl,
   governanceLock_dsoSubstituteImpl,
   governanceLock_dsoSplitForSubstitutionImpl,
@@ -77,16 +74,18 @@ module Splice.GovernanceLock (
   lockAmulet,
   lockAmuletFor,
   unlockAmulet,
+  partialUnlock,
+  splitLockedAmulet,
   assertInPast24Hours,
+  assertInNext24Hours,
 ) where
 
 import Prelude hiding (forA)
-import DA.Action (foldrA, unless)
+import DA.Action (foldrA)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
 import DA.Foldable (foldMap)
-import DA.Functor (($>))
-import DA.List qualified as List
+import DA.List (sortOn)
 import DA.List.Total (head)
 import DA.Map qualified as Map
 import DA.Optional
@@ -98,7 +97,7 @@ import DA.Traversable (forA)
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
 import Splice.Amulet.TwoStepTransfer (holdingToTransferInputs)
-import Splice.AmuletConfig (getTokenStandardMaxTTL, GovernanceLockConfig, governanceLockFeaturedAppLockVestingDuration, governanceLockMinimumLockAmount, governanceLockSuperValidatorLockVestingDuration)
+import Splice.AmuletConfig (GovernanceLockConfig, governanceLockFeaturedAppLockVestingDuration, governanceLockMinimumLockAmount, governanceLockSuperValidatorLockVestingDuration)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
@@ -262,30 +261,6 @@ template GovernanceLock
       transferInstruction_rejectExtraObservers _ = observer this
       transferInstruction_withdrawExtraObservers _ = observer this
 
-data GovernanceLock_UnlockResult
-  = GovernanceLock_UnlockResult_Pending with
-      pendingProposal : ContractId UnlockProposal
-  | GovernanceLock_UnlockResult_Completed with
-      vestingLock : Optional (ContractId GovernanceLock)
-      governanceLock : Optional (ContractId GovernanceLock)
-      unlockedAmulet : Optional (ContractId Amulet)
-
-governanceLock_unlockResult_transferInstructionResult : GovernanceLock_UnlockResult -> V2.TransferInstructionResult
-governanceLock_unlockResult_transferInstructionResult result =
-  let
-    (senderChangeCids, output) = case result of
-      GovernanceLock_UnlockResult_Pending{..} ->
-        ([], V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId pendingProposal)
-      GovernanceLock_UnlockResult_Completed{..} ->
-        (
-          toInterfaceContractId <$> optionalToList unlockedAmulet,
-          case vestingLock of
-            Some v -> V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId v
-            None -> V2.TransferInstructionResult_Completed with receiverHoldingCids = []
-        )
-
-  in V2.TransferInstructionResult with output; senderChangeCids; meta = emptyMetadata
-
 data VestingLock_WithdrawResult
   = VestingLock_WithdrawResult with
       vestingLock : Optional (ContractId GovernanceLock)
@@ -342,7 +317,7 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
     defaultNumberToMerge = 20
 
     sortLocks : [(ContractId GovernanceLock, GovernanceLock)] -> [(ContractId GovernanceLock, GovernanceLock)]
-    sortLocks = List.sortOn $ negate . (.amount) . snd
+    sortLocks = sortOn $ negate . (.amount) . snd
 
     merge : Time -> [(ContractId GovernanceLock, GovernanceLock)] -> Update FetchAndMergeLocksResult
     merge requestedAt locks = do
@@ -425,125 +400,6 @@ fetchAndMergeGovernanceLocks key context state reason = do
   -- `changeHolding` should always be `None` since no new funds are passed
   result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
   pure result
-
-data GovernanceLockProposeUnlockArgs = GovernanceLockProposeUnlockArgs with
-  lockCid : ContractId GovernanceLock
-  lock : GovernanceLock
-  unlockAmount : Decimal
-  optVestingStartTime : Optional Time
-  actors : [Party]
-  context : ExternalPartyTransferContext
-  state : ExternalPartyConfigState
-  reason : Text
-  requestedAt : Time
-
--- | Proposes to unlock `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks that have no vesting period.
-governanceLock_proposeUnlock : GovernanceLockProposeUnlockArgs -> Update GovernanceLock_UnlockResult
-governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
-  = do
-    assertInPast24Hours "requestedAt" requestedAt
-    fullSpec <- requireFullLock lock.specification
-    let unlockControllers = makeControllersSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
-        proposers = List.dedupSort actors
-        emptyApprovals = Map.empty
-    unlockProposal_checkPendingActors unlockControllers proposers emptyApprovals
-    let target = key lock
-        vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
-        hasNoVestingPeriod = vestingPeriod == days 0
-    vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
-          (True, _) -> pure $ fromOptional minBound optVestingStartTime
-          (False, None) -> assertFail "Missing vestingStartTime"
-          (False, Some vestingStartTime) -> do
-            assertInNext24Hours "vestingStartTime" vestingStartTime
-            pure vestingStartTime
-
-    let updateArgs = UnlockProposalUpdateArgs with
-          proposalCid = None
-          proposal = UnlockProposal with
-            specification = UnlockProposalSpecification with
-              target
-              amount = unlockAmount
-              vestingStartTime
-            proposers
-            lockedAmulet = lock.lockedAmulet
-            unlockControllers
-            approvals = emptyApprovals
-            requestedAt
-            expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
-            originalProposalCid = None
-            reason
-          actors = proposers
-          context
-          state
-
-    -- A rejected proposal is unexpected here
-    --
-    -- The proposal should either be accepted, if `actors` is a superset of one of the controller sets,
-    -- or pending, if `actors` is a subset of one of the controller sets.
-    --
-    -- A rejected proposal means that `actors` is not in any of the controller sets, which we assert against above
-    unlockProposal_update' identity (\rejectors -> fail ("Unexpected proposal rejection by rejectors: " <> show rejectors)) updateArgs True
-
-data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
-  lockCid : ContractId GovernanceLock
-  lock : GovernanceLock
-  unlockAmount : Decimal
-  vestingStartTime : Time
-  context : ExternalPartyTransferContext
-  state : ExternalPartyConfigState
-  reason : Text
-
--- | Unlocks `unlockAmount` of a governance lock.
-governanceLock_executeUnlock : GovernanceLockExecuteUnlockArgs -> Update GovernanceLock_UnlockResult
-governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs{..}
-    = do
-        require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", lock.amount)
-        let isFullUnlock = unlockAmount == lock.amount
-        require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
-        unless isFullUnlock $ do
-          requireMinimumLock state unlockAmount
-          requireMinimumLock state (lock.amount - unlockAmount)
-
-        fullSpec <- requireFullLock lock.specification
-        let GovernanceLock{dso, owner, lockedAmulet, originalLockCid} = lock
-
-        let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
-        let hasNoVestingPeriod = vestingPeriod == days 0
-        let endTime = vestingStartTime `addRelTime` vestingPeriod
-        let specification = GLS_VestingLock VestingLockSpecification with
-              kind = fullSpec.kind
-              vestingPeriod
-              endTime
-              vestingControllers = fullSpec.vestingControllers
-        let forOwner = ForOwner with dso; owner
-
-        (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if hasNoVestingPeriod
-          then do
-            (optStillLocked, unlockedAmulet) <- partialUnlock forOwner lockedAmulet unlockAmount context reason
-            pure (None, optStillLocked, Some unlockedAmulet)
-          else do
-            (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (unlockAmount, endTime) context reason
-            pure (Some vestingLockedAmulet, optStillLocked, None)
-
-        governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
-          lock with
-            lockedAmulet
-            amount = stillLockedAmount
-            originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid)
-
-        vestingLock <- forA optVestingLockedAmulet (\(lockedAmulet, amount) -> create GovernanceLock with
-          dso
-          owner
-          lockedAmulet
-          amount
-          specification
-          originalLockCid = guard isFullUnlock $> fromOptional (toAnyContractId lockCid) originalLockCid
-          requestedAt = endTime `addRelTime` (- vestingPeriod))
-
-        pure GovernanceLock_UnlockResult_Completed with
-          vestingLock
-          governanceLock
-          unlockedAmulet
 
 vestingLock_withdrawImpl : ContractId GovernanceLock -> GovernanceLock -> Time -> [Party] -> ExternalPartyTransferContext -> Text -> Update VestingLock_WithdrawResult
 vestingLock_withdrawImpl self this@GovernanceLock{..} vestedUntilTime actors context reason
@@ -728,147 +584,6 @@ governanceLock_dsoTransferImpl forOwner@ForOwner{..} lockCid transferredAmount r
         unlockedAmulet
     GT ->
       fail $ "transferred lock has less funds (" <> show amount <> ") than the amount proposed to be transferred (" <> show transferredAmount <> ")"
-
-data UnlockProposalSpecification = UnlockProposalSpecification with
-    target : GovernanceLockKey
-    amount : Decimal -- ^ Amount being unlocked.
-    -- TODO: add release notes to mention departure from CIP; we're not accepting a vestingStartTime from each approver
-    vestingStartTime : Time -- ^ Time at which vesting is proposed to start.
-  deriving (Eq, Show, Serializable)
-
-template UnlockProposal
-  with
-    specification : UnlockProposalSpecification
-    proposers: [Party]
-    lockedAmulet : ContractId LockedAmulet
-    unlockControllers : ControllersSpecification
-    approvals : Map.Map Party Bool -- ^ Approvals recorded so far.
-    reason : Text
-    requestedAt : Time -- ^ Time of the request to create the proposal.
-    expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
-    originalProposalCid : Optional (ContractId UnlockProposal)
-      -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
-  where
-    signatory specification.target.dso, proposers
-    observer specification.target.owner, (Set.fromList $ concat unlockControllers.controllers)
-    ensure specification.amount > 0.0 && (not $ null proposers) && either error (const True) (requireFullLock specification.target.specification)
-
-    interface instance V2.TransferInstruction for UnlockProposal where
-      view = V2.TransferInstructionView with
-        originalInstructionCid = toInterfaceContractId <$> originalProposalCid
-        transfer = V2.Transfer with
-          sender = basicAccount (List.head proposers)
-          receiver = basicAccount lockManagerParty
-          amount = specification.amount
-          instrumentId = amuletInstrumentIdV2 specification.target.dso
-          requestedAt
-          executeBefore = expiresAt
-          inputHoldingCids = [toInterfaceContractId lockedAmulet]
-          meta = unlockProposalMetadata specification.target.specification
-        expiresAt = Some expiresAt
-        availableActions =
-          let pendingControllers = (controllersPendingApproval approvals unlockControllers).controllers
-              pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
-          in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [pendingProposers])]
-        meta = emptyMetadata
-
-      transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} = do
-        -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
-        -- unlockProposal_update will create a new proposal when necessary
-        potentiallyUnsafeArchive self
-        unlockProposal_approve (fromInterfaceContractId self) this actors extraArgs
-
-      transferInstruction_rejectImpl self V2.TransferInstruction_Reject{..} = do
-        -- V2.TransferInstruction_Reject is nonconsuming so we need to archive explicitly here
-        -- unlockProposal_update will create a new proposal when necessary
-        potentiallyUnsafeArchive self
-        unlockProposal_reject (fromInterfaceContractId self) this actors extraArgs
-
-      transferInstruction_withdrawImpl self V2.TransferInstruction_Withdraw{..} = do
-        -- V2.TransferInstruction_Withdraw is nonconsuming so we need to archive explicitly here
-        -- unlockProposal_update will create a new proposal when necessary
-        potentiallyUnsafeArchive self
-        unlockProposal_withdraw (fromInterfaceContractId self) this actors extraArgs
-
-      transferInstruction_acceptExtraObservers _ = observer this
-      transferInstruction_rejectExtraObservers _ = observer this
-      transferInstruction_withdrawExtraObservers _ = observer this
-
-unlockProposalMetadata : GovernanceLockSpecification -> Metadata
-unlockProposalMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-unlock-lock"
-
-unlockProposal_checkPendingActors : ControllersSpecification -> [Party] -> Map.Map Party Bool -> Update ()
-unlockProposal_checkPendingActors unlockControllers actors approvals =
-  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", (controllersPendingApproval approvals unlockControllers).controllers)
-
-data UnlockProposalUpdateArgs = UnlockProposalUpdateArgs with
-  proposalCid : Optional (ContractId UnlockProposal)
-  proposal : UnlockProposal
-  actors : [Party]
-  context : ExternalPartyTransferContext
-  state : ExternalPartyConfigState
-
-makeUnlockProposalUpdateArgs : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update UnlockProposalUpdateArgs
-makeUnlockProposalUpdateArgs proposalCid proposal@UnlockProposal{..} actors extraArgs = do
-  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext specification.target.dso extraArgs.context
-  pure UnlockProposalUpdateArgs with
-    proposalCid = Some proposalCid
-    proposal
-    actors
-    context
-    state
-
-unlockProposal_update'
-  :  (GovernanceLock_UnlockResult -> a)
-  -> ([Party] -> Update a)
-  -> UnlockProposalUpdateArgs
-  -> Bool
-  -> Update a
-unlockProposal_update' onPendingOrAccepted onRejected UnlockProposalUpdateArgs{..} approved = do
-  result <- updateProposalApprovals proposal.unlockControllers proposal.proposers approved actors proposal.approvals
-  case result of
-    PAR_Pending{pendingApprovals} ->
-      onPendingOrAccepted . GovernanceLock_UnlockResult_Pending <$> create proposal with
-        approvals = pendingApprovals
-        originalProposalCid = optional proposalCid Some proposal.originalProposalCid
-
-    PAR_Accepted{} -> do
-      FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.specification.target context state proposal.reason
-      onPendingOrAccepted <$> governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
-        lockCid
-        lock
-        unlockAmount = proposal.specification.amount
-        vestingStartTime = proposal.specification.vestingStartTime
-        context
-        state
-        reason = proposal.reason
-
-    PAR_Rejected{rejectors} -> onRejected rejectors
-
-unlockProposal_update : UnlockProposalUpdateArgs -> Bool -> Update V2.TransferInstructionResult
-unlockProposal_update =
-  unlockProposal_update' governanceLock_unlockResult_transferInstructionResult \_ -> pure V2.TransferInstructionResult with
-    output = V2.TransferInstructionResult_Failed
-    senderChangeCids = []
-    meta = emptyMetadata
-
-unlockProposal_approve : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
-unlockProposal_approve proposalCid proposal@UnlockProposal{unlockControllers, approvals} actors extraArgs = do
-  unlockProposal_checkPendingActors unlockControllers actors approvals
-  args <- makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs
-  unlockProposal_update args True
-
-unlockProposal_reject : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
-unlockProposal_reject proposalCid proposal@UnlockProposal{unlockControllers, approvals} actors extraArgs = do
-  unlockProposal_checkPendingActors unlockControllers actors approvals
-  args <- makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs
-  unlockProposal_update args False
-
-unlockProposal_withdraw : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
-unlockProposal_withdraw proposalCid proposal@UnlockProposal{proposers} actors extraArgs = do
-  require' ("actors", actors) isSubsetOfR ("proposers", proposers)
-  args <- makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs
-  unlockProposal_update args False
 
 -- Helpers for handling LockedAmulet
 -- =================================
