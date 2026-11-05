@@ -443,8 +443,11 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
   = do
     assertInPast24Hours "requestedAt" requestedAt
     fullSpec <- requireFullLock lock.specification
+    let unlockControllers = makeControllersSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
+        proposers = List.dedupSort actors
+        emptyApprovals = Map.empty
+    unlockProposal_checkPendingActors unlockControllers proposers emptyApprovals
     let target = key lock
-        unlockControllers = makeControllersSpecification $ optional [[lock.owner]] (.controllers) fullSpec.unlockControllers
         vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
         hasNoVestingPeriod = vestingPeriod == days 0
     vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
@@ -454,21 +457,32 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..}
             assertInNext24Hours "vestingStartTime" vestingStartTime
             pure vestingStartTime
 
-    if satisfiesAnyControllersSet actors unlockControllers
-      then governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with ..
-      else GovernanceLock_UnlockResult_Pending <$> create UnlockProposal with
-        specification = UnlockProposalSpecification with
-          target
-          amount = unlockAmount
-          vestingStartTime
-        proposers = List.dedupSort actors
-        lockedAmulet = lock.lockedAmulet
-        unlockControllers
-        approvals = Map.fromList $ fmap (, True) actors
-        reason
-        requestedAt
-        expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
-        originalProposalCid = None
+    let updateArgs = UnlockProposalUpdateArgs with
+          proposalCid = None
+          proposal = UnlockProposal with
+            specification = UnlockProposalSpecification with
+              target
+              amount = unlockAmount
+              vestingStartTime
+            proposers
+            lockedAmulet = lock.lockedAmulet
+            unlockControllers
+            approvals = emptyApprovals
+            requestedAt
+            expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
+            originalProposalCid = None
+            reason
+          actors = proposers
+          context
+          state
+
+    -- A rejected proposal is unexpected here
+    --
+    -- The proposal should either be accepted, if `actors` is a superset of one of the controller sets,
+    -- or pending, if `actors` is a subset of one of the controller sets.
+    --
+    -- A rejected proposal means that `actors` is not in any of the controller sets, which we assert against above
+    unlockProposal_update' identity (\rejectors -> fail ("Unexpected proposal rejection by rejectors: " <> show rejectors)) updateArgs True
 
 data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
   lockCid : ContractId GovernanceLock
@@ -762,31 +776,19 @@ template UnlockProposal
         -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
         -- unlockProposal_update will create a new proposal when necessary
         potentiallyUnsafeArchive self
-        unlockProposal_approve UnlockProposalUpdateArgs with
-          proposalCid = fromInterfaceContractId self
-          proposal = this
-          actors
-          extraArgs
+        unlockProposal_approve (fromInterfaceContractId self) this actors extraArgs
 
       transferInstruction_rejectImpl self V2.TransferInstruction_Reject{..} = do
         -- V2.TransferInstruction_Reject is nonconsuming so we need to archive explicitly here
         -- unlockProposal_update will create a new proposal when necessary
         potentiallyUnsafeArchive self
-        unlockProposal_reject UnlockProposalUpdateArgs with
-          proposalCid = fromInterfaceContractId self
-          proposal = this
-          actors
-          extraArgs
+        unlockProposal_reject (fromInterfaceContractId self) this actors extraArgs
 
       transferInstruction_withdrawImpl self V2.TransferInstruction_Withdraw{..} = do
         -- V2.TransferInstruction_Withdraw is nonconsuming so we need to archive explicitly here
         -- unlockProposal_update will create a new proposal when necessary
         potentiallyUnsafeArchive self
-        unlockProposal_withdraw UnlockProposalUpdateArgs with
-          proposalCid = fromInterfaceContractId self
-          proposal = this
-          actors
-          extraArgs
+        unlockProposal_withdraw (fromInterfaceContractId self) this actors extraArgs
 
       transferInstruction_acceptExtraObservers _ = observer this
       transferInstruction_rejectExtraObservers _ = observer this
@@ -795,25 +797,44 @@ template UnlockProposal
 unlockProposalMetadata : GovernanceLockSpecification -> Metadata
 unlockProposalMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-unlock-lock"
 
+unlockProposal_checkPendingActors : ControllersSpecification -> [Party] -> Map.Map Party Bool -> Update ()
+unlockProposal_checkPendingActors unlockControllers actors approvals =
+  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", (controllersPendingApproval approvals unlockControllers).controllers)
+
 data UnlockProposalUpdateArgs = UnlockProposalUpdateArgs with
-  proposalCid : ContractId UnlockProposal
+  proposalCid : Optional (ContractId UnlockProposal)
   proposal : UnlockProposal
   actors : [Party]
-  extraArgs : ExtraArgs
+  context : ExternalPartyTransferContext
+  state : ExternalPartyConfigState
 
-unlockProposal_update : UnlockProposalUpdateArgs -> Bool -> Update V2.TransferInstructionResult
-unlockProposal_update UnlockProposalUpdateArgs{..} approved = do
+makeUnlockProposalUpdateArgs : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update UnlockProposalUpdateArgs
+makeUnlockProposalUpdateArgs proposalCid proposal@UnlockProposal{..} actors extraArgs = do
+  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext specification.target.dso extraArgs.context
+  pure UnlockProposalUpdateArgs with
+    proposalCid = Some proposalCid
+    proposal
+    actors
+    context
+    state
+
+unlockProposal_update'
+  :  (GovernanceLock_UnlockResult -> a)
+  -> ([Party] -> Update a)
+  -> UnlockProposalUpdateArgs
+  -> Bool
+  -> Update a
+unlockProposal_update' onPendingOrAccepted onRejected UnlockProposalUpdateArgs{..} approved = do
   result <- updateProposalApprovals proposal.unlockControllers proposal.proposers approved actors proposal.approvals
   case result of
     PAR_Pending{pendingApprovals} ->
-      governanceLock_unlockResult_transferInstructionResult . GovernanceLock_UnlockResult_Pending <$> create proposal with
+      onPendingOrAccepted . GovernanceLock_UnlockResult_Pending <$> create proposal with
         approvals = pendingApprovals
-        originalProposalCid = Some $ fromOptional proposalCid proposal.originalProposalCid
+        originalProposalCid = optional proposalCid Some proposal.originalProposalCid
 
     PAR_Accepted{} -> do
-      (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext proposal.specification.target.dso extraArgs.context
       FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks proposal.specification.target context state proposal.reason
-      governanceLock_unlockResult_transferInstructionResult <$> governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
+      onPendingOrAccepted <$> governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
         lockCid
         lock
         unlockAmount = proposal.specification.amount
@@ -822,24 +843,31 @@ unlockProposal_update UnlockProposalUpdateArgs{..} approved = do
         state
         reason = proposal.reason
 
-    PAR_Rejected{} -> pure V2.TransferInstructionResult with
-      output = V2.TransferInstructionResult_Failed
-      senderChangeCids = []
-      meta = emptyMetadata
+    PAR_Rejected{rejectors} -> onRejected rejectors
 
-unlockProposal_approve : UnlockProposalUpdateArgs -> Update V2.TransferInstructionResult
-unlockProposal_approve args@UnlockProposalUpdateArgs{proposal, actors} = do
-  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", (controllersPendingApproval proposal.approvals proposal.unlockControllers).controllers)
+unlockProposal_update : UnlockProposalUpdateArgs -> Bool -> Update V2.TransferInstructionResult
+unlockProposal_update =
+  unlockProposal_update' governanceLock_unlockResult_transferInstructionResult \_ -> pure V2.TransferInstructionResult with
+    output = V2.TransferInstructionResult_Failed
+    senderChangeCids = []
+    meta = emptyMetadata
+
+unlockProposal_approve : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
+unlockProposal_approve proposalCid proposal@UnlockProposal{unlockControllers, approvals} actors extraArgs = do
+  unlockProposal_checkPendingActors unlockControllers actors approvals
+  args <- makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs
   unlockProposal_update args True
 
-unlockProposal_reject : UnlockProposalUpdateArgs -> Update V2.TransferInstructionResult
-unlockProposal_reject args@UnlockProposalUpdateArgs{proposal, actors} = do
-  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", (controllersPendingApproval proposal.approvals proposal.unlockControllers).controllers)
+unlockProposal_reject : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
+unlockProposal_reject proposalCid proposal@UnlockProposal{unlockControllers, approvals} actors extraArgs = do
+  unlockProposal_checkPendingActors unlockControllers actors approvals
+  args <- makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs
   unlockProposal_update args False
 
-unlockProposal_withdraw : UnlockProposalUpdateArgs -> Update V2.TransferInstructionResult
-unlockProposal_withdraw args@UnlockProposalUpdateArgs{proposal, actors} = do
-  require' ("actors", actors) isSubsetOfR ("proposers", proposal.proposers)
+unlockProposal_withdraw : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
+unlockProposal_withdraw proposalCid proposal@UnlockProposal{proposers} actors extraArgs = do
+  require' ("actors", actors) isSubsetOfR ("proposers", proposers)
+  args <- makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs
   unlockProposal_update args False
 
 -- Helpers for handling LockedAmulet
