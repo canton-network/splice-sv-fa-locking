@@ -99,6 +99,7 @@ setupVestingLock = do
           kind = testLockKind
           vestingPeriod = testVestingPeriod
           endTime
+          vestingControllers = None
         originalLockCid = Some (coerceContractId governanceLockCid)
         requestedAt = unlockAt
 

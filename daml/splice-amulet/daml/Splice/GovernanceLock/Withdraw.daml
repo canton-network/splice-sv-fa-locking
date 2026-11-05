@@ -6,6 +6,7 @@ module Splice.GovernanceLock.Withdraw (
   vestingLock_withdrawResult_transferInstructionResult,
   VestingLockProposeWithdrawArgs(..),
   vestingLock_proposeWithdraw,
+  calculateUnvestedAmount,
 ) where
 
 import Prelude hiding (forA)

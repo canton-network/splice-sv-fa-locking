@@ -19,6 +19,7 @@ import Splice.Amulet.TokenApiUtils (reasonMetaKey)
 import Splice.Api.Token.MetadataV1
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Request
+import Splice.Scripts.UnitTests.GovernanceLock (fullLockSpecification)
 
 -- Test parties and helpers
 ---------------------------
@@ -195,12 +196,11 @@ test_fullLockSpecificationParser'
   :  (Text -> [(Text, Text)] -> Validation Text FullLockSpecification)
   -> Script ()
 test_fullLockSpecificationParser' run = do
-  let fullSpecification = FullLockSpecification with
-        kind = GLK_FeaturedApp testProvider
+  let fullSpecification = fullLockSpecification $ GLK_FeaturedApp testProvider
   expectSuccess fullSpecification $
     run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMetaKey, "provider")]
 
-  expectSuccess (FullLockSpecification with kind = GLK_SuperValidatorRightsOwner "someSv") $
+  expectSuccess (fullLockSpecification $ GLK_SuperValidatorRightsOwner "someSv") $
     run (governanceLockTagToText GLT_SuperValidator) [(lockSubjectMetaKey, "someSv")]
 
   -- Invalid field
@@ -232,7 +232,7 @@ test_governanceLockRequestTSv1Parser = do
   let run receiver entries = runParser (governanceLockRequestTSv1Parser testAdmin receiver None) (mkMeta entries)
       request r = (requestMetaKey, r)
       faLock = [(lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp), (lockSubjectMetaKey, "provider")]
-      faSpecification = FullLockSpecification with kind = GLK_FeaturedApp testProvider
+      faSpecification = fullLockSpecification $ GLK_FeaturedApp testProvider
       invalidReceiverError p = "Invalid receiver: '" <> show p <> "'"
 
   -- Create a lock: the specification is parsed
@@ -268,7 +268,7 @@ test_governanceLockRequestTSv1Parser = do
   let provisionalFaLock = [(lockKindMetaKey, governanceLockTagToText GLT_ProvisionalFeaturedApp), (lockSubjectMetaKey, "provider")]
       expectProvisionalUnlock entries = expectRequest (run lockManagerParty entries) \case
         GLR_UnlockGovernanceLock{fullSpecification, unlockAmount, vestingStartTime} -> do
-          fullSpecification === FullLockSpecification with kind = GLK_ProvisionalFeaturedApp testProvider
+          fullSpecification === fullLockSpecification (GLK_ProvisionalFeaturedApp testProvider)
           unlockAmount === 10000.0
           vestingStartTime === None
         _ -> fail "Expected GLR_UnlockGovernanceLock"
@@ -309,6 +309,7 @@ test_governanceLockRequestTSv1Parser = do
           kind = GLK_FeaturedApp testProvider
           vestingPeriod = days 60
           endTime = time (date 2026 Jan 1) 0 0 0
+          vestingControllers = None
         vestedUntilTime === time (date 2025 Dec 1) 0 0 0
       _ -> fail "Expected GLR_WithdrawVestingLock"
 
@@ -401,7 +402,7 @@ test_substitutionTSv1Parser_examples = do
         (GovernanceLockKey with
           dso = testAdmin
           owner = alice
-          specification = GLS_FullLock FullLockSpecification with kind = GLK_SuperValidatorRightsOwner "someSv")
+          specification = GLS_FullLock $ fullLockSpecification $ GLK_SuperValidatorRightsOwner "someSv")
         $ run $
             [ ("request", "substitute-lock")
             , ("lock-kind", "sv-lock")
@@ -421,8 +422,7 @@ test_substitutionTSv1Parser_examples = do
     (GovernanceLockKey with
       dso = testAdmin
       owner = alice
-      specification = GLS_FullLock FullLockSpecification with
-        kind = GLK_FeaturedApp testProvider)
+      specification = GLS_FullLock $ fullLockSpecification $ GLK_FeaturedApp testProvider)
     $ run
         [ ("request", "substitute-lock")
         , ("lock-kind", "fa-lock")
@@ -440,7 +440,8 @@ test_substitutionTSv1Parser_examples = do
       specification = GLS_VestingLock VestingLockSpecification with
         kind = GLK_SuperValidatorRightsOwner "someSv"
         vestingPeriod = days 60
-        endTime = time (date 2026 Jan 1) 0 0 0)
+        endTime = time (date 2026 Jan 1) 0 0 0
+        vestingControllers = None)
     $ run
         [ ("request", "substitute-lock")
         , ("lock-kind", "sv-lock")
