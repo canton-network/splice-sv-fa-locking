@@ -50,6 +50,7 @@ import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
+import Splice.GovernanceLock.Unlock
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.Util
 
