@@ -10,7 +10,7 @@ module Splice.GovernanceLock.Unlock (
 
 import Prelude hiding (forA)
 import DA.Action (unless)
-import DA.Assert (assertDeadlineExceeded)
+import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
 import DA.Functor (($>))
 import DA.List qualified as List
 import DA.Map qualified as Map
@@ -220,8 +220,7 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
 
 data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
   merged : FetchAndMergeLocksResult
-  unlockAmount : Decimal
-  vestingStartTime : Time
+  proposal : UnlockProposal
   context : ExternalPartyTransferContext
   state : ExternalPartyConfigState
   reason : Text
@@ -229,7 +228,9 @@ data GovernanceLockExecuteUnlockArgs = GovernanceLockExecuteUnlockArgs with
 -- | Unlocks `unlockAmount` of a governance lock.
 governanceLock_executeUnlock : GovernanceLockExecuteUnlockArgs -> Update GovernanceLock_UnlockResult
 governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs{..} = do
+  assertWithinDeadline "expiresAt" proposal.expiresAt
   let FetchAndMergeLocksResult{lockCid, lock} = merged
+      unlockAmount = proposal.specification.amount
   potentiallyUnsafeArchive lockCid -- safe as the lock was checked when fetched/merged
 
   require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", lock.amount)
@@ -244,7 +245,7 @@ governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs{..} = do
 
   let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
   let hasNoVestingPeriod = vestingPeriod == days 0
-  let endTime = vestingStartTime `addRelTime` vestingPeriod
+  let endTime = proposal.specification.vestingStartTime `addRelTime` vestingPeriod
   let specification = GLS_VestingLock VestingLockSpecification with
         kind = fullSpec.kind
         vestingPeriod
@@ -317,8 +318,7 @@ unlockProposal_update' onPendingOrAccepted onRejected UnlockProposalUpdateArgs{.
       merged <- fetchAndMergeGovernanceLocks proposal.specification.target context state reason
       onPendingOrAccepted <$> governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
         merged
-        unlockAmount = proposal.specification.amount
-        vestingStartTime = proposal.specification.vestingStartTime
+        proposal
         context
         state
         reason

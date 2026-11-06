@@ -10,7 +10,7 @@ module Splice.GovernanceLock.Withdraw (
 ) where
 
 import Prelude hiding (forA)
-import DA.Assert (assertDeadlineExceeded)
+import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
 import DA.List qualified as List
 import DA.Map qualified as Map
 import DA.Optional
@@ -222,18 +222,19 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
 
 data VestingLockExecuteWithdrawArgs = VestingLockExecuteWithdrawArgs with
   merged : FetchAndMergeLocksResult
-  vestedUntilTime : Time
+  proposal : WithdrawVestedFunds
   context : ExternalPartyTransferContext
   reason : Text
 
 vestingLock_executeWithdraw : VestingLockExecuteWithdrawArgs -> Update VestingLock_WithdrawResult
 vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs{..} = do
+  assertWithinDeadline "expiresAt" proposal.expiresAt
   let FetchAndMergeLocksResult{lockCid, lock} = merged
   potentiallyUnsafeArchive lockCid -- safe as the lock was checked when fetched/merged
 
   vestingSpec <- requireVestingLock lock.specification
   let GovernanceLock{dso, owner, amount, lockedAmulet, originalLockCid} = lock
-      unvestedAmount = calculateUnvestedAmount vestedUntilTime amount vestingSpec
+      unvestedAmount = calculateUnvestedAmount proposal.specification.vestedUntilTime amount vestingSpec
 
   case unvestedAmount of
     None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
@@ -247,7 +248,7 @@ vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs{..} = do
       vestingLock <- forA lockedOpt (\(lockedAmulet, vestingAmount) -> create lock with
         lockedAmulet
         specification = GLS_VestingLock vestingSpec with
-          vestingPeriod = vestingSpec.endTime `subTime` vestedUntilTime
+          vestingPeriod = vestingSpec.endTime `subTime` proposal.specification.vestedUntilTime
         amount = vestingAmount
         originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid)
       pure VestingLock_WithdrawResult_Completed with
@@ -291,7 +292,7 @@ withdrawVestedFunds_update' onPendingOrAccepted onRejected WithdrawVestedFundsUp
       merged <- fetchAndMergeGovernanceLocks proposal.specification.target context state reason
       onPendingOrAccepted <$> vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs with
         merged
-        vestedUntilTime = proposal.specification.vestedUntilTime
+        proposal
         context
         reason
 
