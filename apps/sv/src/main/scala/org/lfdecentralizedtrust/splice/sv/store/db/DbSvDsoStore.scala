@@ -2161,6 +2161,65 @@ class DbSvDsoStore private (
         )
       }
 
+  override def listFeaturedAppUnderlockInstructionsWithFeaturedAppRight(
+      unavailablePartiesStore: Option[UnavailablePartiesStore] = None,
+      limit: Limit = defaultLimit,
+  )(implicit tc: TraceContext): Future[Seq[AssignedContract[
+    splice.dso.instruction.FeaturedAppUnderlockInstruction.ContractId,
+    splice.dso.instruction.FeaturedAppUnderlockInstruction,
+  ]]] =
+    waitUntilAcsIngested {
+      for {
+        ignoredParties <- UnavailablePartiesStore.listParties(unavailablePartiesStore)
+        // Executing an instruction archives and recreates the provider's
+        // FeaturedAppRight, which the provider observes, so skip unavailable
+        // providers.
+        filterClause =
+          if (ignoredParties.nonEmpty)
+            (sql" and " ++ notInClause(
+              "acs.featured_app_right_provider",
+              ignoredParties,
+            )).toActionBuilder
+          else sql""
+        synchronizerId <- getDsoRules().map(_.domain)
+        result <- storage.query(
+          selectFromAcsTableWithState(
+            DsoTables.acsTableName,
+            acsStoreId,
+            domainMigrationId,
+            splice.dso.instruction.FeaturedAppUnderlockInstruction.COMPANION,
+            additionalWhere = (sql"""
+              and acs.assigned_domain = $synchronizerId
+              and exists (
+                select 1
+                from #${DsoTables.acsTableName} fa_right
+                where fa_right.store_id = acs.store_id
+                  and fa_right.migration_id = acs.migration_id
+                  and fa_right.package_name = ${FeaturedAppRight.PACKAGE_NAME}
+                  and fa_right.template_id_qualified_name = ${QualifiedName(
+                FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID
+              )}
+                  and fa_right.assigned_domain is not null
+                  and fa_right.featured_app_right_provider =
+                    acs.featured_app_right_provider
+              )
+            """ ++ filterClause).toActionBuilder,
+            orderLimit = sql"""order by acs.event_number limit ${sqlLimit(limit)}""",
+          ),
+          "listFeaturedAppUnderlockInstructionsWithFeaturedAppRight",
+        )
+        limited = applyLimit(
+          "listFeaturedAppUnderlockInstructionsWithFeaturedAppRight",
+          limit,
+          result,
+        )
+      } yield limited.map(
+        assignedContractFromRow(
+          splice.dso.instruction.FeaturedAppUnderlockInstruction.COMPANION
+        )(_)
+      )
+    }
+
   override def lookupAnsEntryContext(reference: SubscriptionRequest.ContractId)(implicit
       tc: TraceContext
   ): Future[Option[ContractWithState[AnsEntryContext.ContractId, AnsEntryContext]]] =

@@ -136,6 +136,21 @@ trait PackageVersionSupport extends NamedLogging {
     )
   }
 
+  def supportsFeaturedAppUnderlock(
+      parties: Seq[PartyId],
+      now: CantonTimestamp,
+  )(implicit
+      tc: TraceContext
+  ): Future[FeatureSupport] =
+    isDarSupported(
+      parties,
+      PackageIdResolver.Package.SpliceDsoGovernance,
+      now,
+      DarResources.dsoGovernance,
+      DarResources.dsoGovernance_0_1_32,
+      ignoreRedundantCheck = false,
+    )
+
   // Synonym for supports24hSubmissionDelay as both features were introduced in amulet_0_1_17
 
   def supportsExpireTransferInstructions(
