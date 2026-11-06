@@ -135,9 +135,6 @@ governanceLock_transferFactoryV1_transferImpl
   -> V1.TransferFactory_Transfer
   -> Update V1.TransferInstructionResult
 governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_Transfer{expectedAdmin, transfer, extraArgs} = do
-  checkActors actors [[transfer.sender]]
-
-  -- validate call to factory and retrieve context
   requireMatchExpected ("admin", expectedAdmin) dso
   requireMatchExpected ("instrumentId", transfer.instrumentId) (amuletInstrumentId dso)
   assertInPast24Hours "transfer.requestedAt" transfer.requestedAt
@@ -147,11 +144,13 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
   request <- parseGovernanceLockRequestTSv1 dso transfer.receiver state.governanceLockConfig transfer.meta
 
   case request of
-    GLR_CreateGovernanceLock{fullSpecification} ->
+    GLR_CreateGovernanceLock{fullSpecification} -> do
+      checkActors actors [[transfer.sender]]
       governanceLock_transferFactoryV1_lockImpl dso arg fullSpecification
     GLR_UnlockGovernanceLock{fullSpecification, unlockAmount, vestingStartTime} ->
-      governanceLock_transferFactoryV1_unlockImpl dso arg fullSpecification unlockAmount vestingStartTime context state
-    GLR_TransferLock{specification,  newOwner, transferAmount} ->
+      governanceLock_transferFactoryV1_unlockImpl dso actors arg fullSpecification unlockAmount vestingStartTime context state
+    GLR_TransferLock{specification,  newOwner, transferAmount} -> do
+      checkActors actors [[transfer.sender]]
       governanceLock_transferFactoryV1_transferLockImpl
         arg
         GovernanceLockKey with
@@ -161,8 +160,9 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
         newOwner
         transferAmount
     GLR_WithdrawVestingLock{vestingSpecification, vestedUntilTime} ->
-      governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso arg vestingSpecification vestedUntilTime context state
-    GLR_SubstituteLock{target} ->
+      governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso actors arg vestingSpecification vestedUntilTime context state
+    GLR_SubstituteLock{target} -> do
+      checkActors actors [[transfer.sender]]
       governanceLock_transferFactoryV1_substituteImpl dso arg target context state
 
 governanceLock_transferFactoryV1_lockImpl
@@ -190,6 +190,7 @@ governanceLock_transferFactoryV1_lockImpl dso V1.TransferFactory_Transfer{transf
 
 governanceLock_transferFactoryV1_unlockImpl
   :  Party
+  -> [Party]
   -> V1.TransferFactory_Transfer
   -> FullLockSpecification
   -> Decimal
@@ -197,7 +198,7 @@ governanceLock_transferFactoryV1_unlockImpl
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{transfer} specification unlockAmount optVestingStartTime context state = do
+governanceLock_transferFactoryV1_unlockImpl dso actors V1.TransferFactory_Transfer{transfer} specification unlockAmount optVestingStartTime context state = do
   let key = GovernanceLockKey with
         dso
         owner = transfer.sender
@@ -208,7 +209,7 @@ governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{tran
     merged
     unlockAmount
     optVestingStartTime
-    actors = [transfer.sender]
+    actors
     context
     state
     reason
@@ -248,13 +249,14 @@ governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{tr
 
 governanceLock_transferFactoryV1_withdrawVestedFundsImpl
   :  Party
+  -> [Party]
   -> V1.TransferFactory_Transfer
   -> VestingLockSpecification
   -> Time
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso V1.TransferFactory_Transfer{..} specification vestedUntilTime context state = do
+governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso actors V1.TransferFactory_Transfer{..} specification vestedUntilTime context state = do
   let key = GovernanceLockKey with
         dso
         owner = transfer.sender
@@ -264,7 +266,7 @@ governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso V1.TransferFactory_
   result <- vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs with
     merged
     vestedUntilTime
-    actors = [transfer.sender]
+    actors
     context
     state
     reason
