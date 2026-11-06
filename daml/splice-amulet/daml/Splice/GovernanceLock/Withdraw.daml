@@ -34,6 +34,102 @@ import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.Types
 import Splice.Util
 
+data WithdrawVestedFundsSpecification = WithdrawVestedFundsSpecification with
+    target : GovernanceLockKey
+    lockedAmount : Decimal
+    -- TODO: add release notes to mention departure from CIP; we're not accepting a vestedUntilTime from each approver
+    vestedUntilTime : Time
+  deriving (Eq, Show, Serializable)
+
+template WithdrawVestedFunds
+  with
+    specification : WithdrawVestedFundsSpecification
+    proposers : [Party]
+    lockedAmulet : ContractId LockedAmulet
+    approvals : Map.Map Party Bool -- ^ Approvals recorded so far.
+    requestedAt : Time -- ^ Time of the request to create the proposal.
+    expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
+    originalProposalCid : Optional (ContractId WithdrawVestedFunds)
+      -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
+  where
+    signatory specification.target.dso, proposers
+    observer specification.target.owner, (Set.fromList $ concat (withdrawVestedFundsControllers specification).controllers)
+    ensure (not $ null proposers) && either error (const True) (requireVestingLock specification.target.specification)
+
+    interface instance V1.TransferInstruction for WithdrawVestedFunds where
+      view = V1.TransferInstructionView with
+        originalInstructionCid = toInterfaceContractId <$> originalProposalCid
+        transfer = V1.Transfer with
+          sender = List.head proposers
+          receiver = lockManagerParty
+          amount = case requireVestingLock @(Either Text) specification.target.specification of
+            Left _ -> 0.0
+            Right v -> fromOptional 0.0 $ calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount v
+          instrumentId = amuletInstrumentId specification.target.dso
+          requestedAt
+          executeBefore = expiresAt
+          inputHoldingCids = [toInterfaceContractId lockedAmulet]
+          meta = withdrawVestedFundsMetadata specification.target.specification
+        status = V1.TransferPendingInternalWorkflow with
+          pendingActions =
+            let pendingControllers = List.dedupSort $ concat (controllersPendingApproval approvals $ withdrawVestedFundsControllers specification).controllers
+                pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
+            in Map.fromListWithR (\x y -> x <> "; " <> y) $
+              fmap (, "accept withdrawal") pendingControllers <>
+              fmap (, "reject withdrawal") pendingControllers <>
+              fmap (, "withdraw withdrawal") pendingProposers
+        meta = emptyMetadata
+
+      transferInstruction_acceptImpl _ _ = fail "Transfers representing withdrawal proposals cannot be accepted through Token Standard v1"
+      transferInstruction_rejectImpl _ _ = fail "Transfers representing withdrawal proposals cannot be rejected through Token Standard v1"
+      transferInstruction_updateImpl _ _ = fail "Transfers representing withdrawal proposals cannot be updated"
+      transferInstruction_withdrawImpl self V1.TransferInstruction_Withdraw{..} =
+        downcast <$> withdrawVestedFunds_withdraw (fromInterfaceContractId self) this proposers extraArgs
+
+    interface instance V2.TransferInstruction for WithdrawVestedFunds where
+      view =
+        let v1View = view @V1.TransferInstruction (toInterface this)
+        in V2.TransferInstructionView with
+          originalInstructionCid = toInterfaceContractId <$> originalProposalCid
+          transfer = upcast v1View.transfer
+          expiresAt = Some expiresAt
+          availableActions =
+            let pendingControllers = (controllersPendingApproval approvals $ withdrawVestedFundsControllers specification).controllers
+                pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
+            in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [pendingProposers])]
+          meta = emptyMetadata
+
+      transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} = do
+        -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
+        -- withdrawVestedFunds_update will create a new proposal when necessary
+        potentiallyUnsafeArchive self
+        withdrawVestedFunds_approve (fromInterfaceContractId self) this actors extraArgs
+
+      transferInstruction_rejectImpl self V2.TransferInstruction_Reject{..} = do
+        -- V2.TransferInstruction_Reject is nonconsuming so we need to archive explicitly here
+        -- withdrawVestedFunds_update will create a new proposal when necessary
+        potentiallyUnsafeArchive self
+        withdrawVestedFunds_reject (fromInterfaceContractId self) this actors extraArgs
+
+      transferInstruction_withdrawImpl self V2.TransferInstruction_Withdraw{..} = do
+        -- V2.TransferInstruction_Withdraw is nonconsuming so we need to archive explicitly here
+        -- withdrawVestedFunds_update will create a new proposal when necessary
+        potentiallyUnsafeArchive self
+        withdrawVestedFunds_withdraw (fromInterfaceContractId self) this actors extraArgs
+
+      transferInstruction_acceptExtraObservers _ = observer this
+      transferInstruction_rejectExtraObservers _ = observer this
+      transferInstruction_withdrawExtraObservers _ = observer this
+
+withdrawVestedFundsControllers : WithdrawVestedFundsSpecification -> ControllersSpecification
+withdrawVestedFundsControllers WithdrawVestedFundsSpecification{target} =
+  makeControllersSpecification $ case requireVestingLock @(Either Text) target.specification of
+    Left _ -> [[target.owner]]
+    Right spec -> optional [[target.owner]] (.controllers) spec.vestingControllers
+
+withdrawVestedFundsMetadata : GovernanceLockSpecification -> Metadata
+withdrawVestedFundsMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-withdraw-vested-funds"
+
 data VestingLock_WithdrawResult
   = VestingLock_WithdrawResult_Pending with
       pendingProposal : ContractId WithdrawVestedFunds
@@ -147,102 +243,6 @@ vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs{..} = do
       pure VestingLock_WithdrawResult_Completed with
         vestingLock
         vested = toInterfaceContractId unlocked
-
-data WithdrawVestedFundsSpecification = WithdrawVestedFundsSpecification with
-    target : GovernanceLockKey
-    lockedAmount : Decimal
-    -- TODO: add release notes to mention departure from CIP; we're not accepting a vestedUntilTime from each approver
-    vestedUntilTime : Time
-  deriving (Eq, Show, Serializable)
-
-withdrawVestedFundsControllers : WithdrawVestedFundsSpecification -> ControllersSpecification
-withdrawVestedFundsControllers WithdrawVestedFundsSpecification{target} =
-  makeControllersSpecification $ case requireVestingLock @(Either Text) target.specification of
-    Left _ -> [[target.owner]]
-    Right spec -> optional [[target.owner]] (.controllers) spec.vestingControllers
-
-template WithdrawVestedFunds
-  with
-    specification : WithdrawVestedFundsSpecification
-    proposers : [Party]
-    lockedAmulet : ContractId LockedAmulet
-    approvals : Map.Map Party Bool -- ^ Approvals recorded so far.
-    requestedAt : Time -- ^ Time of the request to create the proposal.
-    expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
-    originalProposalCid : Optional (ContractId WithdrawVestedFunds)
-      -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
-  where
-    signatory specification.target.dso, proposers
-    observer specification.target.owner, (Set.fromList $ concat (withdrawVestedFundsControllers specification).controllers)
-    ensure (not $ null proposers) && either error (const True) (requireVestingLock specification.target.specification)
-
-    interface instance V1.TransferInstruction for WithdrawVestedFunds where
-      view = V1.TransferInstructionView with
-        originalInstructionCid = toInterfaceContractId <$> originalProposalCid
-        transfer = V1.Transfer with
-          sender = List.head proposers
-          receiver = lockManagerParty
-          amount = case requireVestingLock @(Either Text) specification.target.specification of
-            Left _ -> 0.0
-            Right v -> fromOptional 0.0 $ calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount v
-          instrumentId = amuletInstrumentId specification.target.dso
-          requestedAt
-          executeBefore = expiresAt
-          inputHoldingCids = [toInterfaceContractId lockedAmulet]
-          meta = withdrawVestedFundsMetadata specification.target.specification
-        status = V1.TransferPendingInternalWorkflow with
-          pendingActions =
-            let pendingControllers = List.dedupSort $ concat (controllersPendingApproval approvals $ withdrawVestedFundsControllers specification).controllers
-                pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
-            in Map.fromListWithR (\x y -> x <> "; " <> y) $
-              fmap (, "accept withdrawal") pendingControllers <>
-              fmap (, "reject withdrawal") pendingControllers <>
-              fmap (, "withdraw withdrawal") pendingProposers
-        meta = emptyMetadata
-
-      transferInstruction_acceptImpl _ _ = fail "Transfers representing withdrawal proposals cannot be accepted through Token Standard v1"
-      transferInstruction_rejectImpl _ _ = fail "Transfers representing withdrawal proposals cannot be rejected through Token Standard v1"
-      transferInstruction_updateImpl _ _ = fail "Transfers representing withdrawal proposals cannot be updated"
-      transferInstruction_withdrawImpl self V1.TransferInstruction_Withdraw{..} =
-        downcast <$> withdrawVestedFunds_withdraw (fromInterfaceContractId self) this proposers extraArgs
-
-    interface instance V2.TransferInstruction for WithdrawVestedFunds where
-      view =
-        let v1View = view @V1.TransferInstruction (toInterface this)
-        in V2.TransferInstructionView with
-          originalInstructionCid = toInterfaceContractId <$> originalProposalCid
-          transfer = upcast v1View.transfer
-          expiresAt = Some expiresAt
-          availableActions =
-            let pendingControllers = (controllersPendingApproval approvals $ withdrawVestedFundsControllers specification).controllers
-                pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
-            in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [pendingProposers])]
-          meta = emptyMetadata
-
-      transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} = do
-        -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
-        -- withdrawVestedFunds_update will create a new proposal when necessary
-        potentiallyUnsafeArchive self
-        withdrawVestedFunds_approve (fromInterfaceContractId self) this actors extraArgs
-
-      transferInstruction_rejectImpl self V2.TransferInstruction_Reject{..} = do
-        -- V2.TransferInstruction_Reject is nonconsuming so we need to archive explicitly here
-        -- withdrawVestedFunds_update will create a new proposal when necessary
-        potentiallyUnsafeArchive self
-        withdrawVestedFunds_reject (fromInterfaceContractId self) this actors extraArgs
-
-      transferInstruction_withdrawImpl self V2.TransferInstruction_Withdraw{..} = do
-        -- V2.TransferInstruction_Withdraw is nonconsuming so we need to archive explicitly here
-        -- withdrawVestedFunds_update will create a new proposal when necessary
-        potentiallyUnsafeArchive self
-        withdrawVestedFunds_withdraw (fromInterfaceContractId self) this actors extraArgs
-
-      transferInstruction_acceptExtraObservers _ = observer this
-      transferInstruction_rejectExtraObservers _ = observer this
-      transferInstruction_withdrawExtraObservers _ = observer this
-
-withdrawVestedFundsMetadata : GovernanceLockSpecification -> Metadata
-withdrawVestedFundsMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-withdraw-vested-funds"
 
 data WithdrawVestedFundsUpdateArgs = WithdrawVestedFundsUpdateArgs with
   proposalCid : Optional (ContractId WithdrawVestedFunds)
