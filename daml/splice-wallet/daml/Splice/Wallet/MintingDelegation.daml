@@ -7,6 +7,9 @@ import DA.Assert
 import Splice.Amulet (RewardCouponV2(..))
 import Splice.AmuletRules
 import Splice.Api.RewardAssignmentV1 qualified as Api.RewardAssignmentV1
+import Splice.Api.Token.MetadataV1 (ExtraArgs)
+import Splice.ExternalPartyAmuletRules (ExternalPartyAmuletRules(..), ExternalPartyAmuletRules_MintSvRewardsIntoLock(..), ExternalPartyAmuletRules_MintSvRewardsIntoLockResult)
+import Splice.GovernanceLock (FullLockSpecification, SvRewardCouponTopUpArgs)
 import Splice.Types (ForOwner(..))
 import Splice.Util
 
@@ -119,6 +122,31 @@ template MintingDelegation
           assignResult
           transferResult
 
+    nonconsuming choice MintingDelegation_TopUpGovernanceLock : MintingDelegation_TopUpGovernanceLockResult
+      with
+        topUpArgs : SvRewardCouponTopUpArgs
+          -- ^ SV rewards used to top up the lock.
+        requestedAt : Time
+          -- ^ Time of the request to top up the lock.
+        externalPartyAmuletRulesCid : ContractId ExternalPartyAmuletRules
+        specification : FullLockSpecification
+          -- ^ Specification of the SV lock to mint into.
+        extraArgs : ExtraArgs
+      controller delegate
+      do
+        assertWithinDeadline "expiresAt" expiresAt
+
+        result <- exercise externalPartyAmuletRulesCid ExternalPartyAmuletRules_MintSvRewardsIntoLock with
+          owner = beneficiary
+          specification
+          topUpArgs
+          requestedAt
+          expectedDso = Some dso
+          extraArgs
+
+        pure MintingDelegation_TopUpGovernanceLockResult with
+          result
+
     choice MintingDelegation_Reject : MintingDelegation_RejectResult
       controller delegate
       do pure MintingDelegation_RejectResult {}
@@ -154,6 +182,11 @@ data MintingDelegation_AssignAndMintResult = MintingDelegation_AssignAndMintResu
     assignResult : Api.RewardAssignmentV1.RewardCoupon_AssignBeneficiariesResult
     transferResult : TransferResult
   deriving (Show, Eq, Serializable)
+
+data MintingDelegation_TopUpGovernanceLockResult = MintingDelegation_TopUpGovernanceLockResult
+  with
+    result : ExternalPartyAmuletRules_MintSvRewardsIntoLockResult
+  deriving (Serializable)
 
 instance HasCheckedFetch MintingDelegation ForOwner where
   contractGroupId MintingDelegation{beneficiary, dso} = ForOwner with owner = beneficiary; dso
