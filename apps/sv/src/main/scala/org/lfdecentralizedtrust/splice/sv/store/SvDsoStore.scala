@@ -1107,6 +1107,22 @@ trait SvDsoStore
     splice.dso.instruction.FeaturedAppUnderlockInstruction,
   ]]]
 
+  /** List the featured app providers whose underlock status differs from the one on their `FeaturedAppRight`.
+    *
+    * A provider is underlocked if enforcement is enabled and its full featured app locks sum to less than
+    * the threshold of its app kind. A provider with several rights, which `DsoRules_MergeFeaturedAppRights`
+    * eventually merges, is recorded as underlocked if any right is, and must meet the highest threshold of
+    * their app kinds. Providers with a `FeaturedAppUnderlockInstruction` awaiting execution are skipped, as
+    * executing it updates their right.
+    *
+    * @param provider only consider this provider, used to recheck a single provider's status
+    */
+  def listFeaturedAppUnderlockStatusChanges(
+      config: FeaturedAppUnderlockConfig,
+      provider: Option[PartyId] = None,
+      limit: Limit = defaultLimit,
+  )(implicit tc: TraceContext): Future[Seq[FeaturedAppUnderlockStatus]]
+
   def lookupFeaturedAppRight(
       providerPartyId: PartyId
   )(implicit
@@ -1855,3 +1871,47 @@ case class ExpiredRewardCouponsBatch(
 }
 
 case class AppRewardCouponsSum(featured: BigDecimal, unfeatured: BigDecimal)
+
+/** The featured app underlock settings of a `GovernanceLockManagementConfig`, with the defaults of
+  * `Splice.DSO.GovernanceLockManagement` applied.
+  */
+final case class FeaturedAppUnderlockConfig(
+    enforcementEnabled: Boolean,
+    basicLockThreshold: BigDecimal,
+    assetMovingLockThreshold: BigDecimal,
+    assetLockThreshold: BigDecimal,
+)
+
+object FeaturedAppUnderlockConfig {
+  // The Daml code documents these defaults but has no functions for them.
+  val defaultBasicLockThreshold: BigDecimal = BigDecimal(5_000_000)
+  val defaultAssetMovingLockThreshold: BigDecimal = BigDecimal(5_000_000)
+  val defaultAssetLockThreshold: BigDecimal = BigDecimal(25_000_000)
+
+  def fromDsoRulesConfig(config: splice.dsorules.DsoRulesConfig): FeaturedAppUnderlockConfig = {
+    val lockConfig = config.governanceLockManagementConfig.toScala
+    def threshold(
+        get: splice.dso.governancelockmanagement.GovernanceLockManagementConfig => java.util.Optional[
+          java.math.BigDecimal
+        ],
+        default: BigDecimal,
+    ): BigDecimal =
+      lockConfig.flatMap(get(_).toScala).fold(default)(BigDecimal(_))
+    FeaturedAppUnderlockConfig(
+      enforcementEnabled = lockConfig
+        .flatMap(_.featuredAppUnderlockEnforcementEnabled.toScala)
+        .exists(_.booleanValue),
+      basicLockThreshold = threshold(_.featuredAppBasicLockThreshold, defaultBasicLockThreshold),
+      assetMovingLockThreshold =
+        threshold(_.featuredAppAssetMovingLockThreshold, defaultAssetMovingLockThreshold),
+      assetLockThreshold = threshold(_.featuredAppAssetLockThreshold, defaultAssetLockThreshold),
+    )
+  }
+}
+
+/** A featured app provider whose computed underlock status differs from the one on its `FeaturedAppRight`. */
+final case class FeaturedAppUnderlockStatus(provider: PartyId, underlocked: Boolean)
+    extends PrettyPrinting {
+  override def pretty: Pretty[this.type] =
+    prettyOfClass(param("provider", _.provider), param("underlocked", _.underlocked))
+}

@@ -735,6 +735,16 @@ class SvDsoAutomationService(
       connection(SpliceLedgerConnectionPriority.Low),
     )
   )
+
+  registerTrigger(
+    new FeaturedAppUnderlockStatusUpdateTrigger(
+      triggerContext,
+      config.featuredAppUnderlockStatusUpdateInterval,
+      dsoStore,
+      connection(SpliceLedgerConnectionPriority.Low),
+      packageVersionSupport,
+    )
+  )
 }
 
 object SvDsoAutomationService extends AutomationServiceCompanion {
@@ -791,6 +801,7 @@ object SvDsoAutomationService extends AutomationServiceCompanion {
       aTrigger[VoteRequestMetricsTrigger],
       aTrigger[RewardMetricsTrigger],
       aTrigger[CreateBootstrapExternalPartyConfigStateInstructionTrigger],
+      aTrigger[FeaturedAppUnderlockStatusUpdateTrigger],
       aTrigger[LsuTrigger],
       aTrigger[LsuAnnouncementTrigger],
       aTrigger[LsuTransferTrafficTrigger],

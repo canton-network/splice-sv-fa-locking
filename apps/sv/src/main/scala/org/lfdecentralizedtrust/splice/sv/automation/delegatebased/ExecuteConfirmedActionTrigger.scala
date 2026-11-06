@@ -38,6 +38,10 @@ import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.amuletrules_
 import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.dsorules_actionrequiringconfirmation.*
 import org.lfdecentralizedtrust.splice.config.Thresholds
 import org.lfdecentralizedtrust.splice.sv.SvApp.{isDevNet, isSvName, isSvParty}
+import org.lfdecentralizedtrust.splice.sv.store.{
+  FeaturedAppUnderlockConfig,
+  FeaturedAppUnderlockStatus,
+}
 import org.lfdecentralizedtrust.splice.util.AssignedContract
 import org.lfdecentralizedtrust.splice.util.PrettyInstances.*
 import com.digitalasset.canton.topology.PartyId
@@ -258,6 +262,20 @@ class ExecuteConfirmedActionTrigger(
               instructionO <- store.lookupBootstrapExternalPartyConfigStateInstruction()
               configStateExists <- store.existsExternalPartyConfigStateWithOffset()
             } yield instructionO.isDefined || configStateExists.value
+          case action: SRARC_CreateFeaturedAppUnderlockInstruction =>
+            val status = FeaturedAppUnderlockStatus(
+              PartyId.tryFromProtoPrimitive(
+                action.dsoRules_CreateFeaturedAppUnderlockInstructionValue.provider
+              ),
+              action.dsoRules_CreateFeaturedAppUnderlockInstructionValue.underlocked,
+            )
+            for {
+              dsoRules <- store.getDsoRules()
+              statusChanges <- store.listFeaturedAppUnderlockStatusChanges(
+                FeaturedAppUnderlockConfig.fromDsoRulesConfig(dsoRules.payload.config),
+                Some(status.provider),
+              )
+            } yield !statusChanges.contains(status)
           case action =>
             throw new UnsupportedOperationException(
               show"DsoRules $action is not yet supported"

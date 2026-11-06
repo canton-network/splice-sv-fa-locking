@@ -834,14 +834,16 @@ abstract class StoreTestBase
       providerParty: PartyId,
       contractId: String = nextCid(),
       activityWeight: Option[BigDecimal] = None,
+      appKind: Option[amuletCodegen.FeaturedAppKind] = None,
+      underlockPermanentAt: Option[Instant] = None,
   ) = {
     val template = new FeaturedAppRight(
       dsoParty.toProtoPrimitive,
       providerParty.toProtoPrimitive,
       activityWeight.map(_.bigDecimal).toJava,
+      appKind.toJava,
       Optional.empty(),
-      Optional.empty(),
-      Optional.empty(),
+      underlockPermanentAt.toJava,
     )
     contract(
       FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID,
