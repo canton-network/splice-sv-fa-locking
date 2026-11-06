@@ -479,6 +479,8 @@ case class SvAppBackendConfig(
     onLedgerStatusReportInterval: NonNegativeFiniteDuration =
       NonNegativeFiniteDuration.ofMinutes(2),
     lsuSequencingTestInterval: NonNegativeFiniteDuration = NonNegativeFiniteDuration.ofSeconds(30),
+    featuredAppUnderlockStatusUpdateInterval: NonNegativeFiniteDuration =
+      NonNegativeFiniteDuration.ofMinutes(1),
     parameters: SpliceParametersConfig = SpliceParametersConfig(batching = BatchingConfig()),
     extraBeneficiaries: Seq[BeneficiaryConfig] = Seq.empty,
     enableOnboardingParticipantPromotionDelay: Boolean = true,
