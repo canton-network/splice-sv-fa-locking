@@ -10,20 +10,18 @@ module Splice.GovernanceLock.Transfer (
   -- * State and operations
   governanceLockTransferMetadata,
   GovernanceLock_TransferResult(..),
-  governanceLock_transferResult_transferInstructionResult,
   GovernanceLockProposeTransferArgs(..),
   governanceLock_proposeTransfer,
+  governanceLockTransfer_operations,
 ) where
 
 import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
-import DA.List qualified as List
 import DA.Map qualified as Map
 import DA.Optional
 import DA.Set qualified as Set
 import DA.Time
 
 import Splice.Amulet
-import Splice.Amulet.TokenApiUtils
 import Splice.AmuletConfig (getTokenStandardMaxTTL)
 import Splice.AmuletRules
 import Splice.Api.Token.MetadataV1
@@ -32,6 +30,7 @@ import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal
 import Splice.TokenStandard.Utils
 import Splice.Types
 import Splice.Util
@@ -55,74 +54,22 @@ template GovernanceLockTransfer with
     signatory source.dso, source.owner,
               -- Make the receiver a signatory once they've approved the transfer
               -- This is necessary for `governanceLock_executeTransfer` to have the authority of the receiver when locking amulet
-              optional [] (const [receiver]) (guard (Map.lookup receiver (governanceLockTransferApprovals this) == Some True))
+              optional [] (const [receiver]) (guard (Map.lookup receiver (fromOptional Map.empty approvals) == Some True))
     observer receiver, (Set.fromList $ concat (governanceLockTransferControllers this).controllers)
     ensure governanceLockTransferIsValid this
 
     interface instance V1.TransferInstruction for GovernanceLockTransfer where
-      view = V1.TransferInstructionView with
-        originalInstructionCid = toInterfaceContractId <$> originalProposalCid
-        transfer = V1.Transfer with
-          sender = source.owner
-          receiver
-          amount
-          instrumentId = amuletInstrumentId source.dso
-          requestedAt
-          executeBefore = expiresAt
-          inputHoldingCids = []
-          meta = governanceLockTransferMetadata source.specification
-        status = V1.TransferPendingInternalWorkflow with
-          pendingActions =
-            let (controllers, reqApprovals) = governanceLockTransferData this
-                pendingControllers = List.dedupSort $ concat (controllersPendingApproval reqApprovals controllers).controllers
-            in Map.fromListWithR (\x y -> x <> "; " <> y) $
-              fmap (, "accept transfer") pendingControllers <>
-              fmap (, "reject transfer") pendingControllers <>
-              fmap (, "withdraw transfer") [source.owner]
-        meta = emptyMetadata
-
-      transferInstruction_acceptImpl self V1.TransferInstruction_Accept{..} = do
-        downcast <$> governanceLockTransfer_accept (fromInterfaceContractId self) this [receiver] extraArgs
-
-      transferInstruction_rejectImpl self V1.TransferInstruction_Reject{..} = do
-        downcast <$> governanceLockTransfer_reject (fromInterfaceContractId self) this [receiver] extraArgs
-
-      transferInstruction_withdrawImpl self V1.TransferInstruction_Withdraw{..} = do
-        downcast <$> governanceLockTransfer_withdraw (fromInterfaceContractId self) this [source.owner] extraArgs
-
+      view = proposal_transferInstructionViewV1 "transfer" receiver $ governanceLockTransfer_proposalView this
+      transferInstruction_acceptImpl = proposal_transferInstructionV1_acceptImpl governanceLockTransfer_operations this [receiver]
+      transferInstruction_rejectImpl = proposal_transferInstructionV1_rejectImpl governanceLockTransfer_operations this [receiver]
+      transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl governanceLockTransfer_operations this [source.owner]
       transferInstruction_updateImpl _ _ = fail "Transfers representing governance lock transfers cannot be updated"
 
     interface instance V2.TransferInstruction for GovernanceLockTransfer where
-      view =
-        let v1View = view @V1.TransferInstruction (toInterface this)
-        in V2.TransferInstructionView with
-          originalInstructionCid = toInterfaceContractId <$> originalProposalCid
-          transfer = upcast v1View.transfer
-          expiresAt = Some expiresAt
-          availableActions =
-            let (controllers, reqApprovals) = governanceLockTransferData this
-                pendingControllers = (controllersPendingApproval reqApprovals controllers).controllers
-            in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [[source.owner]])]
-          meta = emptyMetadata
-
-      transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} = do
-        -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
-        -- governanceLockTransfer_update creates a new proposal when necessary
-        potentiallyUnsafeArchive self
-        governanceLockTransfer_accept (fromInterfaceContractId self) this actors extraArgs
-
-      transferInstruction_rejectImpl self V2.TransferInstruction_Reject{..} = do
-        -- V2.TransferInstruction_Reject is nonconsuming so we need to archive explicitly here
-        -- governanceLockTransfer_update creates a new proposal when necessary
-        potentiallyUnsafeArchive self
-        governanceLockTransfer_reject (fromInterfaceContractId self) this actors extraArgs
-
-      transferInstruction_withdrawImpl self V2.TransferInstruction_Withdraw{..} = do
-        -- V2.TransferInstruction_Withdraw is nonconsuming so we need to archive explicitly here
-        -- governanceLockTransfer_update creates a new proposal when necessary
-        potentiallyUnsafeArchive self
-        governanceLockTransfer_withdraw (fromInterfaceContractId self) this actors extraArgs
-
+      view = proposal_transferInstructionViewV2 $ governanceLockTransfer_proposalView this
+      transferInstruction_acceptImpl = proposal_transferInstructionV2_acceptImpl governanceLockTransfer_operations this
+      transferInstruction_rejectImpl = proposal_transferInstructionV2_rejectImpl governanceLockTransfer_operations this
+      transferInstruction_withdrawImpl = proposal_transferInstructionV2_withdrawImpl governanceLockTransfer_operations this
       transferInstruction_acceptExtraObservers _ = observer this
       transferInstruction_rejectExtraObservers _ = observer this
       transferInstruction_withdrawExtraObservers _ = observer this
@@ -148,6 +95,20 @@ governanceLockTransferIsValid GovernanceLockTransfer{..} =
         GLS_VestingLock v -> expiresAt <= v.endTime
   in amount > 0.0 && receiver /= source.owner && validEndTime
 
+governanceLockTransfer_proposalView : GovernanceLockTransfer -> ProposalView GovernanceLockTransfer
+governanceLockTransfer_proposalView proposal@GovernanceLockTransfer{..} = ProposalView with
+  proposal
+  lockKey = source
+  proposers = [source.owner]
+  controllers = governanceLockTransferControllers proposal
+  approvals = fromOptional Map.empty approvals
+  amount
+  lockedAmulet = None -- TODO: should this have the source lock's lockedAmulet?
+  requestedAt
+  expiresAt
+  originalProposalCid
+  meta = governanceLockTransferMetadata source.specification
+
 governanceLockTransferControllers : GovernanceLockTransfer -> ControllersSpecification
 governanceLockTransferControllers GovernanceLockTransfer{source, receiver} =
   let optControllers = case source.specification of
@@ -156,35 +117,23 @@ governanceLockTransferControllers GovernanceLockTransfer{source, receiver} =
       controllerSets = optional [[]] (.controllers) optControllers
   in makeControllersSpecification $ fmap (\s -> source.owner :: receiver :: s) controllerSets
 
-governanceLockTransferApprovals : GovernanceLockTransfer -> Map.Map Party Bool
-governanceLockTransferApprovals GovernanceLockTransfer{approvals} = fromOptional Map.empty approvals
-
-governanceLockTransferData : GovernanceLockTransfer -> (ControllersSpecification, Map.Map Party Bool)
-governanceLockTransferData proposal = (governanceLockTransferControllers proposal, governanceLockTransferApprovals proposal)
-
 governanceLockTransferMetadata : GovernanceLockSpecification -> Metadata
 governanceLockTransferMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-transfer-lock"
 
-data GovernanceLock_TransferResult
-  = GovernanceLock_TransferResult_Pending with
-      pendingProposalCid : ContractId GovernanceLockTransfer
-      pendingProposal : GovernanceLockTransfer
-  | GovernanceLock_TransferResult_Completed with
-      lockCid : ContractId GovernanceLock
-        -- ^ The new lock of the receiver, which holds the transferred funds.
-      remainingLockCid : Optional (ContractId GovernanceLock)
-        -- ^ The lock of the sender that keeps the funds that were not transferred, if any.
-      lockedAmulet : ContractId LockedAmulet
-        -- ^ The transferred funds, now locked for the owner of the new lock.
+data GovernanceLock_TransferResult_Completed = GovernanceLock_TransferResult_Completed with
+  lockCid : ContractId GovernanceLock
+    -- ^ The new lock of the receiver, which holds the transferred funds.
+  remainingLockCid : Optional (ContractId GovernanceLock)
+    -- ^ The lock of the sender that keeps the funds that were not transferred, if any.
+  lockedAmulet : ContractId LockedAmulet
+    -- ^ The transferred funds, now locked for the owner of the new lock.
 
-governanceLock_transferResult_transferInstructionResult : GovernanceLock_TransferResult -> V2.TransferInstructionResult
-governanceLock_transferResult_transferInstructionResult result =
+type GovernanceLock_TransferResult = ProposalUpdateResult GovernanceLockTransfer GovernanceLock_TransferResult_Completed
+
+governanceLock_transferResult_completed_transferInstructionResult : GovernanceLock_TransferResult_Completed -> V2.TransferInstructionResult
+governanceLock_transferResult_completed_transferInstructionResult GovernanceLock_TransferResult_Completed{..} =
   V2.TransferInstructionResult with
-    output = case result of
-      GovernanceLock_TransferResult_Pending{..} ->
-        V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId pendingProposalCid
-      GovernanceLock_TransferResult_Completed{} ->
-        V2.TransferInstructionResult_Completed with receiverHoldingCids = []
+    output = V2.TransferInstructionResult_Completed with receiverHoldingCids = []
     senderChangeCids = []
     meta = emptyMetadata
 
@@ -214,39 +163,22 @@ governanceLock_proposeTransfer GovernanceLockProposeTransferArgs{..} = do
     GLS_FullLock _ -> pure ()
     GLS_VestingLock VestingLockSpecification{endTime} -> require' ("expiresAt", expiresAt) isLessOrEqualR ("vesting endTime", endTime)
 
-  let proposal = GovernanceLockTransfer with
-        source
-        receiver
-        amount
-        approvals = Some emptyApprovals
-        requestedAt
-        expiresAt
-        originalProposalCid = None
-      updateArgs = GovernanceLockTransferUpdateArgs with
-        proposalCid = None
-        proposal
-        actors = [source.owner]
-        reason
-        getContext = pure (context, state)
+  proposal_create governanceLockTransfer_operations ProposalUpdateArgs with
+    proposalCid = None
+    proposal = governanceLockTransfer_proposalView GovernanceLockTransfer with
+      source
+      receiver
+      amount
+      approvals = Some emptyApprovals
+      requestedAt
+      expiresAt
+      originalProposalCid = None
+    actors = [source.owner]
+    reason
+    getContext = pure (context, state)
 
-  -- A rejected proposal is unexpected here
-  --
-  -- The proposal should either be accepted, if `actors` is a superset of one of the controller sets,
-  -- or pending, if `actors` is a subset of one of the controller sets.
-  --
-  -- A rejected proposal means that `actors` is not in any of the controller sets, which we assert against above
-  governanceLockTransfer_update' identity (\rejectors -> fail ("Unexpected proposal rejection by rejectors: " <> show rejectors)) updateArgs True
-
-data GovernanceLockExecuteTransferArgs = GovernanceLockExecuteTransferArgs with
-  merged : FetchAndMergeLocksResult
-  proposalCid : Optional (ContractId GovernanceLockTransfer)
-  proposal : GovernanceLockTransfer
-  context : ExternalPartyTransferContext
-  state : ExternalPartyConfigState
-  reason : Text
-
-governanceLock_executeTransfer : GovernanceLockExecuteTransferArgs -> Update GovernanceLock_TransferResult
-governanceLock_executeTransfer GovernanceLockExecuteTransferArgs{..} = do
+governanceLock_executeTransfer : ProposalExecuteArgs GovernanceLockTransfer -> Update GovernanceLock_TransferResult
+governanceLock_executeTransfer ProposalExecuteArgs{..} = do
   assertWithinDeadline "expiresAt" proposal.expiresAt
   let lock = merged.lock
       reason = reasonFromMeta $ governanceLockTransferMetadata lock.specification
@@ -268,82 +200,19 @@ governanceLock_executeTransfer GovernanceLockExecuteTransferArgs{..} = do
     specification = lock.specification
     originalLockCid = toAnyContractId <$> proposalCid
     requestedAt = proposal.requestedAt
-  pure GovernanceLock_TransferResult_Completed with
+  pure $ Right GovernanceLock_TransferResult_Completed with
     lockCid = newLockCid
     remainingLockCid = result.remainingLockCid
     lockedAmulet = newLockedAmulet
 
-data GovernanceLockTransferUpdateArgs = GovernanceLockTransferUpdateArgs with
-  proposalCid : Optional (ContractId GovernanceLockTransfer)
-  proposal : GovernanceLockTransfer
-  actors : [Party]
-  reason : Text
-  getContext : Update (ExternalPartyTransferContext, ExternalPartyConfigState)
-
-makeGovernanceLockTransferUpdateArgs : ContractId GovernanceLockTransfer -> GovernanceLockTransfer -> [Party] -> ExtraArgs -> GovernanceLockTransferUpdateArgs
-makeGovernanceLockTransferUpdateArgs proposalCid proposal@GovernanceLockTransfer{..} actors extraArgs =
-  GovernanceLockTransferUpdateArgs with
-    proposalCid = Some proposalCid
-    proposal
-    actors
-    reason = reasonFromMeta $ governanceLockTransferMetadata source.specification
-    getContext = unfeaturedPaymentContextAndConfigFromChoiceContext source.dso extraArgs.context
-
-governanceLockTransfer_update'
-  :  (GovernanceLock_TransferResult -> a)
-  -> ([Party] -> Update a)
-  -> GovernanceLockTransferUpdateArgs
-  -> Bool
-  -> Update a
-governanceLockTransfer_update' onPendingOrAccepted onRejected GovernanceLockTransferUpdateArgs{..} approved = do
-  let (controllers, approvals) = governanceLockTransferData proposal
-  result <- updateProposalApprovals controllers [proposal.source.owner] approved actors approvals
-  case result of
-    PAR_Pending{pendingApprovals} -> do
-      let updatedProposal = proposal with
-            approvals = Some pendingApprovals
-            originalProposalCid = optional proposalCid Some proposal.originalProposalCid
-      updatedProposalCid <- create updatedProposal
-      pure $ onPendingOrAccepted GovernanceLock_TransferResult_Pending with
-        pendingProposalCid = updatedProposalCid
-        pendingProposal = updatedProposal
-
-    PAR_Accepted{} -> do
-      (context, state) <- getContext
-      merged <- fetchAndMergeGovernanceLocks proposal.source context state reason
-      onPendingOrAccepted <$> governanceLock_executeTransfer GovernanceLockExecuteTransferArgs with
-        merged
-        proposalCid
-        proposal
-        context
-        state
-        reason
-
-    PAR_Rejected{rejectors} -> onRejected rejectors
-
-governanceLockTransfer_update : GovernanceLockTransferUpdateArgs -> Bool -> Update V2.TransferInstructionResult
-governanceLockTransfer_update =
-  governanceLockTransfer_update' governanceLock_transferResult_transferInstructionResult \_ -> pure V2.TransferInstructionResult with
-    output = V2.TransferInstructionResult_Failed
-    senderChangeCids = []
-    meta = emptyMetadata
-
-governanceLockTransfer_accept : ContractId GovernanceLockTransfer -> GovernanceLockTransfer -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
-governanceLockTransfer_accept proposalCid proposal actors extraArgs = do
-  let (controllers, approvals) = governanceLockTransferData proposal
-  checkPendingControllers controllers actors approvals
-  governanceLockTransfer_update (makeGovernanceLockTransferUpdateArgs proposalCid proposal actors extraArgs) True
-
-governanceLockTransfer_reject : ContractId GovernanceLockTransfer -> GovernanceLockTransfer -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
-governanceLockTransfer_reject proposalCid proposal actors extraArgs = do
-  let (controllers, approvals) = governanceLockTransferData proposal
-  checkPendingControllers controllers actors approvals
-  governanceLockTransfer_update (makeGovernanceLockTransferUpdateArgs proposalCid proposal actors extraArgs) False
-
-governanceLockTransfer_withdraw : ContractId GovernanceLockTransfer -> GovernanceLockTransfer -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
-governanceLockTransfer_withdraw proposalCid proposal actors extraArgs = do
-  checkActors actors [[proposal.source.owner]]
-  governanceLockTransfer_update (makeGovernanceLockTransferUpdateArgs proposalCid proposal actors extraArgs) False
+governanceLockTransfer_operations : ProposalOperations GovernanceLockTransfer GovernanceLock_TransferResult_Completed
+governanceLockTransfer_operations = ProposalOperations with
+  makeView = governanceLockTransfer_proposalView
+  recreate = \approvals originalProposalCid proposal ->
+    let updatedProposal = proposal with approvals = Some approvals; originalProposalCid
+    in (, updatedProposal) <$> create updatedProposal
+  execute = governanceLock_executeTransfer
+  completedResult = governanceLock_transferResult_completed_transferInstructionResult
 
 -- Instances
 ------------

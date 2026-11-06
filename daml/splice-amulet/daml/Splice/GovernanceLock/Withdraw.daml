@@ -9,9 +9,9 @@ module Splice.GovernanceLock.Withdraw (
 
   -- * State and operations
   VestingLock_WithdrawResult(..),
-  vestingLock_withdrawResult_transferInstructionResult,
   VestingLockProposeWithdrawArgs(..),
   vestingLock_proposeWithdraw,
+  withdrawVestedFunds_operations,
   calculateUnvestedAmount,
 ) where
 
@@ -25,7 +25,6 @@ import DA.Time
 import DA.Traversable (forA)
 
 import Splice.Amulet
-import Splice.Amulet.TokenApiUtils
 import Splice.AmuletConfig (getTokenStandardMaxTTL)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
@@ -36,6 +35,7 @@ import Splice.ExternalPartyConfigState
 import Splice.Fees (relTimeToSeconds)
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal
 import Splice.TokenStandard.Utils
 import Splice.Types
 import Splice.Util
@@ -70,72 +70,39 @@ template WithdrawVestedFunds
         pure WithdrawVestedFunds_DsoExpireResult
 
     interface instance V1.TransferInstruction for WithdrawVestedFunds where
-      view = V1.TransferInstructionView with
-        originalInstructionCid = toInterfaceContractId <$> originalProposalCid
-        transfer = V1.Transfer with
-          sender = List.head proposers
-          receiver = lockManagerParty
-          amount = case requireVestingLock @(Either Text) specification.target.specification of
-            Left _ -> 0.0
-            Right v -> fromOptional 0.0 $ calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount v
-          instrumentId = amuletInstrumentId specification.target.dso
-          requestedAt
-          executeBefore = expiresAt
-          inputHoldingCids = [toInterfaceContractId lockedAmulet]
-          meta = withdrawVestedFundsMetadata specification.target.specification
-        status = V1.TransferPendingInternalWorkflow with
-          pendingActions =
-            let pendingControllers = List.dedupSort $ concat (controllersPendingApproval approvals $ withdrawVestedFundsControllers specification).controllers
-                pendingProposers = concat $ proposersPendingWithdrawal approvals proposers
-            in Map.fromListWithR (\x y -> x <> "; " <> y) $
-              fmap (, "accept withdrawal") pendingControllers <>
-              fmap (, "reject withdrawal") pendingControllers <>
-              fmap (, "withdraw withdrawal") pendingProposers
-        meta = emptyMetadata
-
+      view = proposal_transferInstructionViewV1 "withdrawal" lockManagerParty $ withdrawVestedFunds_proposalView this
       transferInstruction_acceptImpl _ _ = fail "Transfers representing withdrawal proposals cannot be accepted through Token Standard v1"
       transferInstruction_rejectImpl _ _ = fail "Transfers representing withdrawal proposals cannot be rejected through Token Standard v1"
       transferInstruction_updateImpl _ _ = fail "Transfers representing withdrawal proposals cannot be updated"
-      transferInstruction_withdrawImpl self V1.TransferInstruction_Withdraw{..} =
-        downcast <$> withdrawVestedFunds_withdraw (fromInterfaceContractId self) this proposers extraArgs
+      transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl withdrawVestedFunds_operations this proposers
 
     interface instance V2.TransferInstruction for WithdrawVestedFunds where
-      view =
-        let v1View = view @V1.TransferInstruction (toInterface this)
-        in V2.TransferInstructionView with
-          originalInstructionCid = toInterfaceContractId <$> originalProposalCid
-          transfer = upcast v1View.transfer
-          expiresAt = Some expiresAt
-          availableActions =
-            let pendingControllers = (controllersPendingApproval approvals $ withdrawVestedFundsControllers specification).controllers
-                pendingProposers = proposersPendingWithdrawal approvals proposers
-            in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, pendingProposers)]
-          meta = emptyMetadata
-
-      transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} = do
-        -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
-        -- withdrawVestedFunds_update creates a new proposal when necessary
-        potentiallyUnsafeArchive self
-        withdrawVestedFunds_accept (fromInterfaceContractId self) this actors extraArgs
-
-      transferInstruction_rejectImpl self V2.TransferInstruction_Reject{..} = do
-        -- V2.TransferInstruction_Reject is nonconsuming so we need to archive explicitly here
-        -- withdrawVestedFunds_update creates a new proposal when necessary
-        potentiallyUnsafeArchive self
-        withdrawVestedFunds_reject (fromInterfaceContractId self) this actors extraArgs
-
-      transferInstruction_withdrawImpl self V2.TransferInstruction_Withdraw{..} = do
-        -- V2.TransferInstruction_Withdraw is nonconsuming so we need to archive explicitly here
-        -- withdrawVestedFunds_update creates a new proposal when necessary
-        potentiallyUnsafeArchive self
-        withdrawVestedFunds_withdraw (fromInterfaceContractId self) this actors extraArgs
-
+      view = proposal_transferInstructionViewV2 $ withdrawVestedFunds_proposalView this
+      transferInstruction_acceptImpl = proposal_transferInstructionV2_acceptImpl withdrawVestedFunds_operations this
+      transferInstruction_rejectImpl = proposal_transferInstructionV2_rejectImpl withdrawVestedFunds_operations this
+      transferInstruction_withdrawImpl = proposal_transferInstructionV2_withdrawImpl withdrawVestedFunds_operations this
       transferInstruction_acceptExtraObservers _ = observer this
       transferInstruction_rejectExtraObservers _ = observer this
       transferInstruction_withdrawExtraObservers _ = observer this
 
 data WithdrawVestedFunds_DsoExpireResult = WithdrawVestedFunds_DsoExpireResult {}
   deriving (Serializable)
+
+withdrawVestedFunds_proposalView : WithdrawVestedFunds -> ProposalView WithdrawVestedFunds
+withdrawVestedFunds_proposalView proposal@WithdrawVestedFunds{..} = ProposalView with
+  proposal
+  lockKey = specification.target
+  proposers
+  controllers = withdrawVestedFundsControllers specification
+  approvals
+  amount = case requireVestingLock @(Either Text) specification.target.specification of
+    Left _ -> 0.0
+    Right v -> fromOptional 0.0 $ calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount v
+  lockedAmulet = Some lockedAmulet
+  requestedAt
+  expiresAt
+  originalProposalCid
+  meta = withdrawVestedFundsMetadata specification.target.specification
 
 withdrawVestedFundsControllers : WithdrawVestedFundsSpecification -> ControllersSpecification
 withdrawVestedFundsControllers WithdrawVestedFundsSpecification{target} =
@@ -146,29 +113,22 @@ withdrawVestedFundsControllers WithdrawVestedFundsSpecification{target} =
 withdrawVestedFundsMetadata : GovernanceLockSpecification -> Metadata
 withdrawVestedFundsMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-withdraw-vested-funds"
 
-data VestingLock_WithdrawResult
-  = VestingLock_WithdrawResult_Pending with
-      pendingProposal : ContractId WithdrawVestedFunds
-  | VestingLock_WithdrawResult_Completed with
-      vestingLock : Optional (ContractId GovernanceLock)
-        -- ^ Contract ID of the continuing vesting lock with remaining funds.
-      vested : ContractId Holding
-        -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
+data VestingLock_WithdrawResult_Completed = VestingLock_WithdrawResult_Completed with
+  vestingLock : Optional (ContractId GovernanceLock)
+    -- ^ Contract ID of the continuing vesting lock with remaining funds.
+  vested : ContractId Holding
+    -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
 
-vestingLock_withdrawResult_transferInstructionResult : VestingLock_WithdrawResult -> V2.TransferInstructionResult
-vestingLock_withdrawResult_transferInstructionResult result =
-  let
-    (senderChangeCids, output) = case result of
-      VestingLock_WithdrawResult_Pending{..} ->
-        ([], V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId pendingProposal)
-      VestingLock_WithdrawResult_Completed{..} ->
-        (
-          [upcast vested],
-          case vestingLock of
-            Some v -> V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId v
-            None -> V2.TransferInstructionResult_Completed with receiverHoldingCids = []
-        )
-  in V2.TransferInstructionResult with output; senderChangeCids; meta = emptyMetadata
+type VestingLock_WithdrawResult = ProposalUpdateResult WithdrawVestedFunds VestingLock_WithdrawResult_Completed
+
+vestingLock_withdrawResult_completed_transferInstructionResult : VestingLock_WithdrawResult_Completed -> V2.TransferInstructionResult
+vestingLock_withdrawResult_completed_transferInstructionResult VestingLock_WithdrawResult_Completed{..} =
+  V2.TransferInstructionResult with
+    output = case vestingLock of
+      Some v -> V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId v
+      None -> V2.TransferInstructionResult_Completed with receiverHoldingCids = []
+    senderChangeCids = [upcast vested]
+    meta = emptyMetadata
 
 -- | Uses `None` to represent that no amount remains.
 calculateUnvestedAmount : Time -> Decimal -> VestingLockSpecification -> Optional Decimal
@@ -203,36 +163,22 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
 
   checkPendingControllers (withdrawVestedFundsControllers specification) proposers emptyApprovals
 
-  let updateArgs = WithdrawVestedFundsUpdateArgs with
-        proposalCid = None
-        proposal = WithdrawVestedFunds with
-          specification
-          proposers
-          lockedAmulet = lock.lockedAmulet
-          approvals = emptyApprovals
-          requestedAt
-          expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
-          originalProposalCid = None
-        actors = proposers
-        reason
-        getContext = pure (context, state)
+  proposal_create withdrawVestedFunds_operations ProposalUpdateArgs with
+    proposalCid = None
+    proposal = withdrawVestedFunds_proposalView WithdrawVestedFunds with
+      specification
+      proposers
+      lockedAmulet = lock.lockedAmulet
+      approvals = emptyApprovals
+      requestedAt
+      expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
+      originalProposalCid = None
+    actors = proposers
+    reason
+    getContext = pure (context, state)
 
-  -- A rejected proposal is unexpected here
-  --
-  -- The proposal should either be accepted, if `actors` is a superset of one of the controller sets,
-  -- or pending, if `actors` is a subset of one of the controller sets.
-  --
-  -- A rejected proposal means that `actors` is not in any of the controller sets, which we assert against above
-  withdrawVestedFunds_update' identity (\rejectors -> fail ("Unexpected proposal rejection by rejectors: " <> show rejectors)) updateArgs True
-
-data VestingLockExecuteWithdrawArgs = VestingLockExecuteWithdrawArgs with
-  merged : FetchAndMergeLocksResult
-  proposal : WithdrawVestedFunds
-  context : ExternalPartyTransferContext
-  reason : Text
-
-vestingLock_executeWithdraw : VestingLockExecuteWithdrawArgs -> Update VestingLock_WithdrawResult
-vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs{..} = do
+vestingLock_executeWithdraw : ProposalExecuteArgs WithdrawVestedFunds -> Update VestingLock_WithdrawResult
+vestingLock_executeWithdraw ProposalExecuteArgs{..} = do
   assertWithinDeadline "expiresAt" proposal.expiresAt
   let FetchAndMergeLocksResult{lockCid, lock} = merged
   potentiallyUnsafeArchive lockCid -- safe as the lock was checked when fetched/merged
@@ -243,7 +189,7 @@ vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs{..} = do
 
   case unvestedAmount of
     None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
-      pure VestingLock_WithdrawResult_Completed with
+      pure $ Right VestingLock_WithdrawResult_Completed with
         vestingLock = None
         vested = toInterfaceContractId lockedAmulet
     Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
@@ -256,72 +202,18 @@ vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs{..} = do
           vestingPeriod = vestingSpec.endTime `subTime` proposal.specification.vestedUntilTime
         amount = vestingAmount
         originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid)
-      pure VestingLock_WithdrawResult_Completed with
+      pure $ Right VestingLock_WithdrawResult_Completed with
         vestingLock
         vested = toInterfaceContractId unlocked
 
-data WithdrawVestedFundsUpdateArgs = WithdrawVestedFundsUpdateArgs with
-  proposalCid : Optional (ContractId WithdrawVestedFunds)
-  proposal : WithdrawVestedFunds
-  actors : [Party]
-  reason : Text
-  getContext : Update (ExternalPartyTransferContext, ExternalPartyConfigState)
-
-makeWithdrawVestedFundsUpdateArgs : ContractId WithdrawVestedFunds -> WithdrawVestedFunds -> [Party] -> ExtraArgs -> WithdrawVestedFundsUpdateArgs
-makeWithdrawVestedFundsUpdateArgs proposalCid proposal@WithdrawVestedFunds{..} actors extraArgs = do
-  WithdrawVestedFundsUpdateArgs with
-    proposalCid = Some proposalCid
-    proposal
-    actors
-    reason = reasonFromMeta $ withdrawVestedFundsMetadata specification.target.specification
-    getContext = unfeaturedPaymentContextAndConfigFromChoiceContext specification.target.dso extraArgs.context
-
-withdrawVestedFunds_update'
-  :  (VestingLock_WithdrawResult -> a)
-  -> ([Party] -> Update a)
-  -> WithdrawVestedFundsUpdateArgs
-  -> Bool
-  -> Update a
-withdrawVestedFunds_update' onPendingOrAccepted onRejected WithdrawVestedFundsUpdateArgs{..} approved = do
-  result <- updateProposalApprovals (withdrawVestedFundsControllers proposal.specification) proposal.proposers approved actors proposal.approvals
-  case result of
-    PAR_Pending{pendingApprovals} ->
-      onPendingOrAccepted . VestingLock_WithdrawResult_Pending <$> create proposal with
-        approvals = pendingApprovals
-        originalProposalCid = optional proposalCid Some proposal.originalProposalCid
-
-    PAR_Accepted{} -> do
-      (context, state) <- getContext
-      merged <- fetchAndMergeGovernanceLocks proposal.specification.target context state reason
-      onPendingOrAccepted <$> vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs with
-        merged
-        proposal
-        context
-        reason
-
-    PAR_Rejected{rejectors} -> onRejected rejectors
-
-withdrawVestedFunds_update : WithdrawVestedFundsUpdateArgs -> Bool -> Update V2.TransferInstructionResult
-withdrawVestedFunds_update =
-  withdrawVestedFunds_update' vestingLock_withdrawResult_transferInstructionResult \_ -> pure V2.TransferInstructionResult with
-    output = V2.TransferInstructionResult_Failed
-    senderChangeCids = []
-    meta = emptyMetadata
-
-withdrawVestedFunds_accept : ContractId WithdrawVestedFunds -> WithdrawVestedFunds -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
-withdrawVestedFunds_accept proposalCid proposal@WithdrawVestedFunds{specification, approvals} actors extraArgs = do
-  checkPendingControllers (withdrawVestedFundsControllers specification) actors approvals
-  withdrawVestedFunds_update (makeWithdrawVestedFundsUpdateArgs proposalCid proposal actors extraArgs) True
-
-withdrawVestedFunds_reject : ContractId WithdrawVestedFunds -> WithdrawVestedFunds -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
-withdrawVestedFunds_reject proposalCid proposal@WithdrawVestedFunds{specification, approvals} actors extraArgs = do
-  checkPendingControllers (withdrawVestedFundsControllers specification) actors approvals
-  withdrawVestedFunds_update (makeWithdrawVestedFundsUpdateArgs proposalCid proposal actors extraArgs) False
-
-withdrawVestedFunds_withdraw : ContractId WithdrawVestedFunds -> WithdrawVestedFunds -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
-withdrawVestedFunds_withdraw proposalCid proposal@WithdrawVestedFunds{proposers} actors extraArgs = do
-  require' ("actors", actors) isSubsetOfR ("proposers", proposers)
-  withdrawVestedFunds_update (makeWithdrawVestedFundsUpdateArgs proposalCid proposal actors extraArgs) False
+withdrawVestedFunds_operations : ProposalOperations WithdrawVestedFunds VestingLock_WithdrawResult_Completed
+withdrawVestedFunds_operations = ProposalOperations with
+  makeView = withdrawVestedFunds_proposalView
+  recreate = \approvals originalProposalCid proposal ->
+    let updatedProposal = proposal with approvals; originalProposalCid
+    in (, updatedProposal) <$> create updatedProposal
+  execute = vestingLock_executeWithdraw
+  completedResult = vestingLock_withdrawResult_completed_transferInstructionResult
 
 -- Instances
 ------------

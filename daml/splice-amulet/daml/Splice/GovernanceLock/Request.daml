@@ -48,6 +48,7 @@ import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock
@@ -212,7 +213,7 @@ governanceLock_transferFactoryV1_unlockImpl dso actors V1.TransferFactory_Transf
     reason
     requestedAt = transfer.requestedAt
 
-  pure $ downcast $ governanceLock_unlockResult_transferInstructionResult result
+  pure $ downcast $ proposalUpdateResult_transferInstructionResult unlockProposal_operations result
 
 governanceLock_transferFactoryV1_transferLockImpl
   :  V1.TransferFactory_Transfer
@@ -233,8 +234,8 @@ governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{tr
     requestedAt = inputTransfer.requestedAt
 
   case result of
-    GovernanceLock_TransferResult_Completed{} -> pure ()
-    GovernanceLock_TransferResult_Pending{pendingProposal} -> do
+    Right _ -> pure ()
+    Left (_, pendingProposal) -> do
       -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
       let outputTransfer = (view $ toInterface @V1.TransferInstruction pendingProposal).transfer
       requireMatchExpected ("transfer", outputTransfer) inputTransfer with
@@ -245,7 +246,7 @@ governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{tr
         inputHoldingCids = outputTransfer.inputHoldingCids
         meta = governanceLockTransferMetadata source.specification
 
-  pure $ downcast $ governanceLock_transferResult_transferInstructionResult result
+  pure $ downcast $ proposalUpdateResult_transferInstructionResult governanceLockTransfer_operations result
 
 governanceLock_transferFactoryV1_withdrawVestedFundsImpl
   :  Party
@@ -272,7 +273,7 @@ governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso actors V1.TransferF
     reason
     requestedAt = transfer.requestedAt
 
-  pure $ downcast $ vestingLock_withdrawResult_transferInstructionResult result
+  pure $ downcast $ proposalUpdateResult_transferInstructionResult withdrawVestedFunds_operations result
 
 governanceLock_transferFactoryV1_substituteImpl
   :  Party
