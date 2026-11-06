@@ -3232,6 +3232,35 @@ class DbSvDsoStoreTest
       }
     }
 
+    "skip providers with an instruction awaiting execution" in {
+      val pending = userParty(1)
+      val pendingExpired = userParty(2)
+      val otherDsoPending = userParty(3)
+      val noInstruction = userParty(4)
+      for {
+        store <- mkStoreWith(
+          rights = Seq(pending, pendingExpired, otherDsoPending, noInstruction).map(
+            featuredAppRight(_)
+          )
+        )
+        _ <- MonadUtil.sequentialTraverse(
+          Seq(
+            featuredAppUnderlockInstruction(pending),
+            // Expired instructions can still be executed
+            featuredAppUnderlockInstruction(pendingExpired, expiresAt = time(0).toInstant),
+            // Not ingested, so it does not count as pending
+            featuredAppUnderlockInstruction(otherDsoPending, dso = userParty(99)),
+          )
+        )(dummyDomain.create(_)(store.multiDomainAcsStore))
+        result <- store.listFeaturedAppUnderlockStatusChanges(enforced)
+      } yield {
+        result should contain theSameElementsAs Seq(
+          FeaturedAppUnderlockStatus(otherDsoPending, underlocked = true),
+          FeaturedAppUnderlockStatus(noInstruction, underlocked = true),
+        )
+      }
+    }
+
     "apply the Daml defaults to an unset config" in {
       FeaturedAppUnderlockConfig.fromDsoRulesConfig(
         dsoRules().payload.config

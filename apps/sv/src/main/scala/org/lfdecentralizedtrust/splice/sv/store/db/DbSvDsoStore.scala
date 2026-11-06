@@ -2275,6 +2275,19 @@ class DbSvDsoStore private (
             select provider, underlocked
             from statuses
             where underlocked <> recorded_underlocked
+              -- Skip providers with an instruction awaiting execution, which
+              -- updates the right. Expired instructions can still be executed.
+              and not exists (
+                select 1
+                from #${DsoTables.acsTableName} instr
+                where instr.store_id = $acsStoreId
+                  and instr.migration_id = $domainMigrationId
+                  and instr.package_name = ${splice.dso.instruction.FeaturedAppUnderlockInstruction.PACKAGE_NAME}
+                  and instr.template_id_qualified_name = ${QualifiedName(
+              splice.dso.instruction.FeaturedAppUnderlockInstruction.TEMPLATE_ID_WITH_PACKAGE_ID
+            )}
+                  and instr.featured_app_right_provider = statuses.provider
+              )
             order by provider
             limit ${sqlLimit(limit)}
           """).toActionBuilder.as[(PartyId, Boolean)],
