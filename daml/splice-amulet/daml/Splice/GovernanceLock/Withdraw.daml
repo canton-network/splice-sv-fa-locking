@@ -30,7 +30,7 @@ import Splice.ExternalPartyConfigState
 import Splice.Fees (relTimeToSeconds)
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
-import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
+import Splice.TokenStandard.Utils
 import Splice.Types
 import Splice.Util
 
