@@ -638,8 +638,10 @@ abstract class StoreTestBase
         ),
         receiver.toProtoPrimitive,
         BigDecimal(10).bigDecimal,
+        Optional.of(Map.empty.asJava),
         Instant.EPOCH,
         expiresAt,
+        Optional.empty(),
       ),
     )
 

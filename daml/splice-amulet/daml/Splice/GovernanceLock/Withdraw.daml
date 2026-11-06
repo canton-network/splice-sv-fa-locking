@@ -2,6 +2,12 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 module Splice.GovernanceLock.Withdraw (
+  -- * Templates and choices
+  WithdrawVestedFunds(..),
+  WithdrawVestedFunds_DsoExpire(..),
+  WithdrawVestedFunds_DsoExpireResult(..),
+
+  -- * State and operations
   VestingLock_WithdrawResult(..),
   vestingLock_withdrawResult_transferInstructionResult,
   VestingLockProposeWithdrawArgs(..),
@@ -80,7 +86,7 @@ template WithdrawVestedFunds
         status = V1.TransferPendingInternalWorkflow with
           pendingActions =
             let pendingControllers = List.dedupSort $ concat (controllersPendingApproval approvals $ withdrawVestedFundsControllers specification).controllers
-                pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
+                pendingProposers = concat $ proposersPendingWithdrawal approvals proposers
             in Map.fromListWithR (\x y -> x <> "; " <> y) $
               fmap (, "accept withdrawal") pendingControllers <>
               fmap (, "reject withdrawal") pendingControllers <>
@@ -102,25 +108,25 @@ template WithdrawVestedFunds
           expiresAt = Some expiresAt
           availableActions =
             let pendingControllers = (controllersPendingApproval approvals $ withdrawVestedFundsControllers specification).controllers
-                pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
-            in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [pendingProposers])]
+                pendingProposers = proposersPendingWithdrawal approvals proposers
+            in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, pendingProposers)]
           meta = emptyMetadata
 
       transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} = do
         -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
-        -- withdrawVestedFunds_update will create a new proposal when necessary
+        -- withdrawVestedFunds_update creates a new proposal when necessary
         potentiallyUnsafeArchive self
-        withdrawVestedFunds_approve (fromInterfaceContractId self) this actors extraArgs
+        withdrawVestedFunds_accept (fromInterfaceContractId self) this actors extraArgs
 
       transferInstruction_rejectImpl self V2.TransferInstruction_Reject{..} = do
         -- V2.TransferInstruction_Reject is nonconsuming so we need to archive explicitly here
-        -- withdrawVestedFunds_update will create a new proposal when necessary
+        -- withdrawVestedFunds_update creates a new proposal when necessary
         potentiallyUnsafeArchive self
         withdrawVestedFunds_reject (fromInterfaceContractId self) this actors extraArgs
 
       transferInstruction_withdrawImpl self V2.TransferInstruction_Withdraw{..} = do
         -- V2.TransferInstruction_Withdraw is nonconsuming so we need to archive explicitly here
-        -- withdrawVestedFunds_update will create a new proposal when necessary
+        -- withdrawVestedFunds_update creates a new proposal when necessary
         potentiallyUnsafeArchive self
         withdrawVestedFunds_withdraw (fromInterfaceContractId self) this actors extraArgs
 
@@ -208,9 +214,8 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
           expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
           originalProposalCid = None
         actors = proposers
-        context
-        state
         reason
+        getContext = pure (context, state)
 
   -- A rejected proposal is unexpected here
   --
@@ -259,20 +264,17 @@ data WithdrawVestedFundsUpdateArgs = WithdrawVestedFundsUpdateArgs with
   proposalCid : Optional (ContractId WithdrawVestedFunds)
   proposal : WithdrawVestedFunds
   actors : [Party]
-  context : ExternalPartyTransferContext
-  state : ExternalPartyConfigState
   reason : Text
+  getContext : Update (ExternalPartyTransferContext, ExternalPartyConfigState)
 
-makeWithdrawVestedFundsUpdateArgs : ContractId WithdrawVestedFunds -> WithdrawVestedFunds -> [Party] -> ExtraArgs -> Update WithdrawVestedFundsUpdateArgs
+makeWithdrawVestedFundsUpdateArgs : ContractId WithdrawVestedFunds -> WithdrawVestedFunds -> [Party] -> ExtraArgs -> WithdrawVestedFundsUpdateArgs
 makeWithdrawVestedFundsUpdateArgs proposalCid proposal@WithdrawVestedFunds{..} actors extraArgs = do
-  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext specification.target.dso extraArgs.context
-  pure WithdrawVestedFundsUpdateArgs with
+  WithdrawVestedFundsUpdateArgs with
     proposalCid = Some proposalCid
     proposal
     actors
     reason = reasonFromMeta $ withdrawVestedFundsMetadata specification.target.specification
-    context
-    state
+    getContext = unfeaturedPaymentContextAndConfigFromChoiceContext specification.target.dso extraArgs.context
 
 withdrawVestedFunds_update'
   :  (VestingLock_WithdrawResult -> a)
@@ -289,6 +291,7 @@ withdrawVestedFunds_update' onPendingOrAccepted onRejected WithdrawVestedFundsUp
         originalProposalCid = optional proposalCid Some proposal.originalProposalCid
 
     PAR_Accepted{} -> do
+      (context, state) <- getContext
       merged <- fetchAndMergeGovernanceLocks proposal.specification.target context state reason
       onPendingOrAccepted <$> vestingLock_executeWithdraw VestingLockExecuteWithdrawArgs with
         merged
@@ -305,20 +308,23 @@ withdrawVestedFunds_update =
     senderChangeCids = []
     meta = emptyMetadata
 
-withdrawVestedFunds_approve : ContractId WithdrawVestedFunds -> WithdrawVestedFunds -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
-withdrawVestedFunds_approve proposalCid proposal@WithdrawVestedFunds{specification, approvals} actors extraArgs = do
+withdrawVestedFunds_accept : ContractId WithdrawVestedFunds -> WithdrawVestedFunds -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
+withdrawVestedFunds_accept proposalCid proposal@WithdrawVestedFunds{specification, approvals} actors extraArgs = do
   checkPendingControllers (withdrawVestedFundsControllers specification) actors approvals
-  args <- makeWithdrawVestedFundsUpdateArgs proposalCid proposal actors extraArgs
-  withdrawVestedFunds_update args True
+  withdrawVestedFunds_update (makeWithdrawVestedFundsUpdateArgs proposalCid proposal actors extraArgs) True
 
 withdrawVestedFunds_reject : ContractId WithdrawVestedFunds -> WithdrawVestedFunds -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
 withdrawVestedFunds_reject proposalCid proposal@WithdrawVestedFunds{specification, approvals} actors extraArgs = do
   checkPendingControllers (withdrawVestedFundsControllers specification) actors approvals
-  args <- makeWithdrawVestedFundsUpdateArgs proposalCid proposal actors extraArgs
-  withdrawVestedFunds_update args False
+  withdrawVestedFunds_update (makeWithdrawVestedFundsUpdateArgs proposalCid proposal actors extraArgs) False
 
 withdrawVestedFunds_withdraw : ContractId WithdrawVestedFunds -> WithdrawVestedFunds -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
 withdrawVestedFunds_withdraw proposalCid proposal@WithdrawVestedFunds{proposers} actors extraArgs = do
   require' ("actors", actors) isSubsetOfR ("proposers", proposers)
-  args <- makeWithdrawVestedFundsUpdateArgs proposalCid proposal actors extraArgs
-  withdrawVestedFunds_update args False
+  withdrawVestedFunds_update (makeWithdrawVestedFundsUpdateArgs proposalCid proposal actors extraArgs) False
+
+-- Instances
+------------
+
+instance HasCheckedFetch WithdrawVestedFunds ForDso where
+  contractGroupId WithdrawVestedFunds{..} = ForDso with dso = specification.target.dso

@@ -151,14 +151,11 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
       governanceLock_transferFactoryV1_unlockImpl dso actors arg fullSpecification unlockAmount vestingStartTime context state
     GLR_TransferLock{specification,  newOwner, transferAmount} -> do
       checkActors actors [[transfer.sender]]
-      governanceLock_transferFactoryV1_transferLockImpl
-        arg
-        GovernanceLockKey with
-          dso
-          owner = transfer.sender
-          specification
-        newOwner
-        transferAmount
+      let source = GovernanceLockKey with
+            dso
+            owner = transfer.sender
+            specification
+      governanceLock_transferFactoryV1_transferLockImpl arg source newOwner transferAmount context state
     GLR_WithdrawVestingLock{vestingSpecification, vestedUntilTime} ->
       governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso actors arg vestingSpecification vestedUntilTime context state
     GLR_SubstituteLock{target} -> do
@@ -222,30 +219,33 @@ governanceLock_transferFactoryV1_transferLockImpl
   -> GovernanceLockKey
   -> Party
   -> Decimal
+  -> ExternalPartyTransferContext
+  -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{transfer = inputTransfer, extraArgs} source newOwner transferAmount = do
-  (transferCid, transfer) <- createGovernanceLockTransfer LockTransferArgs with
+governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{transfer = inputTransfer} source newOwner transferAmount context state = do
+  result <- governanceLock_proposeTransfer GovernanceLockProposeTransferArgs with
     source
     receiver = newOwner
     amount = transferAmount
+    context
+    state
+    reason = reasonFromMeta inputTransfer.meta
     requestedAt = inputTransfer.requestedAt
-    extraArgs
 
-  -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
-  let outputTransfer = (view $ toInterface @V1.TransferInstruction transfer).transfer
-  requireMatchExpected ("transfer", outputTransfer) inputTransfer with
-    -- The receiver of the transfer is the new owner, not `lockManagerParty`
-    receiver = newOwner
-    amount = outputTransfer.amount
-    executeBefore = outputTransfer.executeBefore
-    inputHoldingCids = outputTransfer.inputHoldingCids
-    meta = transferGovernanceLockMetadata source.specification
+  case result of
+    GovernanceLock_TransferResult_Completed{} -> pure ()
+    GovernanceLock_TransferResult_Pending{pendingProposal} -> do
+      -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
+      let outputTransfer = (view $ toInterface @V1.TransferInstruction pendingProposal).transfer
+      requireMatchExpected ("transfer", outputTransfer) inputTransfer with
+        -- The receiver of the transfer is the new owner, not `lockManagerParty`
+        receiver = newOwner
+        amount = outputTransfer.amount
+        executeBefore = outputTransfer.executeBefore
+        inputHoldingCids = outputTransfer.inputHoldingCids
+        meta = governanceLockTransferMetadata source.specification
 
-  pure V1.TransferInstructionResult with
-    output = V1.TransferInstructionResult_Pending with
-      transferInstructionCid = toInterfaceContractId transferCid
-    senderChangeCids = []
-    meta = emptyMetadata
+  pure $ downcast $ governanceLock_transferResult_transferInstructionResult result
 
 governanceLock_transferFactoryV1_withdrawVestedFundsImpl
   :  Party

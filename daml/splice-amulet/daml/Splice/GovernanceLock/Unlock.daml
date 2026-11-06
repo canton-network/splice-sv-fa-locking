@@ -2,6 +2,12 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 module Splice.GovernanceLock.Unlock (
+  -- * Templates and choices
+  UnlockProposal(..),
+  UnlockProposal_DsoExpire(..),
+  UnlockProposal_DsoExpireResult(..),
+
+  -- * Operations
   GovernanceLock_UnlockResult(..),
   governanceLock_unlockResult_transferInstructionResult,
   GovernanceLockProposeUnlockArgs(..),
@@ -77,7 +83,7 @@ template UnlockProposal
         status = V1.TransferPendingInternalWorkflow with
           pendingActions =
             let pendingControllers = List.dedupSort $ concat (controllersPendingApproval approvals $ unlockProposalControllers specification).controllers
-                pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
+                pendingProposers = concat $ proposersPendingWithdrawal approvals proposers
             in Map.fromListWithR (\x y -> x <> "; " <> y) $
               fmap (, "accept unlock") pendingControllers <>
               fmap (, "reject unlock") pendingControllers <>
@@ -99,25 +105,25 @@ template UnlockProposal
           expiresAt = Some expiresAt
           availableActions =
             let pendingControllers = (controllersPendingApproval approvals $ unlockProposalControllers specification).controllers
-                pendingProposers = filter (\p -> not $ Map.member p approvals) proposers
-            in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, [pendingProposers])]
+                pendingProposers = proposersPendingWithdrawal approvals proposers
+            in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, pendingProposers)]
           meta = emptyMetadata
 
       transferInstruction_acceptImpl self V2.TransferInstruction_Accept{..} = do
         -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
-        -- unlockProposal_update will create a new proposal when necessary
+        -- unlockProposal_update creates a new proposal when necessary
         potentiallyUnsafeArchive self
-        unlockProposal_approve (fromInterfaceContractId self) this actors extraArgs
+        unlockProposal_accept (fromInterfaceContractId self) this actors extraArgs
 
       transferInstruction_rejectImpl self V2.TransferInstruction_Reject{..} = do
         -- V2.TransferInstruction_Reject is nonconsuming so we need to archive explicitly here
-        -- unlockProposal_update will create a new proposal when necessary
+        -- unlockProposal_update creates a new proposal when necessary
         potentiallyUnsafeArchive self
         unlockProposal_reject (fromInterfaceContractId self) this actors extraArgs
 
       transferInstruction_withdrawImpl self V2.TransferInstruction_Withdraw{..} = do
         -- V2.TransferInstruction_Withdraw is nonconsuming so we need to archive explicitly here
-        -- unlockProposal_update will create a new proposal when necessary
+        -- unlockProposal_update creates a new proposal when necessary
         potentiallyUnsafeArchive self
         unlockProposal_withdraw (fromInterfaceContractId self) this actors extraArgs
 
@@ -206,9 +212,8 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
           expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
           originalProposalCid = None
         actors = proposers
-        context
-        state
         reason
+        getContext = pure (context, state)
 
   -- A rejected proposal is unexpected here
   --
@@ -285,20 +290,17 @@ data UnlockProposalUpdateArgs = UnlockProposalUpdateArgs with
   proposalCid : Optional (ContractId UnlockProposal)
   proposal : UnlockProposal
   actors : [Party]
-  context : ExternalPartyTransferContext
-  state : ExternalPartyConfigState
   reason : Text
+  getContext : Update (ExternalPartyTransferContext, ExternalPartyConfigState)
 
-makeUnlockProposalUpdateArgs : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update UnlockProposalUpdateArgs
-makeUnlockProposalUpdateArgs proposalCid proposal@UnlockProposal{..} actors extraArgs = do
-  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext specification.target.dso extraArgs.context
-  pure UnlockProposalUpdateArgs with
+makeUnlockProposalUpdateArgs : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> UnlockProposalUpdateArgs
+makeUnlockProposalUpdateArgs proposalCid proposal@UnlockProposal{..} actors extraArgs =
+  UnlockProposalUpdateArgs with
     proposalCid = Some proposalCid
     proposal
     actors
     reason = reasonFromMeta $ unlockProposalMetadata specification.target.specification
-    context
-    state
+    getContext = unfeaturedPaymentContextAndConfigFromChoiceContext specification.target.dso extraArgs.context
 
 unlockProposal_update'
   :  (GovernanceLock_UnlockResult -> a)
@@ -315,6 +317,7 @@ unlockProposal_update' onPendingOrAccepted onRejected UnlockProposalUpdateArgs{.
         originalProposalCid = optional proposalCid Some proposal.originalProposalCid
 
     PAR_Accepted{} -> do
+      (context, state) <- getContext
       merged <- fetchAndMergeGovernanceLocks proposal.specification.target context state reason
       onPendingOrAccepted <$> governanceLock_executeUnlock GovernanceLockExecuteUnlockArgs with
         merged
@@ -332,20 +335,23 @@ unlockProposal_update =
     senderChangeCids = []
     meta = emptyMetadata
 
-unlockProposal_approve : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
-unlockProposal_approve proposalCid proposal@UnlockProposal{specification, approvals} actors extraArgs = do
+unlockProposal_accept : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
+unlockProposal_accept proposalCid proposal@UnlockProposal{specification, approvals} actors extraArgs = do
   checkPendingControllers (unlockProposalControllers specification) actors approvals
-  args <- makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs
-  unlockProposal_update args True
+  unlockProposal_update (makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs) True
 
 unlockProposal_reject : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
 unlockProposal_reject proposalCid proposal@UnlockProposal{specification, approvals} actors extraArgs = do
   checkPendingControllers (unlockProposalControllers specification) actors approvals
-  args <- makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs
-  unlockProposal_update args False
+  unlockProposal_update (makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs) False
 
 unlockProposal_withdraw : ContractId UnlockProposal -> UnlockProposal -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
 unlockProposal_withdraw proposalCid proposal@UnlockProposal{proposers} actors extraArgs = do
   require' ("actors", actors) isSubsetOfR ("proposers", proposers)
-  args <- makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs
-  unlockProposal_update args False
+  unlockProposal_update (makeUnlockProposalUpdateArgs proposalCid proposal actors extraArgs) False
+
+-- Instances
+------------
+
+instance HasCheckedFetch UnlockProposal ForDso where
+  contractGroupId UnlockProposal{..} = ForDso with dso = specification.target.dso

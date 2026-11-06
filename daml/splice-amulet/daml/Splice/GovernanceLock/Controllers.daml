@@ -10,11 +10,13 @@ module Splice.GovernanceLock.Controllers (
   ProposalApprovalResult(..),
   updateProposalApprovals,
   controllersPendingApproval,
+  proposersPendingWithdrawal,
   checkPendingControllers,
 ) where
 
 import DA.Action (foldrA)
 import DA.Map qualified as Map
+import DA.NonEmpty qualified as NonEmpty
 import DA.Set qualified as Set
 import DA.Text qualified as Text
 
@@ -67,7 +69,7 @@ data ProposalApprovalResult
 -- | Checks the state of the given approvals.
 --
 -- A proposal is considered rejected when all of the proposers have rejected it
--- or when all controllers from any controllers set have rejected it.
+-- or when all controller sets contain a rejection.
 --
 -- A proposal is considered accepted when all controllers from any controllers set have accepted it.
 --
@@ -75,16 +77,16 @@ data ProposalApprovalResult
 proposalApprovalResult : ControllersSpecification -> [Party] -> Map.Map Party Bool -> ProposalApprovalResult
 proposalApprovalResult ControllersSpecification{controllers} proposers approvals =
   let
-    checkControllersSet : (Bool -> Bool) -> [Party] -> Bool
-    checkControllersSet f = all (\p -> optional False f (Map.lookup p approvals))
+    checkApproval : Bool -> Party -> Bool
+    checkApproval wanted party = Map.lookup party approvals == Some wanted
 
-    allProposersRejected = checkControllersSet not proposers
-    rejectedControllersSet = find (checkControllersSet not) controllers
-    acceptedControllersSet = find (checkControllersSet identity) controllers
+    allProposersRejected = all (checkApproval False) proposers
+    rejectedControllers = forA controllers (NonEmpty.nonEmpty . filter (checkApproval False))
+    acceptedControllers = find (all (checkApproval True)) controllers
   in
-    case (allProposersRejected, rejectedControllersSet, acceptedControllersSet) of
+    case (allProposersRejected, rejectedControllers, acceptedControllers) of
       (True, _, _) -> PAR_Rejected with rejectors = proposers
-      (False, Some rejectors, _) -> PAR_Rejected with rejectors
+      (False, Some rejectors, _) -> PAR_Rejected with rejectors = concatMap NonEmpty.toList rejectors
       (False, None, Some acceptors) -> PAR_Accepted with acceptors
       (False, None, None) -> PAR_Pending with pendingApprovals = approvals
 
@@ -105,6 +107,9 @@ updateProposalApprovals controllers proposers approved actors approvals = do
 controllersPendingApproval : Map.Map Party a -> ControllersSpecification -> ControllersSpecification
 controllersPendingApproval approvals controllers =
   ControllersSpecification $ filter (not . null) $ fmap (filter (\p -> not $ Map.member p approvals)) controllers.controllers
+
+proposersPendingWithdrawal : Map.Map Party Bool -> [Party] -> [[Party]]
+proposersPendingWithdrawal approvals = fmap (\p -> [p]) . filter (\p -> Map.lookup p approvals /= Some False)
 
 checkPendingControllers : ControllersSpecification -> [Party] -> Map.Map Party Bool -> Update ()
 checkPendingControllers controllers actors approvals =

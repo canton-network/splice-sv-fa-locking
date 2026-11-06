@@ -21,7 +21,7 @@ import Splice.Scripts.Util
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.MultiRegistry qualified as MultiRegistry
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
-import Splice.Testing.Utils (actionMustFail, emptyExtraArgs, expectMessageContains)
+import Splice.Testing.Utils (actionMustFail, expectMessageContains)
 import Splice.TokenStandard.Utils qualified as TSU
 
 data SharedLockEnv = SharedLockEnv with
@@ -585,7 +585,6 @@ setupGovernanceLockTransfer = do
     receiver = bob.primaryParty
     amount = testVestingAmount
     requestedAt = now
-    extraArgs = emptyExtraArgs
   pure (TransferEnv with .., transferCid)
 
 setupVestingLockTransfer : Script (TransferEnv, ContractId GovernanceLockTransfer)
@@ -607,7 +606,6 @@ setupVestingLockTransfer = do
     receiver = bob.primaryParty
     amount = testVestingAmount
     requestedAt = now
-    extraArgs = emptyExtraArgs
   pure (TransferEnv with .., transferCid)
 
 -- | Happy path: an SV expires a governance lock transfer proposal.

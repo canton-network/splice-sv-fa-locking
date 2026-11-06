@@ -428,6 +428,12 @@ data TestEnvRegistries = TestEnvRegistries with
 testEnvRegistries : TestEnv -> TestEnvRegistries
 testEnvRegistries env = TestEnvRegistries env.registries env.registriesEnv.amuletV2
 
+data LockTransferArgs = LockTransferArgs with
+  source : GovernanceLockKey
+  receiver : Party
+  amount : Decimal
+  requestedAt : Time
+
 -- | The operations on governance locks, so that the scenarios can run against each token standard version.
 --
 -- `iface` is the token standard interface, i.e. `V1/V2.TransferInstruction`
@@ -737,7 +743,6 @@ transferredGovernanceLock ops env sender receiver amount kind = do
     receiver
     amount
     requestedAt
-    extraArgs = emptyExtraArgs
   locksBefore <- receiverLocks
   expectSuccess $ ops.acceptInstruction env (coerceContractId transferCid) receiver
   locksAfter <- receiverLocks
