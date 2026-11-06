@@ -41,6 +41,7 @@ template GovernanceLockTransfer with
       -- ^ Source locks to be transferred. Locks are resolved by key.
     receiver : Party
       -- ^ New owner, who accepts the transfer.
+    -- TODO: support new custom controllers specified by receiver
     amount : Decimal
       -- ^ Amount moved out of the source locks.
     approvals : Optional (Map.Map Party Bool)
@@ -51,7 +52,10 @@ template GovernanceLockTransfer with
       -- ^ When the transfer proposal expires.
     originalProposalCid : Optional (ContractId GovernanceLockTransfer)
   where
-    signatory source.dso, source.owner
+    signatory source.dso, source.owner,
+              -- Make the receiver a signatory once they've approved the transfer
+              -- This is necessary for `governanceLock_executeTransfer` to have the authority of the receiver when locking amulet
+              optional [] (const [receiver]) (guard (Map.lookup receiver (governanceLockTransferApprovals this) == Some True))
     observer receiver, (Set.fromList $ concat (governanceLockTransferControllers this).controllers)
     ensure governanceLockTransferIsValid this
 
@@ -249,7 +253,6 @@ governanceLock_executeTransfer GovernanceLockExecuteTransferArgs{..} = do
   result <- governanceLock_dsoTransferImpl merged proposal.amount reason context state
   -- Lock the unlocked funds of the sender again, now for the receiver.
   -- This needs the authority of the receiver.
-  -- TODO: do we have that authority with custom controllers?
   ([newLockedAmulet], None) <- lockAmuletFor
     (ForOwner with dso = lock.dso; owner = lock.owner)
     proposal.receiver
