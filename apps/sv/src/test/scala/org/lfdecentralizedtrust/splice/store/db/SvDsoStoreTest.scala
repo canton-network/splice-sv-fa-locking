@@ -2606,9 +2606,7 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
         new splice.governancelock.GovernanceLockKey(
           dso.toProtoPrimitive,
           lockOwner.toProtoPrimitive,
-          new splice.governancelock.governancelockspecification.GLS_FullLock(
-            new splice.governancelock.FullLockSpecification(kind)
-          ),
+          fullLockSpecification(kind),
         ),
         proposer.toProtoPrimitive,
         BigDecimal(10).bigDecimal,

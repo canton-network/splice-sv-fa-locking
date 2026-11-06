@@ -1,0 +1,111 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.GovernanceLock.Controllers (
+  ControllersSpecification,
+  makeControllersSpecification,
+  validateControllersSpecification,
+  encodeControllersSpecification,
+  allControllers,
+  ProposalApprovalResult(..),
+  updateProposalApprovals,
+  controllersPendingApproval,
+  checkPendingControllers,
+) where
+
+import DA.Action (foldrA)
+import DA.Map qualified as Map
+import DA.Set qualified as Set
+import DA.Text qualified as Text
+
+import Splice.TokenStandard.Utils
+
+-- | Specification of controllers that can jointly authorize an action.
+-- Serializable so it can be encoded on templates, but should not be constructed directly; use ControllerSets.
+data ControllersSpecification = ControllersSpecification with
+    controllers : [[Party]]
+      -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
+  deriving (Eq, Show, Serializable)
+
+-- | Sets of controllers that can jointly authorize an action.
+-- This is the form of ControllersSpecification that all callers must go through to ensure deduplication.
+data ControllerSets = ControllerSets (Set.Set (Set.Set Party))
+
+makeControllerSets : [[Party]] -> ControllerSets
+makeControllerSets controllers = ControllerSets $ Set.fromList $ fmap Set.fromList controllers
+
+getControllersSpecification : ControllerSets -> ControllersSpecification
+getControllersSpecification (ControllerSets controllers) = ControllersSpecification $ fmap Set.toList $ Set.toList controllers
+
+makeControllersSpecification : [[Party]] -> ControllersSpecification
+makeControllersSpecification = getControllersSpecification . makeControllerSets
+
+encodeControllerSets : ControllerSets -> Text
+encodeControllerSets controllers =
+  Text.intercalate ";" (fmap (Text.intercalate "," . fmap partyToText) (getControllersSpecification controllers).controllers)
+
+encodeControllersSpecification : ControllersSpecification -> Text
+encodeControllersSpecification = encodeControllerSets . makeControllerSets . (.controllers)
+
+validateControllersSpecification : CanAssert m => Text -> Optional ControllersSpecification -> m ()
+validateControllersSpecification _ None = pure ()
+validateControllersSpecification controllerType (Some ControllersSpecification{controllers}) = do
+  require (controllerType <> "Controllers must not be empty") (not $ null controllers)
+  require (controllerType <> "Controllers must not contain an empty controller set") (all (not . null) controllers)
+
+allControllers : ControllersSpecification -> Set.Set Party
+allControllers spec = Set.fromList $ concat spec.controllers
+
+data ProposalApprovalResult
+  = PAR_Pending with
+      pendingApprovals : Map.Map Party Bool
+  | PAR_Accepted with
+      acceptors : [Party]
+  | PAR_Rejected with
+      rejectors : [Party]
+
+-- | Checks the state of the given approvals.
+--
+-- A proposal is considered rejected when all of the proposers have rejected it
+-- or when all controllers from any controllers set have rejected it.
+--
+-- A proposal is considered accepted when all controllers from any controllers set have accepted it.
+--
+-- Otherwise the proposal is still pending.
+proposalApprovalResult : ControllersSpecification -> [Party] -> Map.Map Party Bool -> ProposalApprovalResult
+proposalApprovalResult ControllersSpecification{controllers} proposers approvals =
+  let
+    checkControllersSet : (Bool -> Bool) -> [Party] -> Bool
+    checkControllersSet f = all (\p -> optional False f (Map.lookup p approvals))
+
+    allProposersRejected = checkControllersSet not proposers
+    rejectedControllersSet = find (checkControllersSet not) controllers
+    acceptedControllersSet = find (checkControllersSet identity) controllers
+  in
+    case (allProposersRejected, rejectedControllersSet, acceptedControllersSet) of
+      (True, _, _) -> PAR_Rejected with rejectors = proposers
+      (False, Some rejectors, _) -> PAR_Rejected with rejectors
+      (False, None, Some acceptors) -> PAR_Accepted with acceptors
+      (False, None, None) -> PAR_Pending with pendingApprovals = approvals
+
+-- | Updates approvals to record the action taken by the given actor.
+updateProposalApproval : ControllersSpecification -> Bool -> Party -> Map.Map Party Bool -> Update (Map.Map Party Bool)
+updateProposalApproval ControllersSpecification{controllers} approved actor approvals = do
+  require' ("actor", actor) isMemberR ("controllers", concat controllers)
+  let updated = Map.insert actor approved approvals
+  require "at least one actor's approval must change" (approvals /= updated)
+  pure updated
+
+-- | Updates approvals to record the action taken by the given actors, and checks the state of the updated approvals.
+updateProposalApprovals : ControllersSpecification -> [Party] -> Bool -> [Party] -> Map.Map Party Bool -> Update ProposalApprovalResult
+updateProposalApprovals controllers proposers approved actors approvals = do
+  updatedApprovals <- foldrA (updateProposalApproval controllers approved) approvals actors
+  pure $ proposalApprovalResult controllers proposers updatedApprovals
+
+controllersPendingApproval : Map.Map Party a -> ControllersSpecification -> ControllersSpecification
+controllersPendingApproval approvals controllers =
+  ControllersSpecification $ filter (not . null) $ fmap (filter (\p -> not $ Map.member p approvals)) controllers.controllers
+
+checkPendingControllers : ControllersSpecification -> [Party] -> Map.Map Party Bool -> Update ()
+checkPendingControllers controllers actors approvals =
+  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", (controllersPendingApproval approvals controllers).controllers)

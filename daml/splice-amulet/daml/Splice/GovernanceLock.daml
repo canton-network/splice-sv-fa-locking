@@ -19,20 +19,18 @@ module Splice.GovernanceLock (
   FullLockSpecification(..),
   VestingLockSpecification(..),
   GovernanceLockKey(..),
+  requireFullLock,
   requireVestingLock,
   governanceLockKind,
   governanceLockObservers,
   governanceLockExpiresAt,
   vestingDurationFor,
-  calculateUnvestedAmount,
   lockManagerParty,
 
   -- * Lock operations
   governanceLock_lockForGovernance_impl,
   FetchAndMergeLocksResult(..),
   fetchAndMergeGovernanceLocks,
-  governanceLock_unlockImpl,
-  vestingLock_withdrawImpl,
   governanceLock_dsoSubstituteImpl,
   governanceLock_dsoSplitForSubstitutionImpl,
   governanceLock_dsoTransferImpl,
@@ -62,6 +60,9 @@ module Splice.GovernanceLock (
   lockStatusMetaKey,
   lockVestingDurationMetaKey,
   lockVestingEndTimeMetaKey,
+  substitutionControllersMetaKey,
+  unlockControllersMetaKey,
+  vestingControllersMetaKey,
   vestingStartTimeMetaKey,
   vestedUntilTimeMetaKey,
 
@@ -71,21 +72,23 @@ module Splice.GovernanceLock (
   lockAmulet,
   lockAmuletFor,
   unlockAmulet,
+  partialUnlock,
+  splitLockedAmulet,
   assertInPast24Hours,
+  assertInNext24Hours,
 ) where
 
-import Prelude hiding (forA)
-import DA.Action (foldrA, unless)
+import DA.Action (foldrA)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
-import DA.Functor (($>))
+import DA.Foldable (foldMap)
 import DA.List (sortOn)
 import DA.List.Total (head)
 import DA.Map qualified as Map
 import DA.Optional
+import DA.Set qualified as Set
 import DA.Text qualified as Text
 import DA.Time
-import DA.Traversable (forA)
 
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
@@ -97,8 +100,9 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.Expiry hiding (maxTime)
-import Splice.Fees (relTimeToDays, relTimeToSeconds)
 import Splice.ExternalPartyConfigState
+import Splice.Fees (relTimeToDays)
+import Splice.GovernanceLock.Controllers
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
 import Splice.Types
@@ -117,10 +121,17 @@ data VestingLockSpecification = VestingLockSpecification with
     kind : GovernanceLockKind
     vestingPeriod : RelTime -- ^ Duration over which the amount vests in a linear fashion.
     endTime : Time -- ^ Time at which vesting completes.
+    vestingControllers : Optional ControllersSpecification
   deriving (Eq, Show, Serializable)
 
 data FullLockSpecification = FullLockSpecification with
     kind : GovernanceLockKind
+    unlockControllers : Optional ControllersSpecification
+      -- ^ Controllers that can unlock the lock.
+    substitutionControllers : Optional ControllersSpecification
+      -- ^ Controllers that can authorize a substitution.
+    vestingControllers : Optional ControllersSpecification
+      -- ^ Controllers that can control the disbursal of vesting funds via withdrawals, substitutions, or transfers.
   deriving (Eq, Show, Serializable)
 
 data GovernanceLockSpecification
@@ -128,9 +139,14 @@ data GovernanceLockSpecification
   | GLS_VestingLock VestingLockSpecification
   deriving (Eq, Show, Serializable)
 
-validateGovernanceLockSpecification : GovernanceLockSpecification -> Bool
-validateGovernanceLockSpecification (GLS_FullLock _) = True
-validateGovernanceLockSpecification (GLS_VestingLock v) = v.vestingPeriod >= aunit
+validateGovernanceLockSpecification : CanAssert m => GovernanceLockSpecification -> m ()
+validateGovernanceLockSpecification (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) = do
+  validateControllersSpecification "unlock" unlockControllers
+  validateControllersSpecification "substitution" substitutionControllers
+  validateControllersSpecification "vesting" vestingControllers
+validateGovernanceLockSpecification (GLS_VestingLock (VestingLockSpecification _ vestingPeriod _ vestingControllers)) = do
+  assertMsg "vestingPeriod is positive" $ vestingPeriod > aunit
+  validateControllersSpecification "vesting" vestingControllers
 
 requireFullLock : CanAssert m => GovernanceLockSpecification -> m FullLockSpecification
 requireFullLock (GLS_FullLock spec) = pure spec
@@ -165,8 +181,8 @@ template GovernanceLock
     requestedAt : Time  -- ^ Time of the request to create this lock.
   where
     signatory dso, owner
-    observer governanceLockObservers specification
-    ensure amount > 0.0 && validateGovernanceLockSpecification specification
+    observer governanceLockObservers specification, governanceLockControllers specification
+    ensure amount > 0.0 && either error (const True) (validateGovernanceLockSpecification specification)
     key ( GovernanceLockKey with dso; owner; specification ) : GovernanceLockKey
     maintainer key.dso
 
@@ -240,19 +256,6 @@ template GovernanceLock
       transferInstruction_acceptExtraObservers _ = observer this
       transferInstruction_rejectExtraObservers _ = observer this
       transferInstruction_withdrawExtraObservers _ = observer this
-
-data GovernanceLock_UnlockResult
-  = GovernanceLock_UnlockResult with
-      vestingLock : Optional (ContractId GovernanceLock)
-      governanceLock : Optional (ContractId GovernanceLock)
-      unlockedAmulet : Optional (ContractId Amulet)
-
-data VestingLock_WithdrawResult
-  = VestingLock_WithdrawResult with
-      vestingLock : Optional (ContractId GovernanceLock)
-        -- ^ Contract ID of the continuing vesting lock with remaining funds.
-      vested : ContractId Holding
-        -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
 
 data GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult
    = GovernanceLock_DsoConvertProvisionalFeaturedAppLockResult {}
@@ -387,96 +390,6 @@ fetchAndMergeGovernanceLocks key context state reason = do
   result@FetchAndMergeLocksResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
   pure result
 
--- | Unlocks `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks which have no vesting period.
-governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Optional Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update GovernanceLock_UnlockResult
-governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingStartTime actors context state reason
-    = do
-        fullSpec <- requireFullLock specification
-        checkActors actors [[owner]]
-        require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", amount)
-        let isFullUnlock = unlockAmount == amount
-        require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
-        unless isFullUnlock $ do
-          requireMinimumLock state unlockAmount
-          requireMinimumLock state (amount - unlockAmount)
-
-        let vestingPeriod = vestingDurationFor (governanceLockKind specification) state.governanceLockConfig
-        let hasNoVestingPeriod = vestingPeriod == days 0
-        vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
-              (True, _) -> pure $ fromOptional minBound optVestingStartTime
-              (False, None) -> assertFail "Missing vestingStartTime"
-              (False, Some vestingStartTime) -> do
-                assertInNext24Hours "vestingStartTime" vestingStartTime
-                pure vestingStartTime
-        let endTime = vestingStartTime `addRelTime` vestingPeriod
-        let specification = GLS_VestingLock VestingLockSpecification with
-              kind = fullSpec.kind
-              vestingPeriod
-              endTime
-        let forOwner = ForOwner with dso; owner
-
-        (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if hasNoVestingPeriod
-          then do
-            (optStillLocked, unlockedAmulet) <- partialUnlock forOwner lockedAmulet unlockAmount context reason
-            pure (None, optStillLocked, Some unlockedAmulet)
-          else do
-            (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (unlockAmount, endTime) context reason
-            pure (Some vestingLockedAmulet, optStillLocked, None)
-
-        governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
-          this with
-            lockedAmulet
-            amount = stillLockedAmount
-            originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid)
-
-        vestingLock <- forA optVestingLockedAmulet (\(lockedAmulet, amount) -> create GovernanceLock with
-          dso
-          owner
-          lockedAmulet
-          amount
-          specification
-          originalLockCid = guard isFullUnlock $> fromOptional (toAnyContractId self) originalLockCid
-          requestedAt = endTime `addRelTime` (- vestingPeriod))
-
-        pure GovernanceLock_UnlockResult with
-          vestingLock
-          governanceLock
-          unlockedAmulet
-
-vestingLock_withdrawImpl : ContractId GovernanceLock -> GovernanceLock -> Time -> [Party] -> ExternalPartyTransferContext -> Text -> Update VestingLock_WithdrawResult
-vestingLock_withdrawImpl self this@GovernanceLock{..} vestedUntilTime actors context reason
-    = do
-        vestingSpec <- requireVestingLock specification
-        checkActors actors [[owner]]
-        assertDeadlineExceeded "vestedUntilTime" vestedUntilTime
-        let unvestedAmount = calculateUnvestedAmount vestedUntilTime amount vestingSpec
-
-        case unvestedAmount of
-          None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
-            pure VestingLock_WithdrawResult with
-              vestingLock = None
-              vested = toInterfaceContractId lockedAmulet
-          Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
-            let withdrawAmount = amount - stillLockedAmount
-            require' ("withdraw amount", withdrawAmount) isGreaterR ("zero", 0.0)
-            (lockedOpt, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet withdrawAmount context reason
-            vestingLock <- forA lockedOpt (\(lockedAmulet, vestingAmount) -> create this with
-              lockedAmulet
-              specification = GLS_VestingLock vestingSpec with
-                vestingPeriod = vestingSpec.endTime `subTime` vestedUntilTime
-              amount = vestingAmount
-              originalLockCid = Some $ fromOptional (toAnyContractId self) originalLockCid)
-            pure VestingLock_WithdrawResult with
-              vestingLock
-              vested = toInterfaceContractId unlocked
-
--- | Uses `None` to represent that no amount remains.
-calculateUnvestedAmount : Time -> Decimal -> VestingLockSpecification -> Optional Decimal
-calculateUnvestedAmount currentTime vestingAmount VestingLockSpecification{..}
-    | currentTime <= (endTime `addRelTime` (- vestingPeriod)) = Some vestingAmount
-    | currentTime >= endTime = None
-    | otherwise = Some $ (vestingAmount * relTimeToSeconds (endTime `subTime` currentTime)) / relTimeToSeconds vestingPeriod
-
 -- | Create a `GovernanceLock`, used by the core implementation of token standard interfaces.
 governanceLock_lockForGovernance_impl
   : Party
@@ -564,6 +477,12 @@ governanceLockObservers spec = case governanceLockKind spec of
   GLK_FeaturedApp party -> [party]
   GLK_ProvisionalFeaturedApp party -> [party]
   GLK_SuperValidatorRightsOwner _ -> []
+
+governanceLockControllers : GovernanceLockSpecification -> Set.Set Party
+governanceLockControllers (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) =
+  foldMap allControllers $ catOptionals [unlockControllers, substitutionControllers, vestingControllers]
+governanceLockControllers (GLS_VestingLock (VestingLockSpecification _ _ _ vestingControllers)) =
+  optional Set.empty allControllers vestingControllers
 
 -- Lock properties for LockSubject types
 
@@ -741,6 +660,15 @@ targetLockMetaPrefix = "target-"
 -- | Metadata key that specifies the owner of a target lock.
 targetLockOwnerMetaKey = targetLockMetaPrefix <> "lock-owner"
 
+-- | Metadata key that specifies custom vesting controllers.
+vestingControllersMetaKey = "vesting-controllers"
+
+-- | Metadata key that specifies custom substitution controllers.
+substitutionControllersMetaKey = "substitution-controllers"
+
+-- | Metadata key that specifies custom unlock controllers.
+unlockControllersMetaKey = "unlock-controllers"
+
 -- | The metadata entries of the kind, subject and status of a lock, in the order of the CIP.
 encodeCommonLockMetadataEntries : GovernanceLockKind -> LockState -> [(Text, Text)]
 encodeCommonLockMetadataEntries kind state =
@@ -750,15 +678,25 @@ encodeCommonLockMetadataEntries kind state =
      , (lockStatusMetaKey, lockStateToText state)
      ]
 
+encodeControllersSpecificationMetadataEntries : Text -> Optional ControllersSpecification -> [(Text, Text)]
+encodeControllersSpecificationMetadataEntries _ None = []
+encodeControllersSpecificationMetadataEntries key (Some controllers) = [(key, encodeControllersSpecification controllers)]
+
 -- | The metadata entries of a lock specification, in the order of the CIP.
 encodeGovernanceLockSpecMetadataEntries : GovernanceLockSpecification -> [(Text, Text)]
-encodeGovernanceLockSpecMetadataEntries (GLS_FullLock spec) = encodeCommonLockMetadataEntries spec.kind LS_Locked
-encodeGovernanceLockSpecMetadataEntries (GLS_VestingLock VestingLockSpecification{..}) =
+encodeGovernanceLockSpecMetadataEntries (GLS_FullLock (FullLockSpecification kind unlockControllers substitutionControllers vestingControllers)) =
+  encodeCommonLockMetadataEntries kind LS_Locked <>
+    foldMap (uncurry encodeControllersSpecificationMetadataEntries)
+      [ (unlockControllersMetaKey, unlockControllers)
+      , (substitutionControllersMetaKey, substitutionControllers)
+      , (vestingControllersMetaKey, vestingControllers)
+      ]
+encodeGovernanceLockSpecMetadataEntries (GLS_VestingLock (VestingLockSpecification kind vestingPeriod endTime vestingControllers)) =
   encodeCommonLockMetadataEntries kind LS_Vesting <>
     [ (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
     , (lockVestingEndTimeMetaKey, encodeTime endTime)
     , (lockVestingInfoMetaKey, "\"vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime <> "\"")
-    ]
+    ] <> encodeControllersSpecificationMetadataEntries vestingControllersMetaKey vestingControllers
 
 encodeGovernanceLockMetadata : GovernanceLock -> Metadata
 encodeGovernanceLockMetadata GovernanceLock{specification} =
