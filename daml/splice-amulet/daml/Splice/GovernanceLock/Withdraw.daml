@@ -53,8 +53,15 @@ template WithdrawVestedFunds
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
     signatory specification.target.dso, proposers
+    -- TODO: should this include `governanceLockObservers specification.target.specification`?
     observer specification.target.owner, (Set.fromList $ concat (withdrawVestedFundsControllers specification).controllers)
     ensure (not $ null proposers) && either error (const True) (requireVestingLock specification.target.specification)
+
+    choice WithdrawVestedFunds_DsoExpire : WithdrawVestedFunds_DsoExpireResult
+      controller specification.target.dso
+      do
+        assertDeadlineExceeded "expiresAt" expiresAt
+        pure WithdrawVestedFunds_DsoExpireResult
 
     interface instance V1.TransferInstruction for WithdrawVestedFunds where
       view = V1.TransferInstructionView with
@@ -120,6 +127,9 @@ template WithdrawVestedFunds
       transferInstruction_acceptExtraObservers _ = observer this
       transferInstruction_rejectExtraObservers _ = observer this
       transferInstruction_withdrawExtraObservers _ = observer this
+
+data WithdrawVestedFunds_DsoExpireResult = WithdrawVestedFunds_DsoExpireResult {}
+  deriving (Serializable)
 
 withdrawVestedFundsControllers : WithdrawVestedFundsSpecification -> ControllersSpecification
 withdrawVestedFundsControllers WithdrawVestedFundsSpecification{target} =

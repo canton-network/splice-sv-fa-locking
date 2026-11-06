@@ -10,6 +10,7 @@ module Splice.GovernanceLock.Unlock (
 
 import Prelude hiding (forA)
 import DA.Action (unless)
+import DA.Assert (assertDeadlineExceeded)
 import DA.Functor (($>))
 import DA.List qualified as List
 import DA.Map qualified as Map
@@ -51,8 +52,15 @@ template UnlockProposal
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
     signatory specification.target.dso, proposers
+    -- TODO: should this include `governanceLockObservers specification.target.specification`?
     observer specification.target.owner, (Set.fromList $ concat (unlockProposalControllers specification).controllers)
     ensure specification.amount > 0.0 && (not $ null proposers) && either error (const True) (requireFullLock specification.target.specification)
+
+    choice UnlockProposal_DsoExpire : UnlockProposal_DsoExpireResult
+      controller specification.target.dso
+      do
+        assertDeadlineExceeded "expiresAt" expiresAt
+        pure UnlockProposal_DsoExpireResult
 
     interface instance V1.TransferInstruction for UnlockProposal where
       view = V1.TransferInstructionView with
@@ -116,6 +124,9 @@ template UnlockProposal
       transferInstruction_acceptExtraObservers _ = observer this
       transferInstruction_rejectExtraObservers _ = observer this
       transferInstruction_withdrawExtraObservers _ = observer this
+
+data UnlockProposal_DsoExpireResult = UnlockProposal_DsoExpireResult {}
+  deriving (Serializable)
 
 unlockProposalControllers : UnlockProposalSpecification -> ControllersSpecification
 unlockProposalControllers UnlockProposalSpecification{target} =
