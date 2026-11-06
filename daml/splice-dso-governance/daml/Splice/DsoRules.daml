@@ -24,6 +24,8 @@ import Splice.ExternalPartyAmuletRules
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
+import Splice.GovernanceLock.Unlock
+import Splice.GovernanceLock.Withdraw
 import Splice.TokenStandard.Utils qualified as TSU
 
 import Splice.ExternalPartyConfigState
@@ -406,6 +408,12 @@ data DsoRules_GovernanceLockSubstitution_DsoExpireResult = DsoRules_GovernanceLo
   deriving (Serializable)
 
 data DsoRules_GovernanceLockTransfer_DsoExpireResult = DsoRules_GovernanceLockTransfer_DsoExpireResult {}
+  deriving (Serializable)
+
+data DsoRules_UnlockProposal_DsoExpireResult = DsoRules_UnlockProposal_DsoExpireResult {}
+  deriving (Serializable)
+
+data DsoRules_WithdrawVestedFunds_DsoExpireResult = DsoRules_WithdrawVestedFunds_DsoExpireResult {}
   deriving (Serializable)
 
 data DsoRules_MiningRound_CloseResult = DsoRules_MiningRound_CloseResult with
@@ -1951,6 +1959,30 @@ template DsoRules with
         void $ fetchChecked (ForDso with dso) transferCid
         _ <- exercise transferCid GovernanceLockTransfer_DsoExpire
         pure $ DsoRules_GovernanceLockTransfer_DsoExpireResult
+
+    nonconsuming choice DsoRules_UnlockProposal_DsoExpire : DsoRules_UnlockProposal_DsoExpireResult
+      -- ^ Expires an unlock proposal that was never accepted, so that SVs can garbage-collect proposals left behind by their senders.
+      with
+        proposalCid : ContractId UnlockProposal
+        sv : Party
+      controller sv
+      do
+        getAndValidateSvParty this (Some sv)
+        void $ fetchChecked (ForDso with dso) proposalCid
+        exercise proposalCid UnlockProposal_DsoExpire
+        pure $ DsoRules_UnlockProposal_DsoExpireResult
+
+    nonconsuming choice DsoRules_WithdrawVestedFunds_DsoExpire : DsoRules_WithdrawVestedFunds_DsoExpireResult
+      -- ^ Expires a withdrawal proposal that was never accepted, so that SVs can garbage-collect proposals left behind by their senders.
+      with
+        proposalCid : ContractId WithdrawVestedFunds
+        sv : Party
+      controller sv
+      do
+        getAndValidateSvParty this (Some sv)
+        void $ fetchChecked (ForDso with dso) proposalCid
+        exercise proposalCid WithdrawVestedFunds_DsoExpire
+        pure $ DsoRules_WithdrawVestedFunds_DsoExpireResult
 
     nonconsuming choice DsoRules_MiningRound_Close : DsoRules_MiningRound_CloseResult
       with
