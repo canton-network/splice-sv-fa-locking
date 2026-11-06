@@ -1112,6 +1112,20 @@ trait SvDsoStore
     splice.governancelock.GovernanceLock,
   ]
 
+  /** List underlock instructions whose provider has a `FeaturedAppRight`.
+    *
+    * Instructions whose provider has no right cannot be executed, so they
+    * are left for the expiry automation. Instructions whose provider is an
+    * unavailable party are skipped.
+    */
+  def listFeaturedAppUnderlockInstructionsWithFeaturedAppRight(
+      unavailablePartiesStore: Option[UnavailablePartiesStore] = None,
+      limit: Limit = defaultLimit,
+  )(implicit tc: TraceContext): Future[Seq[AssignedContract[
+    splice.dso.instruction.FeaturedAppUnderlockInstruction.ContractId,
+    splice.dso.instruction.FeaturedAppUnderlockInstruction,
+  ]]]
+
   def lookupFeaturedAppRight(
       providerPartyId: PartyId
   )(implicit
@@ -1798,6 +1812,18 @@ object SvDsoStore {
           governanceLockType = Some(lockType.storeValue),
           governanceLockSubject = Some(lockSubject),
           contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.expiresAt)),
+        )
+      },
+      mkFilter(splice.dso.instruction.FeaturedAppUnderlockInstruction.COMPANION)(
+        co => co.payload.dso == dso,
+        versionGuard = { case (pkgVersionSupport, now) =>
+          (tc) => pkgVersionSupport.supportsFeaturedAppUnderlock(Seq(dsoParty), now)(tc)
+        },
+      ) { contract =>
+        DsoAcsStoreRowData(
+          contract,
+          contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.expiresAt)),
+          featuredAppRightProvider = Some(PartyId.tryFromProtoPrimitive(contract.payload.provider)),
         )
       },
     )

@@ -459,6 +459,53 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
         }
       }
 
+      "ingest FeaturedAppUnderlockInstructions scoped to the DSO party" in {
+        val underlocked = featuredAppUnderlockInstruction(
+          userParty(1),
+          underlocked = true,
+          expiresAt = time(2).toInstant,
+        )
+        val recovered = featuredAppUnderlockInstruction(
+          userParty(2),
+          underlocked = false,
+          expiresAt = time(4).toInstant,
+        )
+        val otherDso = featuredAppUnderlockInstruction(
+          userParty(1),
+          underlocked = true,
+          expiresAt = time(2).toInstant,
+          dso = userParty(4),
+        )
+        for {
+          store <- mkStore()
+          _ <- MonadUtil.sequentialTraverse(Seq(underlocked, recovered, otherDso))(
+            dummyDomain.create(_)(store.multiDomainAcsStore)
+          )
+          result <- store.multiDomainAcsStore.listContracts(
+            splice.dso.instruction.FeaturedAppUnderlockInstruction.COMPANION
+          )
+        } yield {
+          result.map(_.contractId) should contain theSameElementsAs Seq(
+            underlocked.contractId,
+            recovered.contractId,
+          )
+          // The ingested expiry lets the expiry automation find the
+          // instructions by `contract_expires_at`.
+          val listExpired = store.multiDomainAcsStore.listExpiredFromPayloadExpiry(
+            splice.dso.instruction.FeaturedAppUnderlockInstruction.COMPANION
+          )
+          def expiredAt(t: CantonTimestamp) =
+            listExpired(t, PageLimit.tryCreate(10))(TraceContext.empty).futureValue
+              .map(_.contract.contractId)
+          expiredAt(time(2)) should be(empty)
+          expiredAt(time(3)) should contain theSameElementsAs Seq(underlocked.contractId)
+          expiredAt(time(5)) should contain theSameElementsAs Seq(
+            underlocked.contractId,
+            recovered.contractId,
+          )
+        }
+      }
+
     }
 
     "lookupSvOnboardingConfirmedByParty" should {
@@ -2986,6 +3033,30 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
       ),
     )
 
+  protected def featuredAppUnderlockInstruction(
+      provider: PartyId,
+      underlocked: Boolean = true,
+      expiresAt: Instant = time(2).toInstant,
+      dso: PartyId = dsoParty,
+      contractId: String = nextCid(),
+  ): Contract[
+    splice.dso.instruction.FeaturedAppUnderlockInstruction.ContractId,
+    splice.dso.instruction.FeaturedAppUnderlockInstruction,
+  ] =
+    contract(
+      identifier =
+        splice.dso.instruction.FeaturedAppUnderlockInstruction.TEMPLATE_ID_WITH_PACKAGE_ID,
+      contractId = new splice.dso.instruction.FeaturedAppUnderlockInstruction.ContractId(
+        contractId
+      ),
+      payload = new splice.dso.instruction.FeaturedAppUnderlockInstruction(
+        dso.toProtoPrimitive,
+        provider.toProtoPrimitive,
+        underlocked,
+        expiresAt,
+      ),
+    )
+
   private def svOnboardingRequest(
       name: String,
       candidate: PartyId,
@@ -3363,6 +3434,106 @@ class DbSvDsoStoreTest
         )
       }
     }
+
+  "listFeaturedAppUnderlockInstructionsWithFeaturedAppRight" should {
+
+    def listCids(
+        store: SvDsoStore,
+        ignored: Option[Set[PartyId]] = None,
+    ) = store
+      .listFeaturedAppUnderlockInstructionsWithFeaturedAppRight(
+        ignored.map(new InMemoryUnavailablePartiesStore(_)),
+        PageLimit.tryCreate(100),
+      )(traceContext)
+      .map(_.map(_.contract.contractId))
+
+    "return only instructions whose provider has a live FeaturedAppRight" in {
+      val featuredProvider = userParty(1)
+      val underlocked =
+        featuredAppUnderlockInstruction(featuredProvider, underlocked = true)
+      // An instruction reporting a recovery is listed just like one
+      // reporting an underlock.
+      val recovered =
+        featuredAppUnderlockInstruction(featuredProvider, underlocked = false)
+      // An expired instruction is still listed: executing it is allowed.
+      val expired = featuredAppUnderlockInstruction(
+        featuredProvider,
+        expiresAt = time(0).toInstant,
+      )
+      // No FeaturedAppRight is created for this provider, so its
+      // instruction cannot be executed and must not be listed.
+      val unfeaturedInstruction = featuredAppUnderlockInstruction(userParty(2))
+      // The 'dso' party differs from mkStore()'s, so this is never ingested.
+      val otherDsoInstruction =
+        featuredAppUnderlockInstruction(featuredProvider, dso = userParty(4))
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(featuredProvider))(
+          store.multiDomainAcsStore
+        )
+        _ <- MonadUtil.sequentialTraverse(
+          Seq(
+            underlocked,
+            recovered,
+            expired,
+            unfeaturedInstruction,
+            otherDsoInstruction,
+          )
+        )(dummyDomain.create(_)(store.multiDomainAcsStore))
+        result <- listCids(store)
+      } yield {
+        result should contain theSameElementsAs Seq(
+          underlocked.contractId,
+          recovered.contractId,
+          expired.contractId,
+        )
+      }
+    }
+
+    "not return duplicate rows when a provider has more than one live FeaturedAppRight" in {
+      val provider = userParty(1)
+      val instruction = featuredAppUnderlockInstruction(provider)
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(instruction)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(provider))(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(provider))(store.multiDomainAcsStore)
+        result <- listCids(store)
+      } yield {
+        result should contain theSameElementsAs Seq(instruction.contractId)
+      }
+    }
+
+    "respects ignored parties" in {
+      val providerA = userParty(1)
+      val providerB = userParty(2)
+      val instructionA = featuredAppUnderlockInstruction(providerA)
+      val instructionB = featuredAppUnderlockInstruction(providerB)
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(instructionA)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(instructionB)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(providerA))(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(providerB))(store.multiDomainAcsStore)
+        result <- listCids(store)
+        resultNoneIgnored <- listCids(store, Some(Set.empty))
+        resultNoProviderA <- listCids(store, Some(Set(providerA)))
+        resultNoProviders <- listCids(store, Some(Set(providerA, providerB)))
+      } yield {
+        val all = Seq(instructionA.contractId, instructionB.contractId)
+        result should contain theSameElementsAs all
+        resultNoneIgnored should contain theSameElementsAs all
+        resultNoProviderA should contain theSameElementsAs Seq(instructionB.contractId)
+        resultNoProviders shouldBe empty
+      }
+    }
+
   }
 
   "listVoteRequestsReadyToBeClosed" should {
