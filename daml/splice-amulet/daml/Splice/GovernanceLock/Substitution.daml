@@ -8,28 +8,32 @@ module Splice.GovernanceLock.Substitution (
   GovernanceLockSubstitution_DsoExpireResult(..),
 
   -- * Operations
-  CreateSubstitutionArgs(..),
-  createSubstitution,
+  GovernanceLock_SubstitutionResult(..),
+  GovernanceLockProposeSubstitutionArgs(..),
+  governanceLock_proposeSubstitution,
+  governanceLockSubstitution_operations,
 ) where
 
-import DA.Assert
+import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
 import DA.Map qualified as Map
 import DA.Optional
+import DA.Set qualified as Set
 import DA.Time
 
 import Splice.Amulet
-import Splice.Amulet.TokenApiUtils
 import Splice.AmuletConfig (getTokenStandardMaxTTL)
 import Splice.AmuletRules
 import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
-import Splice.GovernanceLock
 import Splice.ExternalPartyConfigState
-import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
+import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal
+import Splice.TokenStandard.Utils
 import Splice.Types
-import Splice.Util (HasCheckedFetch(..))
+import Splice.Util
 
 -- | A proposal for a substitution of a governance lock.
 template GovernanceLockSubstitution with
@@ -37,13 +41,15 @@ template GovernanceLockSubstitution with
     owner : Party -- ^ Party that proposed the substitution
     amount : Decimal -- ^ Amount being substituted
     lockedAmulet : Optional (ContractId LockedAmulet)
+    approvals : Optional (Map.Map Party Bool) -- ^ Approvals recorded so far.
     requestedAt : Time -- ^ Time of the request to create the proposal.
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
     originalSubstitutionCid : Optional (ContractId GovernanceLockSubstitution)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
     signatory target.dso, owner
-    observer target.owner, governanceLockObservers target.specification
+    observer target.owner, governanceLockObservers target.specification,
+             (Set.fromList $ concat (governanceLockSubstitutionControllers this).controllers)
     -- A proposal by the target lock owner is funded by the target lock, not by `lockedAmulet`
     ensure if owner == target.owner then isNone lockedAmulet else True
 
@@ -55,188 +61,82 @@ template GovernanceLockSubstitution with
         pure GovernanceLockSubstitution_DsoExpireResult
 
     interface instance V1.TransferInstruction for GovernanceLockSubstitution where
-      view = substitution_transferInstructionView SubstitutionTransferInstructionViewArgs with
-        dso = target.dso
-        targetOwner = target.owner
-        proposer = owner
-        amount
-        meta = substitutionGovernanceLockMetadata target.specification
-        requestedAt
-        expiresAt
-        lockedAmulet
-        originalSubstitutionCid = toInterfaceContractId <$> originalSubstitutionCid
-
-      transferInstruction_acceptImpl self V1.TransferInstruction_Accept{..} = do
-        result <- governanceLockSubstitution_acceptImpl (coerceContractId self) this [target.owner] extraArgs
-        pure $ substitutionTransferResult_completed result.unlockedAmulet
-      transferInstruction_rejectImpl self _ = do
-        result <- governanceLockSubstitution_rejectImpl (coerceContractId self) this [target.owner]
-        pure $ substitutionTransferResult_failed result.unlockedAmulet
-      transferInstruction_withdrawImpl self _ = do
-        result <- governanceLockSubstitution_withdrawImpl (coerceContractId self) this [owner]
-        pure $ substitutionTransferResult_failed result.unlockedAmulet
-      transferInstruction_updateImpl _ _ = assertFail substitutionTransferUpdateUnsupported
+      view = proposal_transferInstructionViewV1 "substitution" target.owner $ governanceLockSubstitution_proposalView this
+      transferInstruction_acceptImpl = proposal_transferInstructionV1_acceptImpl governanceLockSubstitution_operations this [target.owner]
+      transferInstruction_rejectImpl = proposal_transferInstructionV1_rejectImpl governanceLockSubstitution_operations this [target.owner]
+      transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl governanceLockSubstitution_operations this [owner]
+      transferInstruction_updateImpl _ _ = fail "Transfers representing governance lock substitutions cannot be updated"
 
     interface instance V2.TransferInstruction for GovernanceLockSubstitution where
-      view =
-        let v1View = view @V1.TransferInstruction (toInterface this)
-        in V2.TransferInstructionView with
-          originalInstructionCid = coerceContractId <$> originalSubstitutionCid
-          transfer = upcast v1View.transfer
-          expiresAt = Some expiresAt
-          availableActions = Map.fromList [(V2.TIA_Accept, [[target.owner]]), (V2.TIA_Reject, [[target.owner]]), (V2.TIA_Withdraw, [[owner]])]
-          meta = v1View.meta
-
-      transferInstruction_acceptImpl = transferInstructionV2_receiverActor_acceptDefaultImplUsingV1 target.owner
-      transferInstruction_rejectImpl = transferInstructionV2_receiverActor_rejectDefaultImplUsingV1 target.owner
-      transferInstruction_withdrawImpl = transferInstructionV2_senderActor_withdrawDefaultImplUsingV1 owner
-
+      view = proposal_transferInstructionViewV2 $ governanceLockSubstitution_proposalView this
+      transferInstruction_acceptImpl = proposal_transferInstructionV2_acceptImpl governanceLockSubstitution_operations this
+      transferInstruction_rejectImpl = proposal_transferInstructionV2_rejectImpl governanceLockSubstitution_operations this
+      transferInstruction_withdrawImpl = proposal_transferInstructionV2_withdrawImpl governanceLockSubstitution_operations this
       transferInstruction_acceptExtraObservers _ = observer this
       transferInstruction_rejectExtraObservers _ = observer this
       transferInstruction_withdrawExtraObservers _ = observer this
 
-data GovernanceLockSubstitution_AcceptResult
-  = GovernanceLockSubstitution_AcceptResult with
-      lockCid : ContractId GovernanceLock
-      remainingLockCid : Optional (ContractId GovernanceLock)
-      unlockedAmulet : Optional (ContractId Amulet)
-        -- ^ The substituted funds, returned to the owner of the target lock.
-        -- `None` if the proposer is the owner of the target lock, as no funds are then returned.
-
-data GovernanceLockSubstitution_WithdrawResult
-  = GovernanceLockSubstitution_WithdrawResult with
-    unlockedAmulet : Optional (ContractId Amulet)
-      -- ^ The funds returned to the proposer. `None` if the proposal did not lock any funds, or if their lock expired.
-
-data GovernanceLockSubstitution_RejectResult
-  = GovernanceLockSubstitution_RejectResult with
-    unlockedAmulet : Optional (ContractId Amulet)
-      -- ^ The funds returned to the proposer. `None` if the proposal did not lock any funds, or if their lock expired.
-
 data GovernanceLockSubstitution_DsoExpireResult = GovernanceLockSubstitution_DsoExpireResult {}
   deriving (Serializable)
 
-governanceLockSubstitution_acceptImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> ExtraArgs -> Update GovernanceLockSubstitution_AcceptResult
-governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors extraArgs = do
-  checkActors actors [[target.owner]]
-  assertWithinDeadline "expiresAt" expiresAt
-  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext target.dso extraArgs.context
-  -- The legs report the memo of the accepted proposal
-  let reason = reasonFromMeta $ substitutionGovernanceLockMetadata target.specification
-  FetchAndMergeLocksResult{lockCid} <- fetchAndMergeGovernanceLocks target context state reason
-  let forOwner = ForOwner with dso = target.dso; owner = target.owner
-  (newLockedAmulet, remainingLockCid, unlockedAmulet) <- case lockedAmulet of
-    Some proposalLockedAmulet -> do
-      substituteResult <- governanceLock_dsoSubstituteImpl forOwner lockCid amount reason extraArgs
-      pure (proposalLockedAmulet, substituteResult.remainingLockCid, Some substituteResult.unlockedAmulet)
-    None -> do
-      -- The proposer is the owner of the target lock, so the target lock funds the new lock
-      splitResult <- governanceLock_dsoSplitForSubstitutionImpl forOwner lockCid amount target.specification reason extraArgs
-      pure (splitResult.splitAmulet, splitResult.remainingLockCid, None)
-  newLockCid <- create GovernanceLock with
-    dso = target.dso
-    owner
-    amount
-    lockedAmulet = newLockedAmulet
-    specification = target.specification
-    originalLockCid = Some $ toAnyContractId self
-    requestedAt = requestedAt
-  pure GovernanceLockSubstitution_AcceptResult with
-    lockCid = newLockCid
-    remainingLockCid
-    unlockedAmulet
+governanceLockSubstitution_proposalView : GovernanceLockSubstitution -> ProposalView GovernanceLockSubstitution
+governanceLockSubstitution_proposalView proposal@GovernanceLockSubstitution{..} = ProposalView with
+  proposal
+  lockKey = target
+  proposers = [owner]
+  controllers = governanceLockSubstitutionControllers proposal
+  approvals = fromOptional Map.empty approvals
+  amount
+  lockedAmulet
+  requestedAt
+  expiresAt
+  originalProposalCid = originalSubstitutionCid
+  meta = governanceLockSubstitutionMetadata target.specification
 
--- | Unlocks the funds of a substitution proposal, which returns them to the proposer.
--- Returns `None` if the proposal did not lock any funds, or if the lock of the funds has expired.
-substitution_returnFunds : Party -> Party -> GovernanceLockSpecification -> Optional (ContractId LockedAmulet) -> Update (Optional (ContractId Amulet))
-substitution_returnFunds _ _ _ None = pure None
-substitution_returnFunds dso proposer specification (Some lockedAmuletCid) = do
-  lockExpired <- isLedgerTimeGE (governanceLockExpiresAt specification)
-  if lockExpired
-    then pure None
-    else Some . fst <$> unlockAmulet (ForOwner with dso; owner = proposer) lockedAmuletCid
-
-governanceLockSubstitution_withdrawImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> Update GovernanceLockSubstitution_WithdrawResult
-governanceLockSubstitution_withdrawImpl _self this actors = do
-  checkActors actors [[this.owner]]
-  unlockedAmulet <- substitution_returnFunds this.target.dso this.owner this.target.specification this.lockedAmulet
-  pure GovernanceLockSubstitution_WithdrawResult with unlockedAmulet
-
-governanceLockSubstitution_rejectImpl : ContractId GovernanceLockSubstitution -> GovernanceLockSubstitution -> [Party] -> Update GovernanceLockSubstitution_RejectResult
-governanceLockSubstitution_rejectImpl _self this actors = do
-  checkActors actors [[this.target.owner]]
-  unlockedAmulet <- substitution_returnFunds this.target.dso this.owner this.target.specification this.lockedAmulet
-  pure GovernanceLockSubstitution_RejectResult with unlockedAmulet
-
-data SubstitutionTransferInstructionViewArgs = SubstitutionTransferInstructionViewArgs with
-  dso : Party
-  targetOwner : Party
-  proposer : Party
-  amount : Decimal
-  meta : Metadata
-  requestedAt : Time
-  expiresAt : Time
-  lockedAmulet : Optional (ContractId LockedAmulet)
-  originalSubstitutionCid : Optional (ContractId V1.TransferInstruction)
-
--- | TSv1 view of a substitution proposal.
---
--- The receiver is the owner of the target lock, instead of `lockManagerParty`, so that the owner of the
--- target lock can accept the proposal with `TransferInstruction_Accept`.
-substitution_transferInstructionView : SubstitutionTransferInstructionViewArgs -> V1.TransferInstructionView
-substitution_transferInstructionView SubstitutionTransferInstructionViewArgs{..} =
-  V1.TransferInstructionView with
-    originalInstructionCid = coerceContractId <$> originalSubstitutionCid
-    transfer = V1.Transfer with
-      sender = proposer
-      receiver = targetOwner
-      amount
-      instrumentId = amuletInstrumentId dso
-      requestedAt
-      executeBefore = expiresAt
-      inputHoldingCids = toInterfaceContractId <$> optionalToList lockedAmulet
-      meta
-    status = V1.TransferPendingInternalWorkflow with
-      pendingActions = Map.fromListWithR (\x y -> x <> "; " <> y)
-        [ (targetOwner, "accept substitution")
-        , (targetOwner, "reject substitution")
-        , (proposer, "withdraw substitution")]
-    meta = emptyMetadata
-
-substitutionTransferUpdateUnsupported = "Transfers representing governance lock substitutions cannot be updated"
-
-substitutionTransferResult_completed : Optional (ContractId Amulet) -> V1.TransferInstructionResult
-substitutionTransferResult_completed unlockedAmulet = V1.TransferInstructionResult with
-  output = V1.TransferInstructionResult_Completed with
-    receiverHoldingCids = toInterfaceContractId <$> optionalToList unlockedAmulet
-  senderChangeCids = []
-  meta = emptyMetadata
-
-substitutionTransferResult_failed : Optional (ContractId Amulet) -> V1.TransferInstructionResult
-substitutionTransferResult_failed unlockedAmulet = V1.TransferInstructionResult with
-  output = V1.TransferInstructionResult_Failed
-  senderChangeCids = toInterfaceContractId <$> optionalToList unlockedAmulet
-  meta = emptyMetadata
+governanceLockSubstitutionControllers : GovernanceLockSubstitution -> ControllersSpecification
+governanceLockSubstitutionControllers GovernanceLockSubstitution{target, owner} =
+  let optControllers = case target.specification of
+        GLS_FullLock spec -> spec.substitutionControllers
+        GLS_VestingLock spec -> spec.vestingControllers
+      controllerSets = optional [[]] (.controllers) optControllers
+  in makeControllersSpecification $ fmap (\s -> target.owner :: owner :: s) controllerSets
 
 -- | Memo of a substitution proposal of a `GovernanceLock`: the memo of the new lock plus the accept request.
-substitutionGovernanceLockMetadata : GovernanceLockSpecification -> Metadata
-substitutionGovernanceLockMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-substitute-lock"
+governanceLockSubstitutionMetadata : GovernanceLockSpecification -> Metadata
+governanceLockSubstitutionMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-substitute-lock"
+
+data GovernanceLock_SubstitutionResult_Completed = GovernanceLock_SubstitutionResult_Completed with
+  lockCid : ContractId GovernanceLock
+  remainingLockCid : Optional (ContractId GovernanceLock)
+  unlockedAmulet : Optional (ContractId Amulet)
+    -- ^ The substituted funds, returned to the owner of the target lock.
+    -- `None` if the proposer is the owner of the target lock, as no funds are then returned.
+
+type GovernanceLock_SubstitutionResult = ProposalUpdateResult GovernanceLockSubstitution GovernanceLock_SubstitutionResult_Completed
+
+governanceLock_substitutionResult_completed_transferInstructionResult : GovernanceLock_SubstitutionResult_Completed -> V2.TransferInstructionResult
+governanceLock_substitutionResult_completed_transferInstructionResult GovernanceLock_SubstitutionResult_Completed{..} =
+  V2.TransferInstructionResult with
+    output = V2.TransferInstructionResult_Completed with
+      receiverHoldingCids = toInterfaceContractId <$> optionalToList unlockedAmulet
+    senderChangeCids = []
+    meta = emptyMetadata
 
 -- | Type to simplify passing in all the arguments required to create a substitution proposal.
-data CreateSubstitutionArgs = CreateSubstitutionArgs with
-    dso : Party
-    target : GovernanceLockKey
-    owner : Party -- ^ Party that proposed the substitution
-    amount : Decimal -- ^ Amount being substituted
-    inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
-    extraArgs : ExtraArgs
-    requestedAt : Time -- ^ Time of the request to create the proposal
-    reason : Text -- ^ Memo of the request to create the proposal, which the transfer legs report as their reason
-    context : ExternalPartyTransferContext
-    state : ExternalPartyConfigState
+data GovernanceLockProposeSubstitutionArgs = GovernanceLockProposeSubstitutionArgs with
+  dso : Party
+  target : GovernanceLockKey
+  owner : Party -- ^ Party that proposed the substitution
+  amount : Decimal -- ^ Amount being substituted
+  inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
+  extraArgs : ExtraArgs
+  requestedAt : Time -- ^ Time of the request to create the proposal
+  reason : Text -- ^ Memo of the request to create the proposal, which the transfer legs report as their reason
+  context : ExternalPartyTransferContext
+  state : ExternalPartyConfigState
 
-createSubstitution : CreateSubstitutionArgs -> Update (ContractId V1.TransferInstruction, V1.TransferInstruction, Optional (ContractId Amulet))
-createSubstitution CreateSubstitutionArgs {..} = do
+governanceLock_proposeSubstitution : GovernanceLockProposeSubstitutionArgs -> Update (GovernanceLock_SubstitutionResult, Optional (ContractId Amulet))
+governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs {..} = do
   assertInPast24Hours "requestedAt" requestedAt
   requireMinimumLock state amount
   -- A substitution proposed by the owner of the target lock is funded by the target lock on acceptance,
@@ -257,16 +157,76 @@ createSubstitution CreateSubstitutionArgs {..} = do
     GLS_VestingLock VestingLockSpecification{endTime} -> do
       assertWithinDeadline "target lock endTime" endTime
       pure $ min maxExpiresAt endTime
-  let substitution = GovernanceLockSubstitution with
-        target
-        owner
-        amount
-        lockedAmulet
-        requestedAt
-        expiresAt
-        originalSubstitutionCid = None
-  substitutionCid <- create substitution
-  pure (toInterfaceContractId substitutionCid, toInterface substitution, changeHolding)
+
+  result <- proposal_create governanceLockSubstitution_operations ProposalUpdateArgs with
+    proposalCid = None
+    proposal = governanceLockSubstitution_proposalView GovernanceLockSubstitution with
+      target
+      owner
+      amount
+      lockedAmulet
+      approvals = Some Map.empty
+      requestedAt
+      expiresAt
+      originalSubstitutionCid = None
+    actors = [owner]
+    reason
+    getContext = pure (context, state)
+
+  pure (result, changeHolding)
+
+governanceLock_executeSubstitution : ProposalExecuteArgs GovernanceLockSubstitution -> Update GovernanceLock_SubstitutionResult
+governanceLock_executeSubstitution ProposalExecuteArgs{..} = do
+  let FetchAndMergeLocksResult{lockCid} = merged
+      GovernanceLockSubstitution{..} = proposal
+  assertWithinDeadline "expiresAt" expiresAt
+  let forOwner = ForOwner with dso = target.dso; owner = target.owner
+  (newLockedAmulet, remainingLockCid, unlockedAmulet) <- case lockedAmulet of
+    Some proposalLockedAmulet -> do
+      substituteResult <- governanceLock_dsoSubstituteImpl forOwner lockCid amount reason context state
+      pure (proposalLockedAmulet, substituteResult.remainingLockCid, Some substituteResult.unlockedAmulet)
+    None -> do
+      -- The proposer is the owner of the target lock, so the target lock funds the new lock
+      splitResult <- governanceLock_dsoSplitForSubstitutionImpl forOwner lockCid amount target.specification reason context state
+      pure (splitResult.splitAmulet, splitResult.remainingLockCid, None)
+  newLockCid <- create GovernanceLock with
+    dso = target.dso
+    owner
+    amount
+    lockedAmulet = newLockedAmulet
+    specification = target.specification
+    originalLockCid = toAnyContractId <$> proposalCid
+    requestedAt = requestedAt
+  pure $ Right GovernanceLock_SubstitutionResult_Completed with
+    lockCid = newLockCid
+    remainingLockCid
+    unlockedAmulet
+
+-- | Unlocks the funds of a substitution proposal, which returns them to the proposer.
+-- Returns `None` if the proposal did not lock any funds, or if the lock of the funds has expired.
+substitution_returnFunds : Party -> Party -> GovernanceLockSpecification -> Optional (ContractId LockedAmulet) -> Update (Optional (ContractId Amulet))
+substitution_returnFunds _ _ _ None = pure None
+substitution_returnFunds dso proposer specification (Some lockedAmuletCid) = do
+  lockExpired <- isLedgerTimeGE (governanceLockExpiresAt specification)
+  if lockExpired
+    then pure None
+    else Some . fst <$> unlockAmulet (ForOwner with dso; owner = proposer) lockedAmuletCid
+
+governanceLockSubstitution_operations : ProposalOperations GovernanceLockSubstitution GovernanceLock_SubstitutionResult_Completed
+governanceLockSubstitution_operations = ProposalOperations with
+  makeView = governanceLockSubstitution_proposalView
+  recreate = \approvals originalSubstitutionCid proposal ->
+    let updatedProposal = proposal with approvals = Some approvals; originalSubstitutionCid
+    in (, updatedProposal) <$> create updatedProposal
+  execute = governanceLock_executeSubstitution
+  completedResult = governanceLock_substitutionResult_completed_transferInstructionResult
+  rejectedResult = Some $ \ProposalUpdateArgs{proposal} -> do
+    let GovernanceLockSubstitution{..} = proposal.proposal
+    unlockedAmulet <- substitution_returnFunds target.dso owner target.specification lockedAmulet
+    pure V2.TransferInstructionResult with
+      output = V2.TransferInstructionResult_Failed
+      senderChangeCids = toInterfaceContractId <$> optionalToList unlockedAmulet
+      meta = emptyMetadata
 
 -- Instances
 ------------

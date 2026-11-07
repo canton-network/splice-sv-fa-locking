@@ -236,6 +236,7 @@ unlockProposal_operations = ProposalOperations with
     in (, updatedProposal) <$> create updatedProposal
   execute = governanceLock_executeUnlock
   completedResult = governanceLock_unlockResult_completed_transferInstructionResult
+  rejectedResult = None
 
 -- Instances
 ------------

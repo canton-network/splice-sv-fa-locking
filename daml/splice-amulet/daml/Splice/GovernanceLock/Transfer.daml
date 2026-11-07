@@ -148,8 +148,7 @@ data GovernanceLockProposeTransferArgs = GovernanceLockProposeTransferArgs with
 
 governanceLock_proposeTransfer : GovernanceLockProposeTransferArgs -> Update GovernanceLock_TransferResult
 governanceLock_proposeTransfer GovernanceLockProposeTransferArgs{..} = do
-  let emptyApprovals = Map.empty
-      maxExpiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
+  let maxExpiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
   expiresAt <- case source.specification of
     GLS_FullLock _ -> pure maxExpiresAt
     GLS_VestingLock VestingLockSpecification{endTime} -> do
@@ -169,7 +168,7 @@ governanceLock_proposeTransfer GovernanceLockProposeTransferArgs{..} = do
       source
       receiver
       amount
-      approvals = Some emptyApprovals
+      approvals = Some Map.empty
       requestedAt
       expiresAt
       originalProposalCid = None
@@ -213,6 +212,7 @@ governanceLockTransfer_operations = ProposalOperations with
     in (, updatedProposal) <$> create updatedProposal
   execute = governanceLock_executeTransfer
   completedResult = governanceLock_transferResult_completed_transferInstructionResult
+  rejectedResult = None
 
 -- Instances
 ------------

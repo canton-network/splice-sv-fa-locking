@@ -415,12 +415,11 @@ governanceLock_lockForGovernance_impl dso amount inputs fullSpecification extraA
 
 -- | Release `substitutedAmount` of the locked funds to the owner as part of an approved
 -- substitution. Only the accept step of a `GovernanceLockSubstitution` calls this.
-governanceLock_dsoSubstituteImpl : ForOwner -> ContractId GovernanceLock -> Decimal -> Text -> ExtraArgs -> Update GovernanceLock_DsoSubstituteResult
-governanceLock_dsoSubstituteImpl forOwner@ForOwner{..} lockCid substitutedAmount reason extraArgs = do
+governanceLock_dsoSubstituteImpl : ForOwner -> ContractId GovernanceLock -> Decimal -> Text -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_DsoSubstituteResult
+governanceLock_dsoSubstituteImpl forOwner@ForOwner{..} lockCid substitutedAmount reason context state = do
   lock@GovernanceLock{..} <- fetchAndArchive forOwner lockCid
   case substitutedAmount `compare` amount of
     LT -> do
-      (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
       (Some (newLockedAmulet, remainingAmount), unlockedAmulet) <- partialUnlock forOwner lockedAmulet substitutedAmount context reason
       requireMinimumLock state remainingAmount
       requireMinimumLock state substitutedAmount
@@ -442,12 +441,11 @@ governanceLock_dsoSubstituteImpl forOwner@ForOwner{..} lockCid substitutedAmount
 -- | Split `splitAmount` of the locked funds off into a `LockedAmulet` for a new lock with
 -- `newSpecification`, as part of an approved substitution proposed by the owner of this lock.
 -- Only the accept step of a `GovernanceLockSubstitution` calls this.
-governanceLock_dsoSplitForSubstitutionImpl : ForOwner -> ContractId GovernanceLock -> Decimal -> GovernanceLockSpecification -> Text -> ExtraArgs -> Update GovernanceLock_DsoSplitForSubstitutionResult
-governanceLock_dsoSplitForSubstitutionImpl forOwner@ForOwner{..} lockCid splitAmount newSpecification reason extraArgs = do
+governanceLock_dsoSplitForSubstitutionImpl : ForOwner -> ContractId GovernanceLock -> Decimal -> GovernanceLockSpecification -> Text -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Update GovernanceLock_DsoSplitForSubstitutionResult
+governanceLock_dsoSplitForSubstitutionImpl forOwner@ForOwner{..} lockCid splitAmount newSpecification reason context state = do
   lock@GovernanceLock{..} <- fetchAndArchive forOwner lockCid
   requireMatchExpected ("newSpecification", newSpecification) specification
   let splitLockExpiresAt = governanceLockExpiresAt specification
-  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
   case splitAmount `compare` amount of
     LT -> do
       (Some (newLockedAmulet, remainingAmount), (splitAmulet, _)) <- splitLockedAmulet forOwner lockedAmulet (splitAmount, splitLockExpiresAt) context reason

@@ -213,7 +213,7 @@ governanceLock_transferFactoryV1_unlockImpl dso actors V1.TransferFactory_Transf
     reason
     requestedAt = transfer.requestedAt
 
-  pure $ downcast $ proposalUpdateResult_transferInstructionResult unlockProposal_operations result
+  pure $ downcast $ proposalUpdateResult_transferInstructionResult unlockProposal_operations None result
 
 governanceLock_transferFactoryV1_transferLockImpl
   :  V1.TransferFactory_Transfer
@@ -246,7 +246,7 @@ governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{tr
         inputHoldingCids = outputTransfer.inputHoldingCids
         meta = governanceLockTransferMetadata source.specification
 
-  pure $ downcast $ proposalUpdateResult_transferInstructionResult governanceLockTransfer_operations result
+  pure $ downcast $ proposalUpdateResult_transferInstructionResult governanceLockTransfer_operations None result
 
 governanceLock_transferFactoryV1_withdrawVestedFundsImpl
   :  Party
@@ -273,7 +273,7 @@ governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso actors V1.TransferF
     reason
     requestedAt = transfer.requestedAt
 
-  pure $ downcast $ proposalUpdateResult_transferInstructionResult withdrawVestedFunds_operations result
+  pure $ downcast $ proposalUpdateResult_transferInstructionResult withdrawVestedFunds_operations None result
 
 governanceLock_transferFactoryV1_substituteImpl
   :  Party
@@ -283,33 +283,31 @@ governanceLock_transferFactoryV1_substituteImpl
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
 governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{..} target context state = do
-  (substitutionCid, substitution, changeCid) <- createSubstitution
-    CreateSubstitutionArgs with
-      dso
-      target
-      owner = transfer.sender
-      amount = transfer.amount
-      inputHoldingCids = transfer.inputHoldingCids
-      extraArgs
-      requestedAt = transfer.requestedAt
-      reason = reasonFromMeta transfer.meta
-      context
-      state
+  (result, changeCid) <- governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs with
+    dso
+    target
+    owner = transfer.sender
+    amount = transfer.amount
+    inputHoldingCids = transfer.inputHoldingCids
+    extraArgs
+    requestedAt = transfer.requestedAt
+    reason = reasonFromMeta transfer.meta
+    context
+    state
 
-  -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
-  let substitutionTransfer = (view substitution).transfer
-  requireMatchExpected ("substitution transfer", substitutionTransfer) transfer with
-    -- The receiver of the substitution is the owner of the target lock, not `lockManagerParty`
-    receiver = substitutionTransfer.receiver
-    executeBefore = substitutionTransfer.executeBefore
-    inputHoldingCids = substitutionTransfer.inputHoldingCids
-    meta = substitutionTransfer.meta
+  case result of
+    Right _ -> pure ()
+    Left (_, substitution) -> do
+      -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
+      let substitutionTransfer = (view $ toInterface @V1.TransferInstruction substitution).transfer
+      requireMatchExpected ("substitution transfer", substitutionTransfer) transfer with
+        -- The receiver of the substitution is the owner of the target lock, not `lockManagerParty`
+        receiver = substitutionTransfer.receiver
+        executeBefore = substitutionTransfer.executeBefore
+        inputHoldingCids = substitutionTransfer.inputHoldingCids
+        meta = substitutionTransfer.meta
 
-  pure V1.TransferInstructionResult with
-    output = V1.TransferInstructionResult_Pending with
-      transferInstructionCid = substitutionCid
-    senderChangeCids = optionalToList $ toInterfaceContractId <$> changeCid
-    meta = emptyMetadata
+  pure $ downcast $ proposalUpdateResult_transferInstructionResult governanceLockSubstitution_operations (toInterfaceContractId <$> changeCid) result
 
 -- Parsers
 ----------

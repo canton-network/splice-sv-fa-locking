@@ -214,6 +214,7 @@ withdrawVestedFunds_operations = ProposalOperations with
     in (, updatedProposal) <$> create updatedProposal
   execute = vestingLock_executeWithdraw
   completedResult = vestingLock_withdrawResult_completed_transferInstructionResult
+  rejectedResult = None
 
 -- Instances
 ------------

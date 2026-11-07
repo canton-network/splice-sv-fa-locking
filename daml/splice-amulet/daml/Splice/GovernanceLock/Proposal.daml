@@ -26,6 +26,7 @@ import DA.Optional
 import Splice.Amulet
 import Splice.Amulet.TokenApiUtils
 import Splice.AmuletRules
+import Splice.Api.Token.HoldingV2 (Holding)
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
@@ -102,6 +103,7 @@ data ProposalOperations t r = ProposalOperations with
   recreate : Map.Map Party Bool -> Optional (ContractId t) -> t -> Update (ContractId t, t)
   execute : ProposalExecuteArgs t -> Update (ProposalUpdateResult t r)
   completedResult : r -> V2.TransferInstructionResult
+  rejectedResult : Optional (ProposalUpdateArgs t -> Update V2.TransferInstructionResult)
 
 -- | Arguments required for proposal creation and update.
 data ProposalUpdateArgs t = ProposalUpdateArgs with
@@ -128,13 +130,14 @@ data ProposalExecuteArgs t = ProposalExecuteArgs with
 proposalUpdateResult_transferInstructionResult
   :  HasToInterface t V2.TransferInstruction
   => ProposalOperations t r
+  -> Optional (ContractId Holding)
   -> ProposalUpdateResult t r
   -> V2.TransferInstructionResult
-proposalUpdateResult_transferInstructionResult ProposalOperations{completedResult} result = do
+proposalUpdateResult_transferInstructionResult ProposalOperations{completedResult} senderChangeCid result = do
   case result of
     Left (pendingProposal, _) -> V2.TransferInstructionResult with
       output = V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId pendingProposal
-      senderChangeCids = []
+      senderChangeCids = optionalToList senderChangeCid
       meta = emptyMetadata
     Right result -> completedResult result
 
@@ -196,11 +199,15 @@ proposal_update' ProposalOperations{..} onPendingOrAccepted onRejected ProposalU
 
 -- | Update a proposal, returning a TSv2 TransferInstructionResult.
 proposal_update : HasToInterface t V2.TransferInstruction => ProposalOperations t r -> ProposalUpdateArgs t -> Bool -> Update V2.TransferInstructionResult
-proposal_update ops =
-  proposal_update' ops (proposalUpdateResult_transferInstructionResult ops) \_ -> pure V2.TransferInstructionResult with
-    output = V2.TransferInstructionResult_Failed
-    senderChangeCids = []
-    meta = emptyMetadata
+proposal_update ops args =
+  proposal_update' ops (proposalUpdateResult_transferInstructionResult ops None)
+    (\_ -> case ops.rejectedResult of
+      Some f -> f args
+      None -> pure V2.TransferInstructionResult with
+        output = V2.TransferInstructionResult_Failed
+        senderChangeCids = []
+        meta = emptyMetadata)
+    args
 
 -- | Update a proposal to record that `actors` have accepted it.
 proposal_accept : HasToInterface t V2.TransferInstruction => ProposalOperations t r -> ContractId t -> t -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
