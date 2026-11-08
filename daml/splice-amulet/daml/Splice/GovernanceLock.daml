@@ -19,6 +19,7 @@ module Splice.GovernanceLock (
   FullLockSpecification(..),
   VestingLockSpecification(..),
   GovernanceLockKey(..),
+  validateNewGovernanceLockSpecification,
   requireFullLock,
   requireVestingLock,
   governanceLockKind,
@@ -48,6 +49,8 @@ module Splice.GovernanceLock (
   invalidLockSubjectMessage,
   encodeCommonLockMetadataEntries,
   encodeLockCompatMemo,
+  encodeGovernanceLockNewSpecCustomControllersMetadataEntries,
+  encodeGovernanceLockMetadataWithRequest',
   encodeGovernanceLockMetadataWithRequest,
   cipMemoPrefix,
   requestMetaKey,
@@ -61,8 +64,11 @@ module Splice.GovernanceLock (
   lockVestingDurationMetaKey,
   lockVestingEndTimeMetaKey,
   substitutionControllersMetaKey,
+  newSubstitutionControllersMetaKey,
   unlockControllersMetaKey,
+  newUnlockControllersMetaKey,
   vestingControllersMetaKey,
+  newVestingControllersMetaKey,
   vestingStartTimeMetaKey,
   vestedUntilTimeMetaKey,
 
@@ -147,6 +153,27 @@ validateGovernanceLockSpecification (GLS_FullLock (FullLockSpecification _ unloc
 validateGovernanceLockSpecification (GLS_VestingLock (VestingLockSpecification _ vestingPeriod _ vestingControllers)) = do
   assertMsg "vestingPeriod is positive" $ vestingPeriod > aunit
   validateControllersSpecification "vesting" vestingControllers
+
+-- | Validate that the new GovernanceLockSpecification only differs from the old specification in its custom controllers.
+validateNewGovernanceLockSpecification : forall m. CanAssert m => GovernanceLockSpecification -> Optional GovernanceLockSpecification -> m ()
+validateNewGovernanceLockSpecification oldSpec newSpec =
+  let
+    -- These are purposely written to extract all fields so we're forced to update them when adding
+    -- new fields to FullLockSpecification or VestingLockSpecification
+    normalizeFullSpec : FullLockSpecification -> GovernanceLockKind
+    normalizeFullSpec (FullLockSpecification kind _unlockControllers _substitutionControllers _vestingControllers) = kind
+
+    normalizeVestingSpec : VestingLockSpecification -> (GovernanceLockKind, RelTime, Time)
+    normalizeVestingSpec (VestingLockSpecification kind vestingPeriod endTime _vestingControllers) = (kind, vestingPeriod, endTime)
+
+    requireMatching : (Eq a, Show a) => a -> a -> m ()
+    requireMatching x y = require ("new specification: " <> show y <> " == source specification: " <> show x) (y == x)
+
+  in case (oldSpec, newSpec) of
+    (_, None) -> pure ()
+    (GLS_FullLock x, Some (GLS_FullLock y)) -> requireMatching (normalizeFullSpec x) (normalizeFullSpec y)
+    (GLS_VestingLock x, Some (GLS_VestingLock y)) -> requireMatching (normalizeVestingSpec x) (normalizeVestingSpec y)
+    (x, Some y) -> requireMatching x y -- guaranteed to fail
 
 requireFullLock : CanAssert m => GovernanceLockSpecification -> m FullLockSpecification
 requireFullLock (GLS_FullLock spec) = pure spec
@@ -650,8 +677,11 @@ lockVestingEndTimeMetaKey = "lock-vesting-end-time-micros"
 -- | Metadata key that encodes a human-readable description of a vesting `GovernanceLock` duration and end time.
 lockVestingInfoMetaKey = "lock-vesting-info"
 
+-- | Prefix of the metadata keys used to specify attributes of a new lock.
+newLockMetaPrefix = "new-"
+
 -- | Metadata key that specifies the new owner of a transferred lock.
-newLockOwnerMetaKey = "new-lock-owner"
+newLockOwnerMetaKey = newLockMetaPrefix <> "lock-owner"
 
 -- | Prefix of the metadata keys used to specify attributes of a target lock.
 targetLockMetaPrefix = "target-"
@@ -668,6 +698,15 @@ substitutionControllersMetaKey = "substitution-controllers"
 -- | Metadata key that specifies custom unlock controllers.
 unlockControllersMetaKey = "unlock-controllers"
 
+-- | Metadata key that specifies custom vesting controllers.
+newVestingControllersMetaKey = newLockMetaPrefix <> "vesting-controllers"
+
+-- | Metadata key that specifies custom substitution controllers.
+newSubstitutionControllersMetaKey = newLockMetaPrefix <> "substitution-controllers"
+
+-- | Metadata key that specifies custom unlock controllers.
+newUnlockControllersMetaKey = newLockMetaPrefix <> "unlock-controllers"
+
 -- | The metadata entries of the kind, subject and status of a lock, in the order of the CIP.
 encodeCommonLockMetadataEntries : GovernanceLockKind -> LockState -> [(Text, Text)]
 encodeCommonLockMetadataEntries kind state =
@@ -681,29 +720,50 @@ encodeControllersSpecificationMetadataEntries : Text -> Optional ControllersSpec
 encodeControllersSpecificationMetadataEntries _ None = []
 encodeControllersSpecificationMetadataEntries key (Some controllers) = [(key, encodeControllersSpecification controllers)]
 
+encodeGovernanceLockSpecCustomControllersMetadataEntries' : Text -> Text -> Text -> GovernanceLockSpecification -> [(Text, Text)]
+encodeGovernanceLockSpecCustomControllersMetadataEntries' unlockKey substitutionKey vestingKey spec =
+  case spec of
+    (GLS_FullLock (FullLockSpecification _kind unlockControllers substitutionControllers vestingControllers)) ->
+      foldMap (uncurry encodeControllersSpecificationMetadataEntries)
+        [ (unlockKey, unlockControllers)
+        , (substitutionKey, substitutionControllers)
+        , (vestingKey, vestingControllers)
+        ]
+    (GLS_VestingLock (VestingLockSpecification _kind _vestingPeriod _endTime vestingControllers)) ->
+      encodeControllersSpecificationMetadataEntries vestingKey vestingControllers
+
+encodeGovernanceLockSpecCustomControllersMetadataEntries : GovernanceLockSpecification -> [(Text, Text)]
+encodeGovernanceLockSpecCustomControllersMetadataEntries =
+  encodeGovernanceLockSpecCustomControllersMetadataEntries' unlockControllersMetaKey substitutionControllersMetaKey vestingControllersMetaKey
+
+encodeGovernanceLockNewSpecCustomControllersMetadataEntries : GovernanceLockSpecification -> [(Text, Text)]
+encodeGovernanceLockNewSpecCustomControllersMetadataEntries =
+  encodeGovernanceLockSpecCustomControllersMetadataEntries' newUnlockControllersMetaKey newSubstitutionControllersMetaKey newVestingControllersMetaKey
+
 -- | The metadata entries of a lock specification, in the order of the CIP.
 encodeGovernanceLockSpecMetadataEntries : GovernanceLockSpecification -> [(Text, Text)]
-encodeGovernanceLockSpecMetadataEntries (GLS_FullLock (FullLockSpecification kind unlockControllers substitutionControllers vestingControllers)) =
-  encodeCommonLockMetadataEntries kind LS_Locked <>
-    foldMap (uncurry encodeControllersSpecificationMetadataEntries)
-      [ (unlockControllersMetaKey, unlockControllers)
-      , (substitutionControllersMetaKey, substitutionControllers)
-      , (vestingControllersMetaKey, vestingControllers)
-      ]
-encodeGovernanceLockSpecMetadataEntries (GLS_VestingLock (VestingLockSpecification kind vestingPeriod endTime vestingControllers)) =
-  encodeCommonLockMetadataEntries kind LS_Vesting <>
-    [ (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
-    , (lockVestingEndTimeMetaKey, encodeTime endTime)
-    , (lockVestingInfoMetaKey, "\"vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime <> "\"")
-    ] <> encodeControllersSpecificationMetadataEntries vestingControllersMetaKey vestingControllers
+encodeGovernanceLockSpecMetadataEntries spec =
+  let withoutCustomControllers = case spec of
+        GLS_FullLock spec -> encodeCommonLockMetadataEntries spec.kind LS_Locked
+        GLS_VestingLock VestingLockSpecification{..} ->
+          encodeCommonLockMetadataEntries kind LS_Vesting <>
+            [ (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
+            , (lockVestingEndTimeMetaKey, encodeTime endTime)
+            , (lockVestingInfoMetaKey, "\"vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime <> "\"")
+            ]
+
+  in withoutCustomControllers <> encodeGovernanceLockSpecCustomControllersMetadataEntries spec
 
 encodeGovernanceLockMetadata : GovernanceLock -> Metadata
 encodeGovernanceLockMetadata GovernanceLock{specification} =
   encodeLockMetadataEntries $ encodeGovernanceLockSpecMetadataEntries specification
 
+encodeGovernanceLockMetadataWithRequest' : ([(Text, Text)] -> [(Text, Text)]) -> Text -> GovernanceLockSpecification -> Metadata
+encodeGovernanceLockMetadataWithRequest' mapEntries request spec =
+  encodeLockMetadataEntries $ mapEntries $ (requestMetaKey, request) :: encodeGovernanceLockSpecMetadataEntries spec
+
 encodeGovernanceLockMetadataWithRequest : Text -> GovernanceLockSpecification -> Metadata
-encodeGovernanceLockMetadataWithRequest request spec =
-  encodeLockMetadataEntries $ (requestMetaKey, request) :: encodeGovernanceLockSpecMetadataEntries spec
+encodeGovernanceLockMetadataWithRequest = encodeGovernanceLockMetadataWithRequest' identity
 
 -- | Metadata whose only entry is the reason, a memo that lists the given entries in the given order.
 encodeLockMetadataEntries : [(Text, Text)] -> Metadata

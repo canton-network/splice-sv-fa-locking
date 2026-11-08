@@ -122,6 +122,7 @@ testLockTransfer_governanceLock ops setInputHoldingCids = do
   let expected = GovernanceLockTransfer with
         source = transfer.source
         receiver = transfer.receiver
+        newSpecification = Some transfer.source.specification
         amount = transfer.amount
         approvals = Some $ Map.singleton transfer.source.owner True
         requestedAt = transfer.requestedAt
@@ -162,13 +163,14 @@ testLockTransfer_governanceLock ops setInputHoldingCids = do
   faVestingLockTransfer === Some GovernanceLockTransfer with
     source = faTransfer.source
     receiver = faTransfer.receiver
+    newSpecification = Some faTransfer.source.specification
     amount = faTransfer.amount
     approvals = Some $ Map.singleton faTransfer.source.owner True
     requestedAt = faTransfer.requestedAt
     expiresAt = faVestingTimes.endTime
     originalProposalCid = None
   Some view <- queryInterfaceContractId bob (asTransferInstruction faTransferCid)
-  view.transfer.meta === governanceLockTransferMetadata faVestingLock.specification
+  view.transfer.meta === governanceLockTransferMetadata faVestingLock.specification (Some faVestingLock.specification)
 
 testLockTransfer_keyWithoutLock_tsv1 : Script ()
 testLockTransfer_keyWithoutLock_tsv1 = testLockTransfer_keyWithoutLock tsv1Operations
@@ -300,7 +302,7 @@ testLockTransferV1_view = do
       requestedAt = proposal.requestedAt
       executeBefore = proposal.expiresAt
       inputHoldingCids = []
-      meta = governanceLockTransferMetadata lock.specification
+      meta = governanceLockTransferMetadata lock.specification (Some lock.specification)
     status = V1.TransferPendingInternalWorkflow with
       pendingActions = Map.fromList [(bob, "accept transfer; reject transfer"), (alice, "withdraw transfer")]
     meta = emptyMetadata
