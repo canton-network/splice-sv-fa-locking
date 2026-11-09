@@ -3,9 +3,9 @@
 
 module Splice.GovernanceLock.Proposal (
   ProposalView(..),
+  ProposalOperations(..),
   proposal_transferInstructionViewV1,
   proposal_transferInstructionViewV2,
-  ProposalOperations(..),
   proposal_create,
   ProposalUpdateResult(..),
   proposalUpdateResult_transferInstructionResult,
@@ -40,8 +40,6 @@ import Splice.Util
 
 -- | A view of a proposal to modify a GovernanceLock.
 data ProposalView t = ProposalView with
-  proposal : t
-    -- ^ The proposal itself.
   lockKey : GovernanceLockKey
     -- ^ The lock that the proposal relates to.
   proposers : [Party]
@@ -62,33 +60,45 @@ data ProposalView t = ProposalView with
     -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   meta : Metadata
 
+-- | Common operations used by proposal views, creation, update, and execution.
+-- `t` is the proposal template and `r` is the result of a completed/executed proposal.
+data ProposalOperations t r = ProposalOperations with
+  makeView : t -> ProposalView t
+  recreate : Map.Map Party Bool -> Optional (ContractId t) -> t -> Update (ContractId t, t)
+  execute : ProposalExecuteArgs t -> Update r
+  completedResult : r -> V2.TransferInstructionResult
+  rejectedResult : Optional (ProposalUpdateArgs t -> Update V2.TransferInstructionResult)
+
 -- | View of a proposal as a TSv1 TransferInstructionView.
-proposal_transferInstructionViewV1 : HasToInterface t V1.TransferInstruction => Text -> Party -> ProposalView t -> V1.TransferInstructionView
-proposal_transferInstructionViewV1 type_ receiver ProposalView{..} = V1.TransferInstructionView with
-  originalInstructionCid = toInterfaceContractId <$> originalProposalCid
-  transfer = V1.Transfer with
-    sender = List.head proposers
-    receiver
-    amount
-    instrumentId = amuletInstrumentId lockKey.dso
-    requestedAt
-    executeBefore = expiresAt
-    inputHoldingCids = toInterfaceContractId <$> optionalToList lockedAmulet
-    meta
-  status = V1.TransferPendingInternalWorkflow with
-    pendingActions =
-      let pendingControllers = List.dedupSort $ concat (controllersPendingApproval approvals controllers).controllers
-          pendingProposers = concat $ proposersPendingWithdrawal approvals proposers
-      in Map.fromListWithR (\x y -> x <> "; " <> y) $
-        fmap (, "accept " <> type_) pendingControllers <>
-        fmap (, "reject " <> type_) pendingControllers <>
-        fmap (, "withdraw " <> type_) pendingProposers
-  meta = emptyMetadata
+proposal_transferInstructionViewV1 : HasToInterface t V1.TransferInstruction => ProposalOperations t r -> Text -> Party -> t -> V1.TransferInstructionView
+proposal_transferInstructionViewV1 ops type_ receiver proposal =
+  let ProposalView{..} = ops.makeView proposal
+  in V1.TransferInstructionView with
+    originalInstructionCid = toInterfaceContractId <$> originalProposalCid
+    transfer = V1.Transfer with
+      sender = List.head proposers
+      receiver
+      amount
+      instrumentId = amuletInstrumentId lockKey.dso
+      requestedAt
+      executeBefore = expiresAt
+      inputHoldingCids = toInterfaceContractId <$> optionalToList lockedAmulet
+      meta
+    status = V1.TransferPendingInternalWorkflow with
+      pendingActions =
+        let pendingControllers = List.dedupSort $ concat (controllersPendingApproval approvals controllers).controllers
+            pendingProposers = concat $ proposersPendingWithdrawal approvals proposers
+        in Map.fromListWithR (\x y -> x <> "; " <> y) $
+          fmap (, "accept " <> type_) pendingControllers <>
+          fmap (, "reject " <> type_) pendingControllers <>
+          fmap (, "withdraw " <> type_) pendingProposers
+    meta = emptyMetadata
 
 -- | View of a proposal as a TSv2 TransferInstructionView.
-proposal_transferInstructionViewV2 : (HasToInterface t V1.TransferInstruction, HasToInterface t V2.TransferInstruction) => ProposalView t -> V2.TransferInstructionView
-proposal_transferInstructionViewV2 ProposalView{..} =
-  let v1View = view @V1.TransferInstruction (toInterface proposal)
+proposal_transferInstructionViewV2 : (HasToInterface t V1.TransferInstruction, HasToInterface t V2.TransferInstruction) => ProposalOperations t r -> t -> V2.TransferInstructionView
+proposal_transferInstructionViewV2 ops proposal =
+  let ProposalView{..} = ops.makeView proposal
+      v1View = view @V1.TransferInstruction (toInterface proposal)
   in V2.TransferInstructionView with
     originalInstructionCid = toInterfaceContractId <$> originalProposalCid
     transfer = upcast v1View.transfer
@@ -145,15 +155,6 @@ updateProposalApprovals : ControllersSpecification -> [Party] -> Bool -> [Party]
 updateProposalApprovals controllers proposers approved actors approvals = do
   updatedApprovals <- foldrA (updateProposalApproval controllers approved) approvals actors
   pure $ proposalApprovalResult controllers proposers updatedApprovals
-
--- | Common operations used by proposal creation, update, and execution.
--- `t` is the proposal template and `r` is the result of a completed/executed proposal.
-data ProposalOperations t r = ProposalOperations with
-  makeView : t -> ProposalView t
-  recreate : Map.Map Party Bool -> Optional (ContractId t) -> t -> Update (ContractId t, t)
-  execute : ProposalExecuteArgs t -> Update r
-  completedResult : r -> V2.TransferInstructionResult
-  rejectedResult : Optional (ProposalUpdateArgs t -> Update V2.TransferInstructionResult)
 
 -- | Arguments required for proposal creation and update.
 data ProposalUpdateArgs t = ProposalUpdateArgs with

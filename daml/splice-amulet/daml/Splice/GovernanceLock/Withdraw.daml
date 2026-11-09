@@ -69,14 +69,14 @@ template WithdrawVestedFunds
         pure WithdrawVestedFunds_DsoExpireResult
 
     interface instance V1.TransferInstruction for WithdrawVestedFunds where
-      view = proposal_transferInstructionViewV1 "withdrawal" lockManagerParty $ withdrawVestedFunds_proposalView this
+      view = proposal_transferInstructionViewV1 withdrawVestedFunds_operations "withdrawal" lockManagerParty this
       transferInstruction_acceptImpl _ _ = fail "Transfers representing withdrawal proposals cannot be accepted through Token Standard v1"
       transferInstruction_rejectImpl _ _ = fail "Transfers representing withdrawal proposals cannot be rejected through Token Standard v1"
       transferInstruction_updateImpl _ _ = fail "Transfers representing withdrawal proposals cannot be updated"
       transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl withdrawVestedFunds_operations this proposers
 
     interface instance V2.TransferInstruction for WithdrawVestedFunds where
-      view = proposal_transferInstructionViewV2 $ withdrawVestedFunds_proposalView this
+      view = proposal_transferInstructionViewV2 withdrawVestedFunds_operations this
       transferInstruction_acceptImpl = proposal_transferInstructionV2_acceptImpl withdrawVestedFunds_operations this
       transferInstruction_rejectImpl = proposal_transferInstructionV2_rejectImpl withdrawVestedFunds_operations this
       transferInstruction_withdrawImpl = proposal_transferInstructionV2_withdrawImpl withdrawVestedFunds_operations this
@@ -88,8 +88,7 @@ data WithdrawVestedFunds_DsoExpireResult = WithdrawVestedFunds_DsoExpireResult {
   deriving (Serializable)
 
 withdrawVestedFunds_proposalView : WithdrawVestedFunds -> ProposalView WithdrawVestedFunds
-withdrawVestedFunds_proposalView proposal@WithdrawVestedFunds{..} = ProposalView with
-  proposal
+withdrawVestedFunds_proposalView WithdrawVestedFunds{..} = ProposalView with
   lockKey = specification.target
   proposers
   controllers = withdrawVestedFundsControllers specification

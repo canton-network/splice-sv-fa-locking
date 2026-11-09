@@ -62,14 +62,14 @@ template GovernanceLockSubstitution with
         pure GovernanceLockSubstitution_DsoExpireResult
 
     interface instance V1.TransferInstruction for GovernanceLockSubstitution where
-      view = proposal_transferInstructionViewV1 "substitution" target.owner $ governanceLockSubstitution_proposalView this
+      view = proposal_transferInstructionViewV1 governanceLockSubstitution_operations "substitution" target.owner this
       transferInstruction_acceptImpl = proposal_transferInstructionV1_acceptImpl governanceLockSubstitution_operations this [target.owner]
       transferInstruction_rejectImpl = proposal_transferInstructionV1_rejectImpl governanceLockSubstitution_operations this [target.owner]
       transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl governanceLockSubstitution_operations this [owner]
       transferInstruction_updateImpl _ _ = fail "Transfers representing governance lock substitutions cannot be updated"
 
     interface instance V2.TransferInstruction for GovernanceLockSubstitution where
-      view = proposal_transferInstructionViewV2 $ governanceLockSubstitution_proposalView this
+      view = proposal_transferInstructionViewV2 governanceLockSubstitution_operations this
       transferInstruction_acceptImpl = proposal_transferInstructionV2_acceptImpl governanceLockSubstitution_operations this
       transferInstruction_rejectImpl = proposal_transferInstructionV2_rejectImpl governanceLockSubstitution_operations this
       transferInstruction_withdrawImpl = proposal_transferInstructionV2_withdrawImpl governanceLockSubstitution_operations this
@@ -82,7 +82,6 @@ data GovernanceLockSubstitution_DsoExpireResult = GovernanceLockSubstitution_Dso
 
 governanceLockSubstitution_proposalView : GovernanceLockSubstitution -> ProposalView GovernanceLockSubstitution
 governanceLockSubstitution_proposalView proposal@GovernanceLockSubstitution{..} = ProposalView with
-  proposal
   lockKey = target
   proposers = [owner]
   controllers = governanceLockSubstitutionControllers proposal

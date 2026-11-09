@@ -68,14 +68,14 @@ template UnlockProposal
         pure UnlockProposal_DsoExpireResult
 
     interface instance V1.TransferInstruction for UnlockProposal where
-      view = proposal_transferInstructionViewV1 "unlock" lockManagerParty $ unlockProposal_proposalView this
+      view = proposal_transferInstructionViewV1 unlockProposal_operations "unlock" lockManagerParty this
       transferInstruction_acceptImpl _ _ = fail "Transfers representing unlock proposals cannot be accepted through Token Standard v1"
       transferInstruction_rejectImpl _ _ = fail "Transfers representing unlock proposals cannot be rejected through Token Standard v1"
       transferInstruction_updateImpl _ _ = fail "Transfers representing unlock proposals cannot be updated"
       transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl unlockProposal_operations this proposers
 
     interface instance V2.TransferInstruction for UnlockProposal where
-      view = proposal_transferInstructionViewV2 $ unlockProposal_proposalView this
+      view = proposal_transferInstructionViewV2 unlockProposal_operations this
       transferInstruction_acceptImpl = proposal_transferInstructionV2_acceptImpl unlockProposal_operations this
       transferInstruction_rejectImpl = proposal_transferInstructionV2_rejectImpl unlockProposal_operations this
       transferInstruction_withdrawImpl = proposal_transferInstructionV2_withdrawImpl unlockProposal_operations this
@@ -87,8 +87,7 @@ data UnlockProposal_DsoExpireResult = UnlockProposal_DsoExpireResult {}
   deriving (Serializable)
 
 unlockProposal_proposalView : UnlockProposal -> ProposalView UnlockProposal
-unlockProposal_proposalView proposal@UnlockProposal{..} = ProposalView with
-  proposal
+unlockProposal_proposalView UnlockProposal{..} = ProposalView with
   lockKey = specification.target
   proposers
   controllers = unlockProposalControllers specification
