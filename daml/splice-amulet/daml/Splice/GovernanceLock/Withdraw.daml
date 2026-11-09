@@ -42,7 +42,6 @@ import Splice.Util
 data WithdrawVestedFundsSpecification = WithdrawVestedFundsSpecification with
     target : GovernanceLockKey
     lockedAmount : Decimal
-    -- TODO: add release notes to mention departure from CIP; we're not accepting a vestedUntilTime from each approver
     vestedUntilTime : Time
   deriving (Eq, Show, Serializable)
 

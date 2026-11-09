@@ -41,7 +41,6 @@ import Splice.Util
 data UnlockProposalSpecification = UnlockProposalSpecification with
     target : GovernanceLockKey
     amount : Decimal -- ^ Amount being unlocked.
-    -- TODO: add release notes to mention departure from CIP; we're not accepting a vestingStartTime from each approver
     vestingStartTime : Time -- ^ Time at which vesting is proposed to start.
   deriving (Eq, Show, Serializable)
 
