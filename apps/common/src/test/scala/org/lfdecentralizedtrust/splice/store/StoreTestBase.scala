@@ -637,6 +637,7 @@ abstract class StoreTestBase
           ),
         ),
         receiver.toProtoPrimitive,
+        Optional.empty(),
         BigDecimal(10).bigDecimal,
         Optional.of(Map.empty.asJava),
         Instant.EPOCH,
