@@ -305,7 +305,7 @@ proposal_transferInstructionV2_rejectImpl
   => ProposalOperations t r -> t -> ContractId V2.TransferInstruction -> V2.TransferInstruction_Reject
   -> Update V2.TransferInstructionResult
 proposal_transferInstructionV2_rejectImpl ops proposal cid V2.TransferInstruction_Reject{..} = do
-  -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
+  -- V2.TransferInstruction_Reject is nonconsuming so we need to archive explicitly here
   -- proposal_update creates a new proposal when necessary
   let proposalCid = fromInterfaceContractId cid
   potentiallyUnsafeArchive proposalCid
@@ -330,7 +330,7 @@ proposal_transferInstructionV2_withdrawImpl
   => ProposalOperations t r -> t -> ContractId V2.TransferInstruction -> V2.TransferInstruction_Withdraw
   -> Update V2.TransferInstructionResult
 proposal_transferInstructionV2_withdrawImpl ops proposal cid V2.TransferInstruction_Withdraw{..} = do
-  -- V2.TransferInstruction_Accept is nonconsuming so we need to archive explicitly here
+  -- V2.TransferInstruction_Withdraw is nonconsuming so we need to archive explicitly here
   -- proposal_update creates a new proposal when necessary
   let proposalCid = fromInterfaceContractId cid
   potentiallyUnsafeArchive proposalCid
