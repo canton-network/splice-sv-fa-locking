@@ -19,7 +19,6 @@ import Splice.GovernanceLock.Request
 import Splice.GovernanceLock.Transfer
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
-import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 import Splice.TokenStandard.Utils (ForwardCompatible(..), basicAccount, reasonToMeta, toAnyContractId)
@@ -41,16 +40,6 @@ validLockTransfer source receiver amount extraMemoEntries = do
     requestedAt = now
     extraMemoEntries
 
-lockWithSpec
-  : GovernanceLockOperations i r t -> TestEnv -> Party -> Decimal -> GovernanceLockSpecification
-  -> Script (ContractId GovernanceLock, GovernanceLock)
-lockWithSpec ops env owner amount specification = do
-  let registry = env.registriesEnv.amuletV2
-  AmuletRegistryV2.tapFaucet registry owner amount
-  lockCid <- expectSuccess $ ops.governanceLock (testEnvRegistries env) owner amount specification
-  Some lock <- queryContractId owner lockCid
-  pure (lockCid, lock)
-
 -- | Creates an SV governance lock of `amount` for `owner`, funded by the faucet.
 svLock : GovernanceLockOperations i r t -> TestEnv -> Party -> Decimal -> Script (ContractId GovernanceLock, GovernanceLock)
 svLock ops env owner amount = lockWithSpec ops env owner amount $
@@ -71,17 +60,6 @@ faVestingLock : GovernanceLockOperations i r t -> TestEnv -> Party -> Decimal ->
 faVestingLock ops env owner amount = do
   (lockCid, _) <- lockWithSpec ops env owner amount $ fullLockSpecification $ GLK_FeaturedApp env.provider1
   vestingLockFor ops env owner lockCid amount
-
--- | Fully unlocks a governance lock of `amount`, with vesting starting in an hour.
-vestingLockFor
-  :  GovernanceLockOperations i r t -> TestEnv -> Party -> ContractId GovernanceLock -> Decimal
-  -> Script (ContractId GovernanceLock, GovernanceLock)
-vestingLockFor ops env owner lockCid amount = do
-  now <- getTime
-  let unlockAt = now `addRelTime` hours 1
-  vestingLockCid <- expectSuccess $ ops.governanceUnlock (testEnvRegistries env) lockCid owner (unlockMeta amount unlockAt)
-  Some vestingLock <- queryContractId owner vestingLockCid
-  pure (vestingLockCid, vestingLock)
 
 -- Creation of lock transfer proposals
 --------------------------------------

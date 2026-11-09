@@ -633,7 +633,7 @@ tsv2Operations = GovernanceLockOperations with
       let memo = tsv1RequestMemo' GLRT_TransferLock transfer.source.specification $
             [ (newLockOwnerMetaKey, partyToText transfer.receiver)
             , (transferAmountMetaKey, show transfer.amount)
-            ] <> lockTargetMetaEntries transfer.source.specification
+            ] <> lockTargetMetaEntries transfer.source.specification <> transfer.extraMemoEntries
       request <- lockRequestV2 env.registry transfer.source.owner 0.0 memo
       submitLockRequestV2' env.registries proposer $ map (request with requestedAt = transfer.requestedAt)
 
@@ -726,6 +726,27 @@ submitTSv2Request registries registry owner amount memo requestedAt = do
   submitLockRequestV2 registries request with
     requestedAt
     inputHoldingCids = inputs
+
+lockWithSpec
+  : GovernanceLockOperations i r t -> TestEnv -> Party -> Decimal -> GovernanceLockSpecification
+  -> Script (ContractId GovernanceLock, GovernanceLock)
+lockWithSpec ops env owner amount specification = do
+  let registry = env.registriesEnv.amuletV2
+  AmuletRegistryV2.tapFaucet registry owner amount
+  lockCid <- expectSuccess $ ops.governanceLock (testEnvRegistries env) owner amount specification
+  Some lock <- queryContractId owner lockCid
+  pure (lockCid, lock)
+
+-- | Fully unlocks a governance lock of `amount`, with vesting starting in an hour.
+vestingLockFor
+  :  GovernanceLockOperations i r t -> TestEnv -> Party -> ContractId GovernanceLock -> Decimal
+  -> Script (ContractId GovernanceLock, GovernanceLock)
+vestingLockFor ops env owner lockCid amount = do
+  now <- getTime
+  let unlockAt = now `addRelTime` hours 1
+  vestingLockCid <- expectSuccess $ ops.governanceUnlock (testEnvRegistries env) lockCid owner (unlockMeta amount unlockAt)
+  Some vestingLock <- queryContractId owner vestingLockCid
+  pure (vestingLockCid, vestingLock)
 
 -- | The metadata of a request to unlock `unlockAmount`, with vesting starting at `vestingStartTime`.
 unlockMeta : Decimal -> Time -> Metadata
