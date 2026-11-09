@@ -8,7 +8,6 @@ module Splice.GovernanceLock.Unlock (
   UnlockProposal_DsoExpireResult(..),
 
   -- * Operations
-  GovernanceLock_UnlockResult(..),
   GovernanceLockProposeUnlockArgs(..),
   governanceLock_proposeUnlock,
   unlockProposal_operations,
@@ -176,7 +175,7 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
     getContext = pure (context, state)
 
 -- | Unlocks `unlockAmount` of a governance lock.
-governanceLock_executeUnlock : ProposalExecuteArgs UnlockProposal -> Update GovernanceLock_UnlockResult
+governanceLock_executeUnlock : ProposalExecuteArgs UnlockProposal -> Update GovernanceLock_UnlockResult_Completed
 governanceLock_executeUnlock ProposalExecuteArgs{..} = do
   assertWithinDeadline "expiresAt" proposal.expiresAt
   let FetchAndMergeLocksResult{lockCid, lock} = merged
@@ -226,7 +225,7 @@ governanceLock_executeUnlock ProposalExecuteArgs{..} = do
     originalLockCid = guard isFullUnlock $> fromOptional (toAnyContractId lockCid) originalLockCid
     requestedAt = endTime `addRelTime` (- vestingPeriod))
 
-  pure $ Right GovernanceLock_UnlockResult_Completed with vestingLock; governanceLock; unlockedAmulet
+  pure GovernanceLock_UnlockResult_Completed with vestingLock; governanceLock; unlockedAmulet
 
 unlockProposal_operations : ProposalOperations UnlockProposal GovernanceLock_UnlockResult_Completed
 unlockProposal_operations = ProposalOperations with

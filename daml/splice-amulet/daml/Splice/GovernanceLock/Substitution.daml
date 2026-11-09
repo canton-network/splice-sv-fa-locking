@@ -8,7 +8,6 @@ module Splice.GovernanceLock.Substitution (
   GovernanceLockSubstitution_DsoExpireResult(..),
 
   -- * Operations
-  GovernanceLock_SubstitutionResult(..),
   GovernanceLockProposeSubstitutionArgs(..),
   governanceLock_proposeSubstitution,
   governanceLockSubstitution_operations,
@@ -187,7 +186,7 @@ governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs {..} = 
 
   pure (result, changeHolding)
 
-governanceLock_executeSubstitution : ProposalExecuteArgs GovernanceLockSubstitution -> Update GovernanceLock_SubstitutionResult
+governanceLock_executeSubstitution : ProposalExecuteArgs GovernanceLockSubstitution -> Update GovernanceLock_SubstitutionResult_Completed
 governanceLock_executeSubstitution ProposalExecuteArgs{..} = do
   let FetchAndMergeLocksResult{lockCid} = merged
       GovernanceLockSubstitution{..} = proposal
@@ -209,7 +208,7 @@ governanceLock_executeSubstitution ProposalExecuteArgs{..} = do
     specification = target.specification
     originalLockCid = toAnyContractId <$> proposalCid
     requestedAt = requestedAt
-  pure $ Right GovernanceLock_SubstitutionResult_Completed with
+  pure GovernanceLock_SubstitutionResult_Completed with
     lockCid = newLockCid
     remainingLockCid
     unlockedAmulet

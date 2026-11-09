@@ -9,7 +9,6 @@ module Splice.GovernanceLock.Transfer (
 
   -- * State and operations
   governanceLockTransferMetadata,
-  GovernanceLock_TransferResult(..),
   GovernanceLockProposeTransferArgs(..),
   governanceLock_proposeTransfer,
   governanceLockTransfer_operations,
@@ -188,7 +187,7 @@ governanceLock_proposeTransfer GovernanceLockProposeTransferArgs{..} = do
     reason
     getContext = pure (context, state)
 
-governanceLock_executeTransfer : ProposalExecuteArgs GovernanceLockTransfer -> Update GovernanceLock_TransferResult
+governanceLock_executeTransfer : ProposalExecuteArgs GovernanceLockTransfer -> Update GovernanceLock_TransferResult_Completed
 governanceLock_executeTransfer ProposalExecuteArgs{..} = do
   assertWithinDeadline "expiresAt" proposal.expiresAt
   let lock = merged.lock
@@ -210,7 +209,7 @@ governanceLock_executeTransfer ProposalExecuteArgs{..} = do
     specification = fromOptional lock.specification proposal.newSpecification
     originalLockCid = toAnyContractId <$> proposalCid
     requestedAt = proposal.requestedAt
-  pure $ Right GovernanceLock_TransferResult_Completed with
+  pure GovernanceLock_TransferResult_Completed with
     lockCid = newLockCid
     remainingLockCid = result.remainingLockCid
     lockedAmulet = newLockedAmulet

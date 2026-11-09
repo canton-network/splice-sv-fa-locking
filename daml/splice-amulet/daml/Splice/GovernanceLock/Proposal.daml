@@ -151,7 +151,7 @@ updateProposalApprovals controllers proposers approved actors approvals = do
 data ProposalOperations t r = ProposalOperations with
   makeView : t -> ProposalView t
   recreate : Map.Map Party Bool -> Optional (ContractId t) -> t -> Update (ContractId t, t)
-  execute : ProposalExecuteArgs t -> Update (ProposalUpdateResult t r)
+  execute : ProposalExecuteArgs t -> Update r
   completedResult : r -> V2.TransferInstructionResult
   rejectedResult : Optional (ProposalUpdateArgs t -> Update V2.TransferInstructionResult)
 
@@ -239,7 +239,7 @@ proposal_update' ProposalOperations{..} onPendingOrAccepted onRejected ProposalU
     PAR_Accepted{} -> do
       (context, state) <- getContext
       merged <- fetchAndMergeGovernanceLocks view.lockKey context state reason
-      onPendingOrAccepted <$> execute ProposalExecuteArgs with
+      onPendingOrAccepted . Right <$> execute ProposalExecuteArgs with
         merged
         proposalCid
         proposal

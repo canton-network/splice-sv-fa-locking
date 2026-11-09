@@ -8,7 +8,6 @@ module Splice.GovernanceLock.Withdraw (
   WithdrawVestedFunds_DsoExpireResult(..),
 
   -- * State and operations
-  VestingLock_WithdrawResult(..),
   VestingLockProposeWithdrawArgs(..),
   vestingLock_proposeWithdraw,
   withdrawVestedFunds_operations,
@@ -177,7 +176,7 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
     reason
     getContext = pure (context, state)
 
-vestingLock_executeWithdraw : ProposalExecuteArgs WithdrawVestedFunds -> Update VestingLock_WithdrawResult
+vestingLock_executeWithdraw : ProposalExecuteArgs WithdrawVestedFunds -> Update VestingLock_WithdrawResult_Completed
 vestingLock_executeWithdraw ProposalExecuteArgs{..} = do
   assertWithinDeadline "expiresAt" proposal.expiresAt
   let FetchAndMergeLocksResult{lockCid, lock} = merged
@@ -189,7 +188,7 @@ vestingLock_executeWithdraw ProposalExecuteArgs{..} = do
 
   case unvestedAmount of
     None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
-      pure $ Right VestingLock_WithdrawResult_Completed with
+      pure VestingLock_WithdrawResult_Completed with
         vestingLock = None
         vested = toInterfaceContractId lockedAmulet
     Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
@@ -202,7 +201,7 @@ vestingLock_executeWithdraw ProposalExecuteArgs{..} = do
           vestingPeriod = vestingSpec.endTime `subTime` proposal.specification.vestedUntilTime
         amount = vestingAmount
         originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid)
-      pure $ Right VestingLock_WithdrawResult_Completed with
+      pure VestingLock_WithdrawResult_Completed with
         vestingLock
         vested = toInterfaceContractId unlocked
 
