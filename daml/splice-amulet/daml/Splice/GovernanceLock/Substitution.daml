@@ -180,7 +180,7 @@ governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs {..} = 
 
   result <- proposal_create governanceLockSubstitution_operations ProposalUpdateArgs with
     proposalCid = None
-    proposal = governanceLockSubstitution_proposalView substitution
+    proposal = substitution
     actors = [owner]
     reason
     getContext = pure (context, state)
@@ -232,8 +232,7 @@ governanceLockSubstitution_operations = ProposalOperations with
     in (, updatedProposal) <$> create updatedProposal
   execute = governanceLock_executeSubstitution
   completedResult = governanceLock_substitutionResult_completed_transferInstructionResult
-  rejectedResult = Some $ \ProposalUpdateArgs{proposal} -> do
-    let GovernanceLockSubstitution{..} = proposal.proposal
+  rejectedResult = Some $ \ProposalUpdateArgs{proposal = GovernanceLockSubstitution{..}} -> do
     unlockedAmulet <- substitution_returnFunds target.dso owner target.specification lockedAmulet
     pure V2.TransferInstructionResult with
       output = V2.TransferInstructionResult_Failed

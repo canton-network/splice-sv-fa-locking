@@ -183,7 +183,7 @@ governanceLock_proposeTransfer GovernanceLockProposeTransferArgs{..} = do
 
   proposal_create governanceLockTransfer_operations ProposalUpdateArgs with
     proposalCid = None
-    proposal = governanceLockTransfer_proposalView transfer
+    proposal = transfer
     actors = [source.owner]
     reason
     getContext = pure (context, state)

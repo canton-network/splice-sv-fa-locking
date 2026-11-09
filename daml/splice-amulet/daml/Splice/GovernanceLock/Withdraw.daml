@@ -165,7 +165,7 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
 
   proposal_create withdrawVestedFunds_operations ProposalUpdateArgs with
     proposalCid = None
-    proposal = withdrawVestedFunds_proposalView WithdrawVestedFunds with
+    proposal = WithdrawVestedFunds with
       specification
       proposers
       lockedAmulet = lock.lockedAmulet

@@ -158,7 +158,7 @@ data ProposalOperations t r = ProposalOperations with
 -- | Arguments required for proposal creation and update.
 data ProposalUpdateArgs t = ProposalUpdateArgs with
   proposalCid : Optional (ContractId t)
-  proposal : ProposalView t
+  proposal : t
   actors : [Party]
   reason : Text
   getContext : Update (ExternalPartyTransferContext, ExternalPartyConfigState)
@@ -192,14 +192,15 @@ proposalUpdateResult_transferInstructionResult ProposalOperations{completedResul
     Right result -> completedResult result
 
 -- | Make a set of ProposalUpdateArgs; used on accept, reject, and withdraw.
-makeProposalUpdateArgs : ContractId t -> ProposalView t -> [Party] -> ExtraArgs -> ProposalUpdateArgs t
-makeProposalUpdateArgs proposalCid proposal actors extraArgs =
-  ProposalUpdateArgs with
+makeProposalUpdateArgs : ProposalOperations t r -> ContractId t -> t -> [Party] -> ExtraArgs -> ProposalUpdateArgs t
+makeProposalUpdateArgs ops proposalCid proposal actors extraArgs =
+  let view = ops.makeView proposal
+  in ProposalUpdateArgs with
     proposalCid = Some proposalCid
     proposal
     actors
-    reason = reasonFromMeta proposal.meta
-    getContext = unfeaturedPaymentContextAndConfigFromChoiceContext proposal.lockKey.dso extraArgs.context
+    reason = reasonFromMeta view.meta
+    getContext = unfeaturedPaymentContextAndConfigFromChoiceContext view.lockKey.dso extraArgs.context
 
 -- | Create a proposal.
 --
@@ -228,19 +229,20 @@ proposal_update'
   -> Bool
   -> Update o
 proposal_update' ProposalOperations{..} onPendingOrAccepted onRejected ProposalUpdateArgs{..} approved = do
-  result <- updateProposalApprovals proposal.controllers proposal.proposers approved actors proposal.approvals
+  let view = makeView proposal
+  result <- updateProposalApprovals view.controllers view.proposers approved actors view.approvals
   case result of
     PAR_Pending{pendingApprovals} ->
       onPendingOrAccepted . Left <$>
-        recreate pendingApprovals (optional proposalCid Some proposal.originalProposalCid) proposal.proposal
+        recreate pendingApprovals (optional proposalCid Some view.originalProposalCid) proposal
 
     PAR_Accepted{} -> do
       (context, state) <- getContext
-      merged <- fetchAndMergeGovernanceLocks proposal.lockKey context state reason
+      merged <- fetchAndMergeGovernanceLocks view.lockKey context state reason
       onPendingOrAccepted <$> execute ProposalExecuteArgs with
         merged
         proposalCid
-        proposal = proposal.proposal
+        proposal
         context
         state
         reason
@@ -264,7 +266,7 @@ proposal_accept : HasToInterface t V2.TransferInstruction => ProposalOperations 
 proposal_accept ops proposalCid proposal actors extraArgs = do
   let view = ops.makeView proposal
   checkPendingControllers view.controllers actors view.approvals
-  proposal_update ops (makeProposalUpdateArgs proposalCid view actors extraArgs) True
+  proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) True
 
 proposal_transferInstructionV1_acceptImpl
   :  (HasToInterface t V2.TransferInstruction, HasFromInterface t V1.TransferInstruction)
@@ -289,7 +291,7 @@ proposal_reject : HasToInterface t V2.TransferInstruction => ProposalOperations 
 proposal_reject ops proposalCid proposal actors extraArgs = do
   let view = ops.makeView proposal
   checkPendingControllers view.controllers actors view.approvals
-  proposal_update ops (makeProposalUpdateArgs proposalCid view actors extraArgs) False
+  proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) False
 
 proposal_transferInstructionV1_rejectImpl
   :  (HasToInterface t V2.TransferInstruction, HasFromInterface t V1.TransferInstruction)
@@ -314,7 +316,7 @@ proposal_withdraw : HasToInterface t V2.TransferInstruction => ProposalOperation
 proposal_withdraw ops proposalCid proposal actors extraArgs = do
   let view = ops.makeView proposal
   require' ("actors", actors) isSubsetOfR ("proposers", view.proposers)
-  proposal_update ops (makeProposalUpdateArgs proposalCid view actors extraArgs) False
+  proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) False
 
 proposal_transferInstructionV1_withdrawImpl
   :  (HasToInterface t V2.TransferInstruction, HasFromInterface t V1.TransferInstruction)

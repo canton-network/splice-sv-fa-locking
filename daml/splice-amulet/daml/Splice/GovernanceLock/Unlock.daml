@@ -163,7 +163,7 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
 
   proposal_create unlockProposal_operations ProposalUpdateArgs with
     proposalCid = None
-    proposal = unlockProposal_proposalView UnlockProposal with
+    proposal = UnlockProposal with
       specification
       proposers
       lockedAmulet = lock.lockedAmulet
