@@ -50,6 +50,7 @@ module Splice.GovernanceLock (
   invalidLockSubjectMessage,
   encodeCommonLockMetadataEntries,
   encodeLockCompatMemo,
+  encodeControllersSpecificationMetadataEntries,
   encodeGovernanceLockNewCustomControllersMetadataEntries,
   encodeGovernanceLockMetadataWithRequest',
   encodeGovernanceLockMetadataWithRequest,
