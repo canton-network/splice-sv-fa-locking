@@ -39,16 +39,16 @@ template GovernanceLockTransfer with
       -- ^ Source locks to be transferred. Locks are resolved by key.
     receiver : Party
       -- ^ New owner, who accepts the transfer.
-    newSpecification : Optional GovernanceLockSpecification
-      -- ^ New lock specification to support setting new custom controllers.
     amount : Decimal
       -- ^ Amount moved out of the source locks.
-    approvals : Optional (Map.Map Party Bool)
-      -- ^ Approvals recorded so far.
     requestedAt : Time
       -- ^ When the sender requested the transfer.
     expiresAt : Time
       -- ^ When the transfer proposal expires.
+    newSpecification : Optional GovernanceLockSpecification
+      -- ^ New lock specification to support setting new custom controllers.
+    approvals : Optional (Map.Map Party Bool)
+      -- ^ Approvals recorded so far.
     originalProposalCid : Optional (ContractId GovernanceLockTransfer)
   where
     signatory source.dso, source.owner,

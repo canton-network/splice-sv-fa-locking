@@ -38,14 +38,14 @@ import Splice.Util
 template GovernanceLockSubstitution with
     target : GovernanceLockKey
     owner : Party -- ^ Party that proposed the substitution
-    newSpecification : Optional GovernanceLockSpecification -- ^ New lock specification to support setting new custom controllers.
     amount : Decimal -- ^ Amount being substituted
     lockedAmulet : Optional (ContractId LockedAmulet)
-    approvals : Optional (Map.Map Party Bool) -- ^ Approvals recorded so far.
     requestedAt : Time -- ^ Time of the request to create the proposal.
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
     originalSubstitutionCid : Optional (ContractId GovernanceLockSubstitution)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
+    newSpecification : Optional GovernanceLockSpecification -- ^ New lock specification to support setting new custom controllers.
+    approvals : Optional (Map.Map Party Bool) -- ^ Approvals recorded so far.
   where
     signatory target.dso, owner
     observer target.owner, governanceLockObservers target.specification,
