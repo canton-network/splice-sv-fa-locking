@@ -38,10 +38,8 @@ import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.amuletrules_
 import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.dsorules_actionrequiringconfirmation.*
 import org.lfdecentralizedtrust.splice.config.Thresholds
 import org.lfdecentralizedtrust.splice.sv.SvApp.{isDevNet, isSvName, isSvParty}
-import org.lfdecentralizedtrust.splice.sv.store.{
-  FeaturedAppUnderlockConfig,
-  FeaturedAppUnderlockStatus,
-}
+import org.lfdecentralizedtrust.splice.sv.automation.confirmation.FeaturedAppUnderlockStatusUpdateTrigger
+import org.lfdecentralizedtrust.splice.sv.store.FeaturedAppUnderlockStatus
 import org.lfdecentralizedtrust.splice.util.AssignedContract
 import org.lfdecentralizedtrust.splice.util.PrettyInstances.*
 import com.digitalasset.canton.topology.PartyId
@@ -269,13 +267,7 @@ class ExecuteConfirmedActionTrigger(
               ),
               action.dsoRules_CreateFeaturedAppUnderlockInstructionValue.underlocked,
             )
-            for {
-              dsoRules <- store.getDsoRules()
-              statusChanges <- store.listFeaturedAppUnderlockStatusChanges(
-                FeaturedAppUnderlockConfig.fromDsoRulesConfig(dsoRules.payload.config),
-                Some(status.provider),
-              )
-            } yield !statusChanges.contains(status)
+            FeaturedAppUnderlockStatusUpdateTrigger.isCurrent(store, status).map(!_)
           case action =>
             throw new UnsupportedOperationException(
               show"DsoRules $action is not yet supported"

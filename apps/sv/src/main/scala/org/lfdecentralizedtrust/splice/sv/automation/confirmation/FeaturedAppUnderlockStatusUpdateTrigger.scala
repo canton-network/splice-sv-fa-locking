@@ -61,7 +61,8 @@ class FeaturedAppUnderlockStatusUpdateTrigger(
         context.clock.now.minus(context.config.clockSkewAutomationDelay.asJava),
       )
       statusChanges <-
-        if (featureSupport.supported) listStatusChanges(provider = None)
+        if (featureSupport.supported)
+          FeaturedAppUnderlockStatusUpdateTrigger.listStatusChanges(store, provider = None)
         else Future.successful(Seq.empty)
     } yield statusChanges
 
@@ -71,9 +72,9 @@ class FeaturedAppUnderlockStatusUpdateTrigger(
     val action = FeaturedAppUnderlockStatusUpdateTrigger.createInstructionAction(task)
     for {
       // Recheck the status to avoid confirming a stale update
-      currentStatusChanges <- listStatusChanges(provider = Some(task.provider))
+      isCurrent <- FeaturedAppUnderlockStatusUpdateTrigger.isCurrent(store, task)
       outcome <-
-        if (!currentStatusChanges.contains(task))
+        if (!isCurrent)
           Future.successful(TaskSuccess(show"skipping as $task is no longer current"))
         else
           store.lookupConfirmationByActionWithOffset(svParty, action).flatMap {
@@ -111,9 +112,16 @@ class FeaturedAppUnderlockStatusUpdateTrigger(
   ): Future[Boolean] =
     // completeTask rechecks the status
     Future.successful(false)
+}
 
-  private def listStatusChanges(provider: Option[PartyId])(implicit
-      tc: TraceContext
+object FeaturedAppUnderlockStatusUpdateTrigger {
+
+  /** List the status changes of all featured app providers, or only of `provider`, under the
+    * current `DsoRules` config.
+    */
+  def listStatusChanges(store: SvDsoStore, provider: Option[PartyId])(implicit
+      ec: ExecutionContext,
+      tc: TraceContext,
   ): Future[Seq[FeaturedAppUnderlockStatus]] =
     for {
       dsoRules <- store.getDsoRules()
@@ -122,9 +130,16 @@ class FeaturedAppUnderlockStatusUpdateTrigger(
         provider,
       )
     } yield statusChanges
-}
 
-object FeaturedAppUnderlockStatusUpdateTrigger {
+  /** Whether `status` is still a change to make: the provider's computed status still differs from
+    * the one on its right, and no instruction awaits execution.
+    */
+  def isCurrent(store: SvDsoStore, status: FeaturedAppUnderlockStatus)(implicit
+      ec: ExecutionContext,
+      tc: TraceContext,
+  ): Future[Boolean] =
+    listStatusChanges(store, Some(status.provider)).map(_.contains(status))
+
   def createInstructionAction(status: FeaturedAppUnderlockStatus): ActionRequiringConfirmation =
     new ARC_DsoRules(
       new SRARC_CreateFeaturedAppUnderlockInstruction(
