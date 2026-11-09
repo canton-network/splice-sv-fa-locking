@@ -71,7 +71,6 @@ class FeaturedAppUnderlockStatusUpdateTrigger(
   )(implicit tc: TraceContext): Future[TaskOutcome] = {
     val action = FeaturedAppUnderlockStatusUpdateTrigger.createInstructionAction(task)
     for {
-      // Recheck the status to avoid confirming a stale update
       isCurrent <- FeaturedAppUnderlockStatusUpdateTrigger.isCurrent(store, task)
       outcome <-
         if (!isCurrent)
