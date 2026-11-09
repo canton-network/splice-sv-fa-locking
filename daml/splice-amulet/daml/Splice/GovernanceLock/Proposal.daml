@@ -19,8 +19,10 @@ module Splice.GovernanceLock.Proposal (
   ProposalExecuteArgs(..),
 ) where
 
+import DA.Action (foldrA)
 import DA.List qualified as List
 import DA.Map qualified as Map
+import DA.NonEmpty qualified as NonEmpty
 import DA.Optional
 
 import Splice.Amulet
@@ -33,7 +35,7 @@ import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
-import Splice.TokenStandard.Utils
+import Splice.TokenStandard.Utils hiding (require)
 import Splice.Util
 
 -- | A view of a proposal to modify a GovernanceLock.
@@ -97,7 +99,55 @@ proposal_transferInstructionViewV2 ProposalView{..} =
       in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, pendingProposers)]
     meta = emptyMetadata
 
+-- | The resulting state of a proposal after an update to its approvals.
+data ProposalApprovalResult
+  = PAR_Pending with
+      pendingApprovals : Map.Map Party Bool
+  | PAR_Accepted with
+      acceptors : [Party]
+  | PAR_Rejected with
+      rejectors : [Party]
+
+-- | Checks the state of the given approvals.
+--
+-- A proposal is considered rejected when all of the proposers have rejected it
+-- or when all controller sets contain a rejection.
+--
+-- A proposal is considered accepted when all controllers from any controllers set have accepted it.
+--
+-- Otherwise the proposal is still pending.
+proposalApprovalResult : ControllersSpecification -> [Party] -> Map.Map Party Bool -> ProposalApprovalResult
+proposalApprovalResult controllers proposers approvals =
+  let
+    checkApproval : Bool -> Party -> Bool
+    checkApproval wanted party = Map.lookup party approvals == Some wanted
+
+    allProposersRejected = all (checkApproval False) proposers
+    rejectedControllers = forA controllers.controllers (NonEmpty.nonEmpty . filter (checkApproval False))
+    acceptedControllers = find (all (checkApproval True)) controllers.controllers
+  in
+    case (allProposersRejected, rejectedControllers, acceptedControllers) of
+      (True, _, _) -> PAR_Rejected with rejectors = proposers
+      (False, Some rejectors, _) -> PAR_Rejected with rejectors = concatMap NonEmpty.toList rejectors
+      (False, None, Some acceptors) -> PAR_Accepted with acceptors
+      (False, None, None) -> PAR_Pending with pendingApprovals = approvals
+
+-- | Updates approvals to record the action taken by the given actor.
+updateProposalApproval : ControllersSpecification -> Bool -> Party -> Map.Map Party Bool -> Update (Map.Map Party Bool)
+updateProposalApproval controllers approved actor approvals = do
+  require' ("actor", actor) isMemberR ("controllers", concat controllers.controllers)
+  let updated = Map.insert actor approved approvals
+  require "at least one actor's approval must change" (approvals /= updated)
+  pure updated
+
+-- | Updates approvals to record the action taken by the given actors, and checks the state of the updated approvals.
+updateProposalApprovals : ControllersSpecification -> [Party] -> Bool -> [Party] -> Map.Map Party Bool -> Update ProposalApprovalResult
+updateProposalApprovals controllers proposers approved actors approvals = do
+  updatedApprovals <- foldrA (updateProposalApproval controllers approved) approvals actors
+  pure $ proposalApprovalResult controllers proposers updatedApprovals
+
 -- | Common operations used by proposal creation, update, and execution.
+-- `t` is the proposal template and `r` is the result of a completed/executed proposal.
 data ProposalOperations t r = ProposalOperations with
   makeView : t -> ProposalView t
   recreate : Map.Map Party Bool -> Optional (ContractId t) -> t -> Update (ContractId t, t)

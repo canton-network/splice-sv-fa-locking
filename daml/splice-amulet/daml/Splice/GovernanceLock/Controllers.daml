@@ -7,16 +7,12 @@ module Splice.GovernanceLock.Controllers (
   validateControllersSpecification,
   encodeControllersSpecification,
   allControllers,
-  ProposalApprovalResult(..),
-  updateProposalApprovals,
   controllersPendingApproval,
   proposersPendingWithdrawal,
   checkPendingControllers,
 ) where
 
-import DA.Action (foldrA)
 import DA.Map qualified as Map
-import DA.NonEmpty qualified as NonEmpty
 import DA.Set qualified as Set
 import DA.Text qualified as Text
 
@@ -57,52 +53,6 @@ validateControllersSpecification controllerType (Some ControllersSpecification{c
 
 allControllers : ControllersSpecification -> Set.Set Party
 allControllers spec = Set.fromList $ concat spec.controllers
-
-data ProposalApprovalResult
-  = PAR_Pending with
-      pendingApprovals : Map.Map Party Bool
-  | PAR_Accepted with
-      acceptors : [Party]
-  | PAR_Rejected with
-      rejectors : [Party]
-
--- | Checks the state of the given approvals.
---
--- A proposal is considered rejected when all of the proposers have rejected it
--- or when all controller sets contain a rejection.
---
--- A proposal is considered accepted when all controllers from any controllers set have accepted it.
---
--- Otherwise the proposal is still pending.
-proposalApprovalResult : ControllersSpecification -> [Party] -> Map.Map Party Bool -> ProposalApprovalResult
-proposalApprovalResult ControllersSpecification{controllers} proposers approvals =
-  let
-    checkApproval : Bool -> Party -> Bool
-    checkApproval wanted party = Map.lookup party approvals == Some wanted
-
-    allProposersRejected = all (checkApproval False) proposers
-    rejectedControllers = forA controllers (NonEmpty.nonEmpty . filter (checkApproval False))
-    acceptedControllers = find (all (checkApproval True)) controllers
-  in
-    case (allProposersRejected, rejectedControllers, acceptedControllers) of
-      (True, _, _) -> PAR_Rejected with rejectors = proposers
-      (False, Some rejectors, _) -> PAR_Rejected with rejectors = concatMap NonEmpty.toList rejectors
-      (False, None, Some acceptors) -> PAR_Accepted with acceptors
-      (False, None, None) -> PAR_Pending with pendingApprovals = approvals
-
--- | Updates approvals to record the action taken by the given actor.
-updateProposalApproval : ControllersSpecification -> Bool -> Party -> Map.Map Party Bool -> Update (Map.Map Party Bool)
-updateProposalApproval ControllersSpecification{controllers} approved actor approvals = do
-  require' ("actor", actor) isMemberR ("controllers", concat controllers)
-  let updated = Map.insert actor approved approvals
-  require "at least one actor's approval must change" (approvals /= updated)
-  pure updated
-
--- | Updates approvals to record the action taken by the given actors, and checks the state of the updated approvals.
-updateProposalApprovals : ControllersSpecification -> [Party] -> Bool -> [Party] -> Map.Map Party Bool -> Update ProposalApprovalResult
-updateProposalApprovals controllers proposers approved actors approvals = do
-  updatedApprovals <- foldrA (updateProposalApproval controllers approved) approvals actors
-  pure $ proposalApprovalResult controllers proposers updatedApprovals
 
 controllersPendingApproval : Map.Map Party a -> ControllersSpecification -> ControllersSpecification
 controllersPendingApproval approvals controllers =
