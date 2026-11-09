@@ -3064,9 +3064,14 @@ class DbSvDsoStoreTest
       )
 
     def mkStoreWith(
-        rights: Seq[Contract[splice.amulet.FeaturedAppRight.ContractId, splice.amulet.FeaturedAppRight]],
+        rights: Seq[
+          Contract[splice.amulet.FeaturedAppRight.ContractId, splice.amulet.FeaturedAppRight]
+        ],
         locks: Seq[
-          Contract[splice.governancelock.GovernanceLock.ContractId, splice.governancelock.GovernanceLock]
+          Contract[
+            splice.governancelock.GovernanceLock.ContractId,
+            splice.governancelock.GovernanceLock,
+          ]
         ] = Seq.empty,
     ) =
       for {
