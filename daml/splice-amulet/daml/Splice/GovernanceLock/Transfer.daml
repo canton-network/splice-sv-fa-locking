@@ -47,14 +47,14 @@ template GovernanceLockTransfer with
       -- ^ When the transfer proposal expires.
     newSpecification : Optional GovernanceLockSpecification
       -- ^ New lock specification to support setting new custom controllers.
-    approvals : Optional (Map.Map Party Bool)
-      -- ^ Approvals recorded so far.
+    votes : Optional (Map.Map Party Bool)
+      -- ^ Votes recorded so far.
     originalProposalCid : Optional (ContractId GovernanceLockTransfer)
   where
     signatory source.dso, source.owner,
               -- Make the receiver a signatory once they've approved the transfer
               -- This is necessary for `governanceLock_executeTransfer` to have the authority of the receiver when locking amulet
-              optional [] (const [receiver]) (guard (Map.lookup receiver (fromOptional Map.empty approvals) == Some True))
+              optional [] (const [receiver]) (guard (Map.lookup receiver (fromOptional Map.empty votes) == Some True))
     observer receiver, (Set.fromList $ concat (governanceLockTransferControllers this).controllers)
     ensure governanceLockTransferIsValid this
 
@@ -101,7 +101,7 @@ governanceLockTransfer_proposalView proposal@GovernanceLockTransfer{..} = Propos
   lockKey = source
   proposers = [source.owner]
   controllers = governanceLockTransferControllers proposal
-  approvals = fromOptional Map.empty approvals
+  votes = fromOptional Map.empty votes
   amount
   lockedAmulet = None -- TODO: should this have the source lock's lockedAmulet?
   requestedAt
@@ -172,7 +172,7 @@ governanceLock_proposeTransfer GovernanceLockProposeTransferArgs{..} = do
         receiver
         newSpecification = Some newSpecification
         amount
-        approvals = Some Map.empty
+        votes = Some Map.empty
         requestedAt
         expiresAt
         originalProposalCid = None
@@ -216,8 +216,8 @@ governanceLock_executeTransfer ProposalExecuteArgs{..} = do
 governanceLockTransfer_operations : ProposalOperations GovernanceLockTransfer GovernanceLock_TransferResult_Completed
 governanceLockTransfer_operations = ProposalOperations with
   makeView = governanceLockTransfer_proposalView
-  recreate = \approvals originalProposalCid proposal ->
-    let updatedProposal = proposal with approvals = Some approvals; originalProposalCid
+  recreate = \votes originalProposalCid proposal ->
+    let updatedProposal = proposal with votes = Some votes; originalProposalCid
     in (, updatedProposal) <$> create updatedProposal
   execute = governanceLock_executeTransfer
   completedResult = governanceLock_transferResult_completed_transferInstructionResult

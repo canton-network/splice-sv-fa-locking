@@ -46,8 +46,8 @@ data ProposalView t = ProposalView with
     -- ^ The parties that proposed the proposal.
   controllers : ControllersSpecification
     -- ^ Sets of parties that can jointly authorize actions on the proposal.
-  approvals : Map.Map Party Bool
-    -- ^ Approvals recorded so far.
+  votes : Map.Map Party Bool
+    -- ^ Votes recorded so far.
   amount : Decimal
     -- ^ The amount of the proposal.
   lockedAmulet : Optional (ContractId LockedAmulet)
@@ -86,8 +86,8 @@ proposal_transferInstructionViewV1 ops type_ receiver proposal =
       meta
     status = V1.TransferPendingInternalWorkflow with
       pendingActions =
-        let pendingControllers = List.dedupSort $ concat (controllersPendingApproval approvals controllers).controllers
-            pendingProposers = concat $ proposersPendingWithdrawal approvals proposers
+        let pendingControllers = List.dedupSort $ concat (controllersPendingVote votes controllers).controllers
+            pendingProposers = concat $ proposersPendingWithdrawal votes proposers
         in Map.fromListWithR (\x y -> x <> "; " <> y) $
           fmap (, "accept " <> type_) pendingControllers <>
           fmap (, "reject " <> type_) pendingControllers <>
@@ -104,21 +104,21 @@ proposal_transferInstructionViewV2 ops proposal =
     transfer = upcast v1View.transfer
     expiresAt = Some expiresAt
     availableActions =
-      let pendingControllers = (controllersPendingApproval approvals controllers).controllers
-          pendingProposers = proposersPendingWithdrawal approvals proposers
+      let pendingControllers = (controllersPendingVote votes controllers).controllers
+          pendingProposers = proposersPendingWithdrawal votes proposers
       in Map.fromList [(V2.TIA_Accept, pendingControllers), (V2.TIA_Reject, pendingControllers), (V2.TIA_Withdraw, pendingProposers)]
     meta = emptyMetadata
 
--- | The resulting state of a proposal after an update to its approvals.
-data ProposalApprovalResult
-  = PAR_Pending with
-      pendingApprovals : Map.Map Party Bool
-  | PAR_Accepted with
+-- | The resulting state of a proposal after an update to its votes.
+data ProposalVoteResult
+  = PVR_Pending with
+      pendingVotes : Map.Map Party Bool
+  | PVR_Accepted with
       acceptors : [Party]
-  | PAR_Rejected with
+  | PVR_Rejected with
       rejectors : [Party]
 
--- | Checks the state of the given approvals.
+-- | Checks the state of the given votes.
 --
 -- A proposal is considered rejected when all of the proposers have rejected it
 -- or when all controller sets contain a rejection.
@@ -126,35 +126,35 @@ data ProposalApprovalResult
 -- A proposal is considered accepted when all controllers from any controllers set have accepted it.
 --
 -- Otherwise the proposal is still pending.
-proposalApprovalResult : ControllersSpecification -> [Party] -> Map.Map Party Bool -> ProposalApprovalResult
-proposalApprovalResult controllers proposers approvals =
+proposalVoteResult : ControllersSpecification -> [Party] -> Map.Map Party Bool -> ProposalVoteResult
+proposalVoteResult controllers proposers votes =
   let
-    checkApproval : Bool -> Party -> Bool
-    checkApproval wanted party = Map.lookup party approvals == Some wanted
+    checkVote : Bool -> Party -> Bool
+    checkVote wanted party = Map.lookup party votes == Some wanted
 
-    allProposersRejected = all (checkApproval False) proposers
-    rejectedControllers = forA controllers.controllers (NonEmpty.nonEmpty . filter (checkApproval False))
-    acceptedControllers = find (all (checkApproval True)) controllers.controllers
+    allProposersRejected = all (checkVote False) proposers
+    rejectedControllers = forA controllers.controllers (NonEmpty.nonEmpty . filter (checkVote False))
+    acceptedControllers = find (all (checkVote True)) controllers.controllers
   in
     case (allProposersRejected, rejectedControllers, acceptedControllers) of
-      (True, _, _) -> PAR_Rejected with rejectors = proposers
-      (False, Some rejectors, _) -> PAR_Rejected with rejectors = concatMap NonEmpty.toList rejectors
-      (False, None, Some acceptors) -> PAR_Accepted with acceptors
-      (False, None, None) -> PAR_Pending with pendingApprovals = approvals
+      (True, _, _) -> PVR_Rejected with rejectors = proposers
+      (False, Some rejectors, _) -> PVR_Rejected with rejectors = concatMap NonEmpty.toList rejectors
+      (False, None, Some acceptors) -> PVR_Accepted with acceptors
+      (False, None, None) -> PVR_Pending with pendingVotes = votes
 
--- | Updates approvals to record the action taken by the given actor.
-updateProposalApproval : ControllersSpecification -> Bool -> Party -> Map.Map Party Bool -> Update (Map.Map Party Bool)
-updateProposalApproval controllers approved actor approvals = do
+-- | Updates votes to record the action taken by the given actor.
+updateProposalVote : ControllersSpecification -> Bool -> Party -> Map.Map Party Bool -> Update (Map.Map Party Bool)
+updateProposalVote controllers vote actor votes = do
   require' ("actor", actor) isMemberR ("controllers", concat controllers.controllers)
-  let updated = Map.insert actor approved approvals
-  require "at least one actor's approval must change" (approvals /= updated)
+  let updated = Map.insert actor vote votes
+  require "at least one actor's vote must change" (votes /= updated)
   pure updated
 
--- | Updates approvals to record the action taken by the given actors, and checks the state of the updated approvals.
-updateProposalApprovals : ControllersSpecification -> [Party] -> Bool -> [Party] -> Map.Map Party Bool -> Update ProposalApprovalResult
-updateProposalApprovals controllers proposers approved actors approvals = do
-  updatedApprovals <- foldrA (updateProposalApproval controllers approved) approvals actors
-  pure $ proposalApprovalResult controllers proposers updatedApprovals
+-- | Updates votes to record the action taken by the given actors, and checks the state of the updated votes.
+updateProposalVotes : ControllersSpecification -> [Party] -> Bool -> [Party] -> Map.Map Party Bool -> Update ProposalVoteResult
+updateProposalVotes controllers proposers vote actors votes = do
+  updatedVotes <- foldrA (updateProposalVote controllers vote) votes actors
+  pure $ proposalVoteResult controllers proposers updatedVotes
 
 -- | Arguments required for proposal creation and update.
 data ProposalUpdateArgs t = ProposalUpdateArgs with
@@ -212,9 +212,9 @@ proposal_create : ProposalOperations t r -> ProposalUpdateArgs t -> Update (Prop
 proposal_create ops args =
   proposal_update' ops identity (\rejectors -> fail ("Unexpected proposal rejection by rejectors: " <> show rejectors)) args True
 
--- | Update a proposal and handle its updated approval state.
+-- | Update a proposal and handle its updated voting state.
 --
--- Sets the approval of `actors` to be the given `approved` status.
+-- Sets the vote of `actors` to be the given `vote` status.
 --
 -- When the updated proposal is still pending, it's passed to `onPendingOrAccepted` as a `Left`.
 
@@ -229,15 +229,15 @@ proposal_update'
   -> ProposalUpdateArgs t
   -> Bool
   -> Update o
-proposal_update' ProposalOperations{..} onPendingOrAccepted onRejected ProposalUpdateArgs{..} approved = do
+proposal_update' ProposalOperations{..} onPendingOrAccepted onRejected ProposalUpdateArgs{..} vote = do
   let view = makeView proposal
-  result <- updateProposalApprovals view.controllers view.proposers approved actors view.approvals
+  result <- updateProposalVotes view.controllers view.proposers vote actors view.votes
   case result of
-    PAR_Pending{pendingApprovals} ->
+    PVR_Pending{pendingVotes} ->
       onPendingOrAccepted . Left <$>
-        recreate pendingApprovals (optional proposalCid Some view.originalProposalCid) proposal
+        recreate pendingVotes (optional proposalCid Some view.originalProposalCid) proposal
 
-    PAR_Accepted{} -> do
+    PVR_Accepted{} -> do
       (context, state) <- getContext
       merged <- fetchAndMergeGovernanceLocks view.lockKey context state reason
       onPendingOrAccepted . Right <$> execute ProposalExecuteArgs with
@@ -248,7 +248,7 @@ proposal_update' ProposalOperations{..} onPendingOrAccepted onRejected ProposalU
         state
         reason
 
-    PAR_Rejected{rejectors} -> onRejected rejectors
+    PVR_Rejected{rejectors} -> onRejected rejectors
 
 -- | Update a proposal, returning a TSv2 TransferInstructionResult.
 proposal_update : HasToInterface t V2.TransferInstruction => ProposalOperations t r -> ProposalUpdateArgs t -> Bool -> Update V2.TransferInstructionResult
@@ -266,7 +266,7 @@ proposal_update ops args =
 proposal_accept : HasToInterface t V2.TransferInstruction => ProposalOperations t r -> ContractId t -> t -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
 proposal_accept ops proposalCid proposal actors extraArgs = do
   let view = ops.makeView proposal
-  checkPendingControllers view.controllers actors view.approvals
+  checkPendingControllers view.controllers actors view.votes
   proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) True
 
 proposal_transferInstructionV1_acceptImpl
@@ -291,7 +291,7 @@ proposal_transferInstructionV2_acceptImpl ops proposal cid V2.TransferInstructio
 proposal_reject : HasToInterface t V2.TransferInstruction => ProposalOperations t r -> ContractId t -> t -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
 proposal_reject ops proposalCid proposal actors extraArgs = do
   let view = ops.makeView proposal
-  checkPendingControllers view.controllers actors view.approvals
+  checkPendingControllers view.controllers actors view.votes
   proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) False
 
 proposal_transferInstructionV1_rejectImpl

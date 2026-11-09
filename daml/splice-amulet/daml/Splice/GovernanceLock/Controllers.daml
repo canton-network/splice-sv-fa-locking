@@ -7,7 +7,7 @@ module Splice.GovernanceLock.Controllers (
   validateControllersSpecification,
   encodeControllersSpecification,
   allControllers,
-  controllersPendingApproval,
+  controllersPendingVote,
   proposersPendingWithdrawal,
   checkPendingControllers,
 ) where
@@ -54,13 +54,13 @@ validateControllersSpecification controllerType (Some ControllersSpecification{c
 allControllers : ControllersSpecification -> Set.Set Party
 allControllers spec = Set.fromList $ concat spec.controllers
 
-controllersPendingApproval : Map.Map Party a -> ControllersSpecification -> ControllersSpecification
-controllersPendingApproval approvals controllers =
-  ControllersSpecification $ filter (not . null) $ fmap (filter (\p -> not $ Map.member p approvals)) controllers.controllers
+controllersPendingVote : Map.Map Party a -> ControllersSpecification -> ControllersSpecification
+controllersPendingVote votes controllers =
+  ControllersSpecification $ filter (not . null) $ fmap (filter (\p -> not $ Map.member p votes)) controllers.controllers
 
 proposersPendingWithdrawal : Map.Map Party Bool -> [Party] -> [[Party]]
-proposersPendingWithdrawal approvals = fmap (\p -> [p]) . filter (\p -> Map.lookup p approvals /= Some False)
+proposersPendingWithdrawal votes = fmap (\p -> [p]) . filter (\p -> Map.lookup p votes /= Some False)
 
 checkPendingControllers : ControllersSpecification -> [Party] -> Map.Map Party Bool -> Update ()
-checkPendingControllers controllers actors approvals =
-  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", (controllersPendingApproval approvals controllers).controllers)
+checkPendingControllers controllers actors votes =
+  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", (controllersPendingVote votes controllers).controllers)

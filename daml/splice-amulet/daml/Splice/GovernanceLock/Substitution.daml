@@ -45,7 +45,7 @@ template GovernanceLockSubstitution with
     originalSubstitutionCid : Optional (ContractId GovernanceLockSubstitution)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
     newSpecification : Optional GovernanceLockSpecification -- ^ New lock specification to support setting new custom controllers.
-    approvals : Optional (Map.Map Party Bool) -- ^ Approvals recorded so far.
+    votes : Optional (Map.Map Party Bool) -- ^ Votes recorded so far.
   where
     signatory target.dso, owner
     observer target.owner, governanceLockObservers target.specification,
@@ -85,7 +85,7 @@ governanceLockSubstitution_proposalView proposal@GovernanceLockSubstitution{..} 
   lockKey = target
   proposers = [owner]
   controllers = governanceLockSubstitutionControllers proposal
-  approvals = fromOptional Map.empty approvals
+  votes = fromOptional Map.empty votes
   amount
   lockedAmulet
   requestedAt
@@ -169,7 +169,7 @@ governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs {..} = 
         newSpecification = Some newSpecification
         amount
         lockedAmulet
-        approvals = Some Map.empty
+        votes = Some Map.empty
         requestedAt
         expiresAt
         originalSubstitutionCid = None
@@ -225,8 +225,8 @@ substitution_returnFunds dso proposer specification (Some lockedAmuletCid) = do
 governanceLockSubstitution_operations : ProposalOperations GovernanceLockSubstitution GovernanceLock_SubstitutionResult_Completed
 governanceLockSubstitution_operations = ProposalOperations with
   makeView = governanceLockSubstitution_proposalView
-  recreate = \approvals originalSubstitutionCid proposal ->
-    let updatedProposal = proposal with approvals = Some approvals; originalSubstitutionCid
+  recreate = \votes originalSubstitutionCid proposal ->
+    let updatedProposal = proposal with votes = Some votes; originalSubstitutionCid
     in (, updatedProposal) <$> create updatedProposal
   execute = governanceLock_executeSubstitution
   completedResult = governanceLock_substitutionResult_completed_transferInstructionResult

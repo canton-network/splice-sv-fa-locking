@@ -49,7 +49,7 @@ template UnlockProposal
     specification : UnlockProposalSpecification
     proposers : [Party]
     lockedAmulet : ContractId LockedAmulet
-    approvals : Map.Map Party Bool -- ^ Approvals recorded so far.
+    votes : Map.Map Party Bool -- ^ Votes recorded so far.
     requestedAt : Time -- ^ Time of the request to create the proposal.
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
     originalProposalCid : Optional (ContractId UnlockProposal)
@@ -90,7 +90,7 @@ unlockProposal_proposalView UnlockProposal{..} = ProposalView with
   lockKey = specification.target
   proposers
   controllers = unlockProposalControllers specification
-  approvals
+  votes
   amount = specification.amount
   lockedAmulet = Some lockedAmulet
   requestedAt
@@ -154,9 +154,9 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
         amount = unlockAmount
         vestingStartTime
       proposers = List.dedupSort actors
-      emptyApprovals = Map.empty
+      emptyVotes = Map.empty
 
-  checkPendingControllers (unlockProposalControllers specification) proposers emptyApprovals
+  checkPendingControllers (unlockProposalControllers specification) proposers emptyVotes
 
   proposal_create unlockProposal_operations ProposalUpdateArgs with
     proposalCid = None
@@ -164,7 +164,7 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
       specification
       proposers
       lockedAmulet = lock.lockedAmulet
-      approvals = emptyApprovals
+      votes = emptyVotes
       requestedAt
       expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
       originalProposalCid = None
@@ -228,8 +228,8 @@ governanceLock_executeUnlock ProposalExecuteArgs{..} = do
 unlockProposal_operations : ProposalOperations UnlockProposal GovernanceLock_UnlockResult_Completed
 unlockProposal_operations = ProposalOperations with
   makeView = unlockProposal_proposalView
-  recreate = \approvals originalProposalCid proposal ->
-    let updatedProposal = proposal with approvals; originalProposalCid
+  recreate = \votes originalProposalCid proposal ->
+    let updatedProposal = proposal with votes; originalProposalCid
     in (, updatedProposal) <$> create updatedProposal
   execute = governanceLock_executeUnlock
   completedResult = governanceLock_unlockResult_completed_transferInstructionResult

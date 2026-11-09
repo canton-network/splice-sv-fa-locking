@@ -50,7 +50,7 @@ template WithdrawVestedFunds
     specification : WithdrawVestedFundsSpecification
     proposers : [Party]
     lockedAmulet : ContractId LockedAmulet
-    approvals : Map.Map Party Bool -- ^ Approvals recorded so far.
+    votes : Map.Map Party Bool -- ^ Votes recorded so far.
     requestedAt : Time -- ^ Time of the request to create the proposal.
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
     originalProposalCid : Optional (ContractId WithdrawVestedFunds)
@@ -91,7 +91,7 @@ withdrawVestedFunds_proposalView WithdrawVestedFunds{..} = ProposalView with
   lockKey = specification.target
   proposers
   controllers = withdrawVestedFundsControllers specification
-  approvals
+  votes
   amount = case requireVestingLock @(Either Text) specification.target.specification of
     Left _ -> 0.0
     Right v -> fromOptional 0.0 $ calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount v
@@ -156,9 +156,9 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
         lockedAmount = lock.amount
         vestedUntilTime
       proposers = List.dedupSort actors
-      emptyApprovals = Map.empty
+      emptyVotes = Map.empty
 
-  checkPendingControllers (withdrawVestedFundsControllers specification) proposers emptyApprovals
+  checkPendingControllers (withdrawVestedFundsControllers specification) proposers emptyVotes
 
   proposal_create withdrawVestedFunds_operations ProposalUpdateArgs with
     proposalCid = None
@@ -166,7 +166,7 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
       specification
       proposers
       lockedAmulet = lock.lockedAmulet
-      approvals = emptyApprovals
+      votes = emptyVotes
       requestedAt
       expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
       originalProposalCid = None
@@ -206,8 +206,8 @@ vestingLock_executeWithdraw ProposalExecuteArgs{..} = do
 withdrawVestedFunds_operations : ProposalOperations WithdrawVestedFunds VestingLock_WithdrawResult_Completed
 withdrawVestedFunds_operations = ProposalOperations with
   makeView = withdrawVestedFunds_proposalView
-  recreate = \approvals originalProposalCid proposal ->
-    let updatedProposal = proposal with approvals; originalProposalCid
+  recreate = \votes originalProposalCid proposal ->
+    let updatedProposal = proposal with votes; originalProposalCid
     in (, updatedProposal) <$> create updatedProposal
   execute = vestingLock_executeWithdraw
   completedResult = vestingLock_withdrawResult_completed_transferInstructionResult
