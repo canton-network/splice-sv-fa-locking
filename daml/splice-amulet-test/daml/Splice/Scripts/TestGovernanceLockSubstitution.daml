@@ -53,7 +53,11 @@ testSubstitution_governanceLock ops = do
         dso
         owner = alice
         specification = fullLockSpecification someSvKind
-      createSubstitution amount = ops.proposeSubstitution (testEnvRegistries env) bob target amount
+      createSubstitution amount = ops.proposeSubstitution (testEnvRegistries env) bob LockSubstitutionArgs with
+        target
+        amount
+        requestedAt = None
+        extraMemoEntries = []
 
   createSubstitution (testSubstAmount / 2.0)
   createSubstitution (testSubstAmount / 2.0)
@@ -99,14 +103,18 @@ testSubstitution_failures ops = do
 
   -- Insufficient funds to create the substitution
   WalletClientV2.createBatchingUtility charlie
-  expectFailureContaining "Insufficient funds: you are missing" =<< ops.proposeSubstitution (testEnvRegistries env) charlie
-    (GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec)
-    60000.0
+  expectFailureContaining "Insufficient funds: you are missing" =<< ops.proposeSubstitution (testEnvRegistries env) charlie LockSubstitutionArgs with
+    target = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
+    amount = 60000.0
+    requestedAt = None
+    extraMemoEntries = []
 
   -- Insufficient lock size on the accepter side
-  expectSuccess $ ops.proposeSubstitution (testEnvRegistries env) bob
-    (GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec)
-    60000.0
+  expectSuccess $ ops.proposeSubstitution (testEnvRegistries env) bob LockSubstitutionArgs with
+    target = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
+    amount = 60000.0
+    requestedAt = None
+    extraMemoEntries = []
   [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob
 
   expectFailureContaining "substituted lock has less funds " =<<
@@ -132,9 +140,11 @@ testSubstitution_futureRequestedAt ops = do
   ops.governanceLock (testEnvRegistries env) alice 50000.0 (fullLockSpecification kind)
 
   requestedAt <- (`addRelTime` days 1) <$> getTime
-  expectFailureContaining "requestedAt" =<< ops.proposeSubstitutionAt (testEnvRegistries env) bob
-    (GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec)
-    20000.0 requestedAt
+  expectFailureContaining "requestedAt" =<< ops.proposeSubstitution (testEnvRegistries env) bob LockSubstitutionArgs with
+    target = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
+    amount = 20000.0
+    requestedAt = Some requestedAt
+    extraMemoEntries = []
 
 testSubstitution_staleRequestedAt_tsv1 : Script ()
 testSubstitution_staleRequestedAt_tsv1 = testSubstitution_staleRequestedAt tsv1Operations
@@ -154,9 +164,11 @@ testSubstitution_staleRequestedAt ops = do
   ops.governanceLock (testEnvRegistries env) alice 50000.0 (fullLockSpecification kind)
 
   requestedAt <- (`addRelTime` days (-2)) <$> getTime
-  expectFailureContaining "requestedAt + 1 day" =<< ops.proposeSubstitutionAt (testEnvRegistries env) bob
-    (GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec)
-    20000.0 requestedAt
+  expectFailureContaining "requestedAt + 1 day" =<< ops.proposeSubstitution (testEnvRegistries env) bob LockSubstitutionArgs with
+    target = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
+    amount = 20000.0
+    requestedAt = Some requestedAt
+    extraMemoEntries = []
 
 -- | alice holds a 50000.0 SV lock; bob has 20000.0 liquid and proposes to substitute 20000.0 of it.
 setupSubstitution : GovernanceLockOperations i r t -> Script (TestEnv, ContractId GovernanceLock, GovernanceLockSpecification, ContractId i)
@@ -169,7 +181,11 @@ setupSubstitution ops = do
   targetCid <- expectSuccess $ ops.governanceLock (testEnvRegistries env) alice 50000.0 (fullLockSpecification kind)
   let targetKey = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = fullLockSpecification kind
       newSpec = fullLockSpecification kind
-  proposal <- ops.expectPendingTransfer =<< expectSuccess (ops.proposeSubstitution (testEnvRegistries env) bob targetKey 20000.0)
+  proposal <- ops.expectPendingTransfer =<< expectSuccess (ops.proposeSubstitution (testEnvRegistries env) bob LockSubstitutionArgs with
+    target = targetKey
+    amount = 20000.0
+    requestedAt = None
+    extraMemoEntries = [])
   pure (env, targetCid, newSpec, proposal)
 
 -- Token standard workflows on substitutions
@@ -285,12 +301,14 @@ testSubstitution_vestingTarget ops = do
   vestingSpec <- requireVestingLock vestingLock.specification
   let newSpec = vestingSpec with kind
 
-  proposalCid <- ops.expectPendingTransfer =<< expectSuccess (ops.proposeSubstitution (testEnvRegistries env) bob
-    (GovernanceLockKey with
+  proposalCid <- ops.expectPendingTransfer =<< expectSuccess (ops.proposeSubstitution (testEnvRegistries env) bob LockSubstitutionArgs with
+    target = GovernanceLockKey with
       dso = instrId.admin
       owner = alice
-      specification = vestingLock.specification)
-    20000.0)
+      specification = vestingLock.specification
+    amount = 20000.0
+    requestedAt = None
+    extraMemoEntries = [])
 
   [unlockedAmulet] <- ops.expectCompletedTransfer =<< expectSuccess (ops.acceptInstruction env proposalCid alice)
   WalletClientV2.checkHolding alice (coerceContractId unlockedAmulet) 20000.0
@@ -321,9 +339,11 @@ selfSubstitute
   :  GovernanceLockOperations i r t -> TestEnv -> GovernanceLockSpecification -> Decimal
   -> Script (Either SubmitError r)
 selfSubstitute ops env targetSpec amount =
-  ops.proposeSubstitution (testEnvRegistries env) env.alice
-    (GovernanceLockKey with dso = env.instrId.admin; owner = env.alice; specification = targetSpec)
+  ops.proposeSubstitution (testEnvRegistries env) env.alice LockSubstitutionArgs with
+    target = GovernanceLockKey with dso = env.instrId.admin; owner = env.alice; specification = targetSpec
     amount
+    requestedAt = None
+    extraMemoEntries = []
 
 -- | Like `selfSubstitute`, but expects the substitution to complete without returning any holdings.
 selfSubstituteCompleted
@@ -384,9 +404,11 @@ testSubstitution_mergesTargetLocks ops = do
   length locks === 2
 
   AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob 50000.0
-  proposalCid <- ops.expectPendingTransfer =<< expectSuccess (ops.proposeSubstitution (testEnvRegistries env) bob
-    (GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec)
-    50000.0)
+  proposalCid <- ops.expectPendingTransfer =<< expectSuccess (ops.proposeSubstitution (testEnvRegistries env) bob LockSubstitutionArgs with
+    target = GovernanceLockKey with dso = instrId.admin; owner = alice; specification = targetSpec
+    amount = 50000.0
+    requestedAt = None
+    extraMemoEntries = [])
   [unlockedAmulet] <- ops.expectCompletedTransfer =<< expectSuccess (ops.acceptInstruction env proposalCid alice)
   WalletClientV2.checkHolding alice (coerceContractId unlockedAmulet) 50000.0
 
