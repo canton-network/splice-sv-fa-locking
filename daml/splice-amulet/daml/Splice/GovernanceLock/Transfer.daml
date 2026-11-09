@@ -45,8 +45,12 @@ template GovernanceLockTransfer with
       -- ^ When the sender requested the transfer.
     expiresAt : Time
       -- ^ When the transfer proposal expires.
-    newSpecification : Optional GovernanceLockSpecification
-      -- ^ New lock specification to support setting new custom controllers.
+    newUnlockControllers : Optional ControllersSpecification
+      -- ^ New custom unlock controllers of the transferred lock.
+    newSubstitutionControllers : Optional ControllersSpecification
+      -- ^ New custom substitution controllers of the transferred lock.
+    newVestingControllers : Optional ControllersSpecification
+      -- ^ New custom vesting controllers of the transferred lock.
     votes : Optional (Map.Map Party Bool)
       -- ^ Votes recorded so far.
     originalProposalCid : Optional (ContractId GovernanceLockTransfer)
@@ -94,7 +98,7 @@ governanceLockTransferIsValid GovernanceLockTransfer{..} =
         GLS_FullLock _ -> True
         GLS_VestingLock v -> expiresAt <= v.endTime
   in amount > 0.0 && receiver /= source.owner && validEndTime
-    && either error (const True) (validateNewGovernanceLockSpecification source.specification newSpecification)
+    && either error (const True) (validateNewGovernanceLockControllers source.specification newUnlockControllers newSubstitutionControllers newVestingControllers)
 
 governanceLockTransfer_proposalView : GovernanceLockTransfer -> ProposalView GovernanceLockTransfer
 governanceLockTransfer_proposalView proposal@GovernanceLockTransfer{..} = ProposalView with
@@ -107,7 +111,7 @@ governanceLockTransfer_proposalView proposal@GovernanceLockTransfer{..} = Propos
   requestedAt
   expiresAt
   originalProposalCid
-  meta = governanceLockTransferMetadata source.specification newSpecification
+  meta = governanceLockTransferMetadata proposal
 
 governanceLockTransferControllers : GovernanceLockTransfer -> ControllersSpecification
 governanceLockTransferControllers GovernanceLockTransfer{source, receiver} =
@@ -117,12 +121,12 @@ governanceLockTransferControllers GovernanceLockTransfer{source, receiver} =
       controllerSets = optional [[]] (.controllers) optControllers
   in makeControllersSpecification $ fmap (\s -> source.owner :: receiver :: s) controllerSets
 
-governanceLockTransferMetadata : GovernanceLockSpecification -> Optional GovernanceLockSpecification -> Metadata
-governanceLockTransferMetadata sourceSpec newSpec =
+governanceLockTransferMetadata : GovernanceLockTransfer -> Metadata
+governanceLockTransferMetadata GovernanceLockTransfer{..} =
   encodeGovernanceLockMetadataWithRequest'
-    (<> optional [] encodeGovernanceLockNewSpecCustomControllersMetadataEntries newSpec)
+    (<> encodeGovernanceLockNewCustomControllersMetadataEntries newUnlockControllers newSubstitutionControllers newVestingControllers)
     "accept-to-transfer-lock"
-    sourceSpec
+    source.specification
 
 data GovernanceLock_TransferResult_Completed = GovernanceLock_TransferResult_Completed with
   lockCid : ContractId GovernanceLock
@@ -144,7 +148,9 @@ governanceLock_transferResult_completed_transferInstructionResult GovernanceLock
 data GovernanceLockProposeTransferArgs = GovernanceLockProposeTransferArgs with
   source : GovernanceLockKey
   receiver : Party
-  newSpecification : GovernanceLockSpecification
+  newUnlockControllers : Optional ControllersSpecification
+  newSubstitutionControllers : Optional ControllersSpecification
+  newVestingControllers : Optional ControllersSpecification
   amount : Decimal
   context : ExternalPartyTransferContext
   state : ExternalPartyConfigState
@@ -167,47 +173,48 @@ governanceLock_proposeTransfer GovernanceLockProposeTransferArgs{..} = do
     GLS_FullLock _ -> pure ()
     GLS_VestingLock VestingLockSpecification{endTime} -> require' ("expiresAt", expiresAt) isLessOrEqualR ("vesting endTime", endTime)
 
-  let transfer = GovernanceLockTransfer with
-        source
-        receiver
-        newSpecification = Some newSpecification
-        amount
-        votes = Some Map.empty
-        requestedAt
-        expiresAt
-        originalProposalCid = None
-
-  validateNewGovernanceLockSpecification transfer.source.specification transfer.newSpecification
+  validateNewGovernanceLockControllers source.specification newUnlockControllers newSubstitutionControllers newVestingControllers
 
   proposal_create governanceLockTransfer_operations ProposalUpdateArgs with
     proposalCid = None
-    proposal = transfer
+    proposal = GovernanceLockTransfer with
+      source
+      receiver
+      newUnlockControllers
+      newSubstitutionControllers
+      newVestingControllers
+      amount
+      votes = Some Map.empty
+      requestedAt
+      expiresAt
+      originalProposalCid = None
     actors = [source.owner]
     reason
     getContext = pure (context, state)
 
 governanceLock_executeTransfer : ProposalExecuteArgs GovernanceLockTransfer -> Update GovernanceLock_TransferResult_Completed
 governanceLock_executeTransfer ProposalExecuteArgs{..} = do
-  assertWithinDeadline "expiresAt" proposal.expiresAt
+  let GovernanceLockTransfer{..} = proposal
+  assertWithinDeadline "expiresAt" expiresAt
   let lock = merged.lock
-  result <- governanceLock_dsoTransferImpl merged proposal.amount reason context state
+  result <- governanceLock_dsoTransferImpl merged amount reason context state
   -- Lock the unlocked funds of the sender again, now for the receiver.
   -- This needs the authority of the receiver.
   ([newLockedAmulet], None) <- lockAmuletFor
     (ForOwner with dso = lock.dso; owner = lock.owner)
-    proposal.receiver
-    [(proposal.amount, governanceLockExpiresAt lock.specification)]
+    receiver
+    [(amount, governanceLockExpiresAt lock.specification)]
     [toInterfaceContractId result.unlockedAmulet]
     context
     reason
   newLockCid <- create GovernanceLock with
     dso = lock.dso
-    owner = proposal.receiver
-    amount = proposal.amount
+    owner = receiver
+    amount
     lockedAmulet = newLockedAmulet
-    specification = fromOptional lock.specification proposal.newSpecification
+    specification = setNewGovernanceLockControllers lock.specification newUnlockControllers newSubstitutionControllers newVestingControllers
     originalLockCid = toAnyContractId <$> proposalCid
-    requestedAt = proposal.requestedAt
+    requestedAt
   pure GovernanceLock_TransferResult_Completed with
     lockCid = newLockCid
     remainingLockCid = result.remainingLockCid

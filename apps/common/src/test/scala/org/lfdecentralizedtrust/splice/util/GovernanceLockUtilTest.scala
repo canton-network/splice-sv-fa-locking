@@ -81,12 +81,14 @@ class GovernanceLockUtilTest extends AnyWordSpec with BaseTest {
     new gl.substitution.GovernanceLockSubstitution(
       new gl.GovernanceLockKey(dso, lockOwner, spec(kind, vesting = false)),
       proposer,
-      Optional.empty(),
       new java.math.BigDecimal(10).setScale(10),
       Optional.empty(),
+      Instant.EPOCH,
+      Instant.EPOCH,
       Optional.empty(),
-      Instant.EPOCH,
-      Instant.EPOCH,
+      Optional.empty(),
+      Optional.empty(),
+      Optional.empty(),
       Optional.empty(),
     )
 

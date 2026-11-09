@@ -3,6 +3,7 @@
 
 module Splice.GovernanceLock.Controllers (
   ControllersSpecification,
+  NewControllersSpecifications(..),
   makeControllersSpecification,
   validateControllersSpecification,
   encodeControllersSpecification,
@@ -23,6 +24,15 @@ import Splice.TokenStandard.Utils
 data ControllersSpecification = ControllersSpecification with
     controllers : [[Party]]
       -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
+  deriving (Eq, Show, Serializable)
+
+data NewControllersSpecifications = NewControllersSpecifications with
+    unlockControllers : Optional ControllersSpecification
+      -- ^ Controllers that can unlock the lock.
+    substitutionControllers : Optional ControllersSpecification
+      -- ^ Controllers that can authorize a substitution.
+    vestingControllers : Optional ControllersSpecification
+      -- ^ Controllers that can control the disbursal of vesting funds via withdrawals, substitutions, or transfers.
   deriving (Eq, Show, Serializable)
 
 -- | Sets of controllers that can jointly authorize an action.

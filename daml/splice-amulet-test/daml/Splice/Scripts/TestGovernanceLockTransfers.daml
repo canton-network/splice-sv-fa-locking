@@ -122,12 +122,14 @@ testLockTransfer_governanceLock ops setInputHoldingCids = do
   let expected = GovernanceLockTransfer with
         source = transfer.source
         receiver = transfer.receiver
-        newSpecification = Some transfer.source.specification
         amount = transfer.amount
-        votes = Some $ Map.singleton transfer.source.owner True
         requestedAt = transfer.requestedAt
         expiresAt = transfer.requestedAt `addRelTime` lockTransferTTL
         originalProposalCid = None
+        newUnlockControllers = None
+        newSubstitutionControllers = None
+        newVestingControllers = None
+        votes = Some $ Map.singleton transfer.source.owner True
   forA_ [alice, bob, instrId.admin] \p -> do
     governanceLockTransfer <- queryContractId p transferCid
     governanceLockTransfer === Some expected
@@ -159,18 +161,20 @@ testLockTransfer_governanceLock ops setInputHoldingCids = do
     faVestingTimes.endTime < transfer.requestedAt `addRelTime` lockTransferTTL
   let faTransfer = transfer with source = key faVestingLock
   faTransferCid <- expectSuccess $ ops.proposeTransfer (testEnvRegistries env) alice faTransfer
-  faVestingLockTransfer <- queryContractId bob faTransferCid
-  faVestingLockTransfer === Some GovernanceLockTransfer with
+  Some faVestingLockTransfer <- queryContractId bob faTransferCid
+  faVestingLockTransfer === GovernanceLockTransfer with
     source = faTransfer.source
     receiver = faTransfer.receiver
-    newSpecification = Some faTransfer.source.specification
     amount = faTransfer.amount
-    votes = Some $ Map.singleton faTransfer.source.owner True
     requestedAt = faTransfer.requestedAt
     expiresAt = faVestingTimes.endTime
     originalProposalCid = None
+    newUnlockControllers = None
+    newSubstitutionControllers = None
+    newVestingControllers = None
+    votes = Some $ Map.singleton faTransfer.source.owner True
   Some view <- queryInterfaceContractId bob (asTransferInstruction faTransferCid)
-  view.transfer.meta === governanceLockTransferMetadata faVestingLock.specification (Some faVestingLock.specification)
+  view.transfer.meta === governanceLockTransferMetadata faVestingLockTransfer
 
 testLockTransfer_keyWithoutLock_tsv1 : Script ()
 testLockTransfer_keyWithoutLock_tsv1 = testLockTransfer_keyWithoutLock tsv1Operations
@@ -289,7 +293,7 @@ setupVestingLockTransfer ops amount = do
 
 testLockTransferV1_view : Script ()
 testLockTransferV1_view = do
-  (TestEnv{..}, _, lock, transferCid) <- setupGovernanceLockTransfer tsv1Operations 40000.0
+  (TestEnv{..}, _, _, transferCid) <- setupGovernanceLockTransfer tsv1Operations 40000.0
   Some proposal <- queryContractId bob transferCid
   Some view <- queryInterfaceContractId bob (asTransferInstruction transferCid)
   view === V1.TransferInstructionView with
@@ -302,7 +306,7 @@ testLockTransferV1_view = do
       requestedAt = proposal.requestedAt
       executeBefore = proposal.expiresAt
       inputHoldingCids = []
-      meta = governanceLockTransferMetadata lock.specification (Some lock.specification)
+      meta = governanceLockTransferMetadata proposal
     status = V1.TransferPendingInternalWorkflow with
       pendingActions = Map.fromList [(bob, "accept transfer; reject transfer"), (alice, "withdraw transfer")]
     meta = emptyMetadata

@@ -44,7 +44,9 @@ template GovernanceLockSubstitution with
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
     originalSubstitutionCid : Optional (ContractId GovernanceLockSubstitution)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
-    newSpecification : Optional GovernanceLockSpecification -- ^ New lock specification to support setting new custom controllers.
+    newUnlockControllers : Optional ControllersSpecification -- ^ New custom unlock controllers of the substituted lock.
+    newSubstitutionControllers : Optional ControllersSpecification -- ^ New custom substitution controllers of the substituted lock.
+    newVestingControllers : Optional ControllersSpecification -- ^ New custom vesting controllers of the substituted lock.
     votes : Optional (Map.Map Party Bool) -- ^ Votes recorded so far.
   where
     signatory target.dso, owner
@@ -52,7 +54,7 @@ template GovernanceLockSubstitution with
              (Set.fromList $ concat (governanceLockSubstitutionControllers this).controllers)
     -- A proposal by the target lock owner is funded by the target lock, not by `lockedAmulet`
     ensure if owner == target.owner then isNone lockedAmulet else True &&
-      either error (const True) (validateNewGovernanceLockSpecification target.specification newSpecification)
+      either error (const True) (validateNewGovernanceLockControllers target.specification newUnlockControllers newSubstitutionControllers newVestingControllers)
 
     choice GovernanceLockSubstitution_DsoExpire : GovernanceLockSubstitution_DsoExpireResult
       controller target.dso
@@ -91,7 +93,7 @@ governanceLockSubstitution_proposalView proposal@GovernanceLockSubstitution{..} 
   requestedAt
   expiresAt
   originalProposalCid = originalSubstitutionCid
-  meta = governanceLockSubstitutionMetadata target.specification newSpecification
+  meta = governanceLockSubstitutionMetadata proposal
 
 governanceLockSubstitutionControllers : GovernanceLockSubstitution -> ControllersSpecification
 governanceLockSubstitutionControllers GovernanceLockSubstitution{target, owner} =
@@ -102,12 +104,12 @@ governanceLockSubstitutionControllers GovernanceLockSubstitution{target, owner} 
   in makeControllersSpecification $ fmap (\s -> target.owner :: owner :: s) controllerSets
 
 -- | Memo of a substitution proposal of a `GovernanceLock`: the memo of the new lock plus the accept request.
-governanceLockSubstitutionMetadata : GovernanceLockSpecification -> Optional GovernanceLockSpecification -> Metadata
-governanceLockSubstitutionMetadata targetSpec newSpec =
+governanceLockSubstitutionMetadata : GovernanceLockSubstitution -> Metadata
+governanceLockSubstitutionMetadata GovernanceLockSubstitution{..} =
   encodeGovernanceLockMetadataWithRequest'
-    (<> optional [] encodeGovernanceLockNewSpecCustomControllersMetadataEntries newSpec)
+    (<> encodeGovernanceLockNewCustomControllersMetadataEntries newUnlockControllers newSubstitutionControllers newVestingControllers)
     "accept-to-substitute-lock"
-    targetSpec
+    target.specification
 
 data GovernanceLock_SubstitutionResult_Completed = GovernanceLock_SubstitutionResult_Completed with
   lockCid : ContractId GovernanceLock
@@ -131,7 +133,9 @@ data GovernanceLockProposeSubstitutionArgs = GovernanceLockProposeSubstitutionAr
   dso : Party
   target : GovernanceLockKey
   owner : Party -- ^ Party that proposed the substitution
-  newSpecification : GovernanceLockSpecification -- ^ New lock specification to support setting new custom controllers.
+  newUnlockControllers : Optional ControllersSpecification -- ^ New custom unlock controllers of the substituted lock.
+  newSubstitutionControllers : Optional ControllersSpecification -- ^ New custom substitution controllers of the substituted lock.
+  newVestingControllers : Optional ControllersSpecification -- ^ New custom vesting controllers of the substituted lock.
   amount : Decimal -- ^ Amount being substituted
   inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
   extraArgs : ExtraArgs
@@ -163,22 +167,22 @@ governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs {..} = 
       assertWithinDeadline "target lock endTime" endTime
       pure $ min maxExpiresAt endTime
 
-  let substitution = GovernanceLockSubstitution with
-        target
-        owner
-        newSpecification = Some newSpecification
-        amount
-        lockedAmulet
-        votes = Some Map.empty
-        requestedAt
-        expiresAt
-        originalSubstitutionCid = None
-
-  validateNewGovernanceLockSpecification substitution.target.specification substitution.newSpecification
+  validateNewGovernanceLockControllers target.specification newUnlockControllers newSubstitutionControllers newVestingControllers
 
   result <- proposal_create governanceLockSubstitution_operations ProposalUpdateArgs with
     proposalCid = None
-    proposal = substitution
+    proposal = GovernanceLockSubstitution with
+      target
+      owner
+      newUnlockControllers
+      newSubstitutionControllers
+      newVestingControllers
+      amount
+      lockedAmulet
+      votes = Some Map.empty
+      requestedAt
+      expiresAt
+      originalSubstitutionCid = None
     actors = [owner]
     reason
     getContext = pure (context, state)
@@ -204,7 +208,7 @@ governanceLock_executeSubstitution ProposalExecuteArgs{..} = do
     owner
     amount
     lockedAmulet = newLockedAmulet
-    specification = target.specification
+    specification = setNewGovernanceLockControllers target.specification newUnlockControllers newSubstitutionControllers newVestingControllers
     originalLockCid = toAnyContractId <$> proposalCid
     requestedAt = requestedAt
   pure GovernanceLock_SubstitutionResult_Completed with
