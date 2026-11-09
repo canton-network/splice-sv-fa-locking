@@ -39,6 +39,7 @@ import Splice.Util
 template GovernanceLockSubstitution with
     target : GovernanceLockKey
     owner : Party -- ^ Party that proposed the substitution
+    newSpecification : Optional GovernanceLockSpecification -- ^ New lock specification to support setting new custom controllers.
     amount : Decimal -- ^ Amount being substituted
     lockedAmulet : Optional (ContractId LockedAmulet)
     approvals : Optional (Map.Map Party Bool) -- ^ Approvals recorded so far.
@@ -51,7 +52,8 @@ template GovernanceLockSubstitution with
     observer target.owner, governanceLockObservers target.specification,
              (Set.fromList $ concat (governanceLockSubstitutionControllers this).controllers)
     -- A proposal by the target lock owner is funded by the target lock, not by `lockedAmulet`
-    ensure if owner == target.owner then isNone lockedAmulet else True
+    ensure if owner == target.owner then isNone lockedAmulet else True &&
+      either error (const True) (validateNewGovernanceLockSpecification target.specification newSpecification)
 
     choice GovernanceLockSubstitution_DsoExpire : GovernanceLockSubstitution_DsoExpireResult
       controller target.dso
@@ -91,7 +93,7 @@ governanceLockSubstitution_proposalView proposal@GovernanceLockSubstitution{..} 
   requestedAt
   expiresAt
   originalProposalCid = originalSubstitutionCid
-  meta = governanceLockSubstitutionMetadata target.specification
+  meta = governanceLockSubstitutionMetadata target.specification newSpecification
 
 governanceLockSubstitutionControllers : GovernanceLockSubstitution -> ControllersSpecification
 governanceLockSubstitutionControllers GovernanceLockSubstitution{target, owner} =
@@ -102,8 +104,12 @@ governanceLockSubstitutionControllers GovernanceLockSubstitution{target, owner} 
   in makeControllersSpecification $ fmap (\s -> target.owner :: owner :: s) controllerSets
 
 -- | Memo of a substitution proposal of a `GovernanceLock`: the memo of the new lock plus the accept request.
-governanceLockSubstitutionMetadata : GovernanceLockSpecification -> Metadata
-governanceLockSubstitutionMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-substitute-lock"
+governanceLockSubstitutionMetadata : GovernanceLockSpecification -> Optional GovernanceLockSpecification -> Metadata
+governanceLockSubstitutionMetadata targetSpec newSpec =
+  encodeGovernanceLockMetadataWithRequest'
+    (<> optional [] encodeGovernanceLockNewSpecCustomControllersMetadataEntries newSpec)
+    "accept-to-substitute-lock"
+    targetSpec
 
 data GovernanceLock_SubstitutionResult_Completed = GovernanceLock_SubstitutionResult_Completed with
   lockCid : ContractId GovernanceLock
@@ -127,6 +133,7 @@ data GovernanceLockProposeSubstitutionArgs = GovernanceLockProposeSubstitutionAr
   dso : Party
   target : GovernanceLockKey
   owner : Party -- ^ Party that proposed the substitution
+  newSpecification : GovernanceLockSpecification -- ^ New lock specification to support setting new custom controllers.
   amount : Decimal -- ^ Amount being substituted
   inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
   extraArgs : ExtraArgs
@@ -158,17 +165,22 @@ governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs {..} = 
       assertWithinDeadline "target lock endTime" endTime
       pure $ min maxExpiresAt endTime
 
+  let substitution = GovernanceLockSubstitution with
+        target
+        owner
+        newSpecification = Some newSpecification
+        amount
+        lockedAmulet
+        approvals = Some Map.empty
+        requestedAt
+        expiresAt
+        originalSubstitutionCid = None
+
+  validateNewGovernanceLockSpecification substitution.target.specification substitution.newSpecification
+
   result <- proposal_create governanceLockSubstitution_operations ProposalUpdateArgs with
     proposalCid = None
-    proposal = governanceLockSubstitution_proposalView GovernanceLockSubstitution with
-      target
-      owner
-      amount
-      lockedAmulet
-      approvals = Some Map.empty
-      requestedAt
-      expiresAt
-      originalSubstitutionCid = None
+    proposal = governanceLockSubstitution_proposalView substitution
     actors = [owner]
     reason
     getContext = pure (context, state)
