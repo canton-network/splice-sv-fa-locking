@@ -72,11 +72,17 @@ import org.lfdecentralizedtrust.splice.history.{
   DirectTokenStandardTransfer,
   DirectTokenStandardTransferV2,
   GovernanceLockSubstitutionAccept,
+  GovernanceLockSubstitutionAcceptV2,
   GovernanceLockSubstitutionReject,
+  GovernanceLockSubstitutionRejectV2,
   GovernanceLockSubstitutionWithdraw,
+  GovernanceLockSubstitutionWithdrawV2,
   GovernanceLockTransferAccept,
+  GovernanceLockTransferAcceptV2,
   GovernanceLockTransferReject,
+  GovernanceLockTransferRejectV2,
   GovernanceLockTransferWithdraw,
+  GovernanceLockTransferWithdrawV2,
   LockedAmuletExpireAmulet,
   LockedAmuletExpireAmuletV2,
   LockedAmuletOwnerExpireLock,
@@ -94,6 +100,14 @@ import org.lfdecentralizedtrust.splice.history.{
   TransferPreapproval_Renew,
   TransferPreapproval_Send,
   TransferPreapproval_SendV2,
+  UnlockProposalAcceptV2,
+  UnlockProposalRejectV2,
+  UnlockProposalWithdraw,
+  UnlockProposalWithdrawV2,
+  WithdrawVestedFundsAcceptV2,
+  WithdrawVestedFundsRejectV2,
+  WithdrawVestedFundsWithdraw,
+  WithdrawVestedFundsWithdrawV2,
 }
 import org.lfdecentralizedtrust.splice.store.TxLogStore
 import org.lfdecentralizedtrust.splice.util.{
@@ -102,6 +116,7 @@ import org.lfdecentralizedtrust.splice.util.{
   ExerciseNode,
   ExerciseNodeCompanion,
   GovernanceLockUtil,
+  QualifiedName,
   TokenStandardAccount,
   TokenStandardMetadata,
 }
@@ -905,9 +920,21 @@ class UserWalletTxLogParser(
                 )
             }
 
+          // An accept, reject or withdraw that leaves a governance lock proposal pending only
+          // records a vote and moves no funds
+          case _ if isPendingGovernanceLockUpdate(tree, exercised) =>
+            defer {
+              parseTrees(
+                tree,
+                tree.getChildNodeIds(exercised).asScala.toList,
+                synchronizerId,
+                ignoreUnexpectedAmuletCreateArchive,
+              )
+            }
+
           // The target lock returns the substituted funds to its owner, and the funds that the
           // proposer locked move into the new lock, so only the target lock owner's balance changes
-          case GovernanceLockSubstitutionAccept(_) =>
+          case GovernanceLockSubstitutionAccept(_) | GovernanceLockSubstitutionAcceptV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -938,7 +965,7 @@ class UserWalletTxLogParser(
 
           // The sender's unlocked funds are locked again for the receiver, so neither unlocked
           // balance changes
-          case GovernanceLockTransferAccept(_) =>
+          case GovernanceLockTransferAccept(_) | GovernanceLockTransferAcceptV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -961,6 +988,35 @@ class UserWalletTxLogParser(
                 PartyAndAmount(sender, -lockedAmount),
                 receiver.map(PartyAndAmount(_, BigDecimal(0))).toList,
               )
+            }
+
+          // Executing an unlock or a withdrawal unlocks the funds of the lock owner and locks again
+          // the part that stays locked, so the owner's balance changes by the part that becomes available
+          case UnlockProposalAcceptV2(_) | WithdrawVestedFundsAcceptV2(_) =>
+            defer {
+              parseTrees(
+                tree,
+                tree.getChildNodeIds(exercised).asScala.toList,
+                synchronizerId,
+                ignoreUnexpectedAmuletCreateArchive = true,
+              )
+            }.map { childState =>
+              val owner = childState.entries
+                .collectFirst { case b: BalanceChangeTxLogEntry => b.receiver }
+                .orElse(createdGovernanceLockOwners(tree, exercised).headOption)
+              owner match {
+                case Some(owner) =>
+                  governanceLockAcceptState(
+                    tree,
+                    exercised,
+                    childState,
+                    PartyAndAmount(owner, -lockedAmountOwnedBy(tree, exercised, owner)),
+                    Seq.empty,
+                  )
+                // Withdrawing the fully vested funds of a single vesting lock unlocks and locks
+                // no amulets, so no balance changes
+                case None => childState
+              }
             }
 
           case TransferInstruction_Accept(node) =>
@@ -1029,7 +1085,10 @@ class UserWalletTxLogParser(
             }
 
           case TransferInstruction_Withdraw(_) | GovernanceLockSubstitutionWithdraw(_) |
-              GovernanceLockTransferWithdraw(_) =>
+              GovernanceLockSubstitutionWithdrawV2(_) | GovernanceLockTransferWithdraw(_) |
+              GovernanceLockTransferWithdrawV2(_) | UnlockProposalWithdraw(_) |
+              UnlockProposalWithdrawV2(_) | WithdrawVestedFundsWithdraw(_) |
+              WithdrawVestedFundsWithdrawV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -1049,7 +1108,9 @@ class UserWalletTxLogParser(
             }
 
           case TransferInstruction_Reject(_) | GovernanceLockSubstitutionReject(_) |
-              GovernanceLockTransferReject(_) =>
+              GovernanceLockSubstitutionRejectV2(_) | GovernanceLockTransferReject(_) |
+              GovernanceLockTransferRejectV2(_) | UnlockProposalRejectV2(_) |
+              WithdrawVestedFundsRejectV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -1628,6 +1689,47 @@ class UserWalletTxLogParser(
           s"Expected an unlocked amulet when accepting a governance lock proposal in transaction ${tree.getUpdateId}"
         )
       )
+
+  private val governanceLockProposalTemplates: Set[QualifiedName] = Set(
+    QualifiedName(
+      splice.governancelock.substitution.GovernanceLockSubstitution.COMPANION.getTemplateIdWithPackageId
+    ),
+    QualifiedName(
+      splice.governancelock.transfer.GovernanceLockTransfer.COMPANION.getTemplateIdWithPackageId
+    ),
+    QualifiedName(splice.governancelock.unlock.UnlockProposal.COMPANION.getTemplateIdWithPackageId),
+    QualifiedName(
+      splice.governancelock.withdraw.WithdrawVestedFunds.COMPANION.getTemplateIdWithPackageId
+    ),
+  )
+
+  // The V1 and V2 choices have the same names
+  private val transferInstructionUpdateChoices: Set[String] = Set(
+    splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Accept.name,
+    splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Reject.name,
+    splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Withdraw.name,
+  )
+
+  /** Whether an accept, reject or withdraw of a governance lock proposal left the proposal
+    * pending, because other controllers or proposers must still vote on it.
+    *
+    * The result output does not tell this apart: executing an unlock or a withdrawal that
+    * leaves funds vesting also returns `TransferInstructionResult_Pending`, with the new vesting
+    * lock. Instead, a pending proposal is created again with the new votes, while executing or
+    * rejecting a proposal never creates a proposal of the same template.
+    */
+  private def isPendingGovernanceLockUpdate(
+      tree: Transaction,
+      exercised: ExercisedEvent,
+  ): Boolean = {
+    val template = QualifiedName(exercised.getTemplateId)
+    governanceLockProposalTemplates.contains(template) &&
+    transferInstructionUpdateChoices.contains(exercised.getChoice) &&
+    tree.preorderDescendants(exercised).exists {
+      case created: CreatedEvent => QualifiedName(created.getTemplateId) == template
+      case _ => false
+    }
+  }
 
   /** Transfer entry of an accepted governance lock proposal. Its amounts start
     * at the negated new locks of each party, and the unlocks of the child
