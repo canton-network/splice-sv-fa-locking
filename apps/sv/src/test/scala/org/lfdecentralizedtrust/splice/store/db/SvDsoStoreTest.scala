@@ -3224,6 +3224,33 @@ class DbSvDsoStoreTest
       }
     }
 
+    "use the threshold of the highest app kind among duplicate rights" in {
+      // The asset mover threshold is below the basic one, so the threshold of the highest
+      // app kind differs from the highest threshold
+      val config = enforced.copy(basicLockThreshold = BigDecimal(300))
+      val basicAndAssetMoving = userParty(1)
+      val basicOnly = userParty(2)
+      for {
+        store <- mkStoreWith(
+          rights = Seq(
+            featuredAppRight(basicAndAssetMoving),
+            featuredAppRight(
+              basicAndAssetMoving,
+              appKind = Some(splice.amulet.FeaturedAppKind.FAK_ASSETMOVING),
+            ),
+            featuredAppRight(basicOnly),
+          ),
+          locks = Seq(
+            faLock(basicAndAssetMoving, BigDecimal(250)),
+            faLock(basicOnly, BigDecimal(250)),
+          ),
+        )
+        result <- store.listFeaturedAppUnderlockStatusChanges(config)
+      } yield {
+        result shouldBe Seq(FeaturedAppUnderlockStatus(basicOnly, underlocked = true))
+      }
+    }
+
     "only consider the given provider" in {
       val provider = userParty(1)
       val otherProvider = userParty(2)

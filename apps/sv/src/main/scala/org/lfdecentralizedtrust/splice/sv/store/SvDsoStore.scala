@@ -1111,8 +1111,8 @@ trait SvDsoStore
     *
     * A provider is underlocked if enforcement is enabled and its full featured app locks sum to less than
     * the threshold of its app kind. A provider with several rights, which `DsoRules_MergeFeaturedAppRights`
-    * eventually merges, is recorded as underlocked if any right is, and must meet the highest threshold of
-    * their app kinds. Providers with a `FeaturedAppUnderlockInstruction` awaiting execution are skipped, as
+    * eventually merges, is recorded as underlocked if any right is, and must meet the threshold of the
+    * highest of their app kinds. Providers with a `FeaturedAppUnderlockInstruction` awaiting execution are skipped, as
     * executing it updates their right.
     *
     * @param provider only consider this provider, used to recheck a single provider's status

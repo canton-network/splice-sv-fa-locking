@@ -2238,17 +2238,23 @@ class DbSvDsoStore private (
       // (store_id, migration_id, governance_lock_type, governance_lock_subject).
       // Providers with an instruction awaiting execution are skipped, as executing it
       // updates the right. Expired instructions count too, as they can still be executed.
+      // Duplicate rights get the threshold of their highest app kind, as in
+      // DsoRules_MergeFeaturedAppRights; 0, 1, 2 follow FeaturedAppKind's Ord instance.
       for {
         rows <- storage.query(
           (sql"""
             with rights as (
               select featured_app_right_provider as provider,
                      bool_or(create_arguments->>'underlockPermanentAt' is not null) as recorded_underlocked,
-                     max(case coalesce(create_arguments->>'appKind', 'FAK_Basic')
-                           when 'FAK_Asset' then ${config.assetLockThreshold}
-                           when 'FAK_AssetMoving' then ${config.assetMovingLockThreshold}
-                           else ${config.basicLockThreshold}
-                         end) as lock_threshold
+                     case max(case create_arguments->>'appKind'
+                                when 'FAK_Asset' then 2
+                                when 'FAK_AssetMoving' then 1
+                                else 0
+                              end)
+                       when 2 then ${config.assetLockThreshold}
+                       when 1 then ${config.assetMovingLockThreshold}
+                       else ${config.basicLockThreshold}
+                     end as lock_threshold
               from #${DsoTables.acsTableName}
               where store_id = $acsStoreId
                 and migration_id = $domainMigrationId
