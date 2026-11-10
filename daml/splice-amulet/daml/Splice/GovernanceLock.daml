@@ -166,9 +166,6 @@ validateNewGovernanceLockControllers (GLS_VestingLock _) unlockControllers subst
 
 setNewGovernanceLockControllers : GovernanceLockSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> GovernanceLockSpecification
 setNewGovernanceLockControllers (GLS_FullLock spec) unlockControllers substitutionControllers vestingControllers =
-  -- TODO: if the transfer/substitution doesn't specify new controllers of a certain type, should we assume that means
-  -- they want it to be owner-controlled, or that they want to copy the controllers from the source/target lock?
-  -- This currently implements the former.
   GLS_FullLock spec with unlockControllers; substitutionControllers; vestingControllers
 setNewGovernanceLockControllers (GLS_VestingLock spec) _unlockControllers _substitutionControllers vestingControllers =
   GLS_VestingLock spec with vestingControllers
