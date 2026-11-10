@@ -2,6 +2,7 @@ package org.lfdecentralizedtrust.splice.integration.tests
 
 import com.digitalasset.canton.config.NonNegativeFiniteDuration
 import com.digitalasset.canton.topology.PartyId
+import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet.FeaturedAppRight
 import org.lfdecentralizedtrust.splice.codegen.java.splice.dso.instruction.FeaturedAppUnderlockInstruction
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
@@ -49,6 +50,16 @@ class FeaturedAppUnderlockStatusUpdateIntegrationTest extends IntegrationTest wi
       )
       .map(_.data)
 
+  private def featuredAppRightsFor(
+      provider: PartyId
+  )(implicit env: SpliceTestConsoleEnvironment): Seq[FeaturedAppRight] =
+    sv1Backend.participantClientWithAdminToken.ledger_api_extensions.acs
+      .filterJava(FeaturedAppRight.COMPANION)(
+        dsoParty,
+        _.data.provider == provider.toProtoPrimitive,
+      )
+      .map(_.data)
+
   "create a single underlock instruction for a featured app provider without locks" in {
     implicit env =>
       val alice = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
@@ -59,18 +70,19 @@ class FeaturedAppUnderlockStatusUpdateIntegrationTest extends IntegrationTest wi
           aliceWalletClient.selfGrantFeaturedAppRight()
         },
       )(
-        "the SVs confirm an underlock instruction for alice",
+        "the SVs record alice as underlocked",
         _ => {
-          val instruction = instructionsFor(alice).loneElement
-          instruction.underlocked shouldBe true
+          // The instruction is either awaiting execution, or already executed and suspended the right
+          val instructions = instructionsFor(alice)
+          instructions.foreach(_.underlocked shouldBe true)
+          if (instructions.isEmpty)
+            featuredAppRightsFor(alice).map(_.underlockPermanentAt.isPresent) shouldBe Seq(true)
         },
       )
 
-      // Nothing executes the instruction in this test, so alice's right still records no
-      // underlock. The trigger must not create further instructions while one is pending.
-      clue("no further instructions are created while one awaits execution") {
+      clue("no duplicate instructions are created") {
         always(10.seconds, pollIntervalMs = 1000) {
-          instructionsFor(alice) should have size 1
+          instructionsFor(alice).size should be <= 1
         }
       }
   }
