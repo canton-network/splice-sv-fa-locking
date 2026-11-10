@@ -20,6 +20,7 @@ module Splice.GovernanceLock.Proposal (
 ) where
 
 import DA.Action (foldrA)
+import DA.Assert (assertWithinDeadline)
 import DA.List qualified as List
 import DA.Map qualified as Map
 import DA.NonEmpty qualified as NonEmpty
@@ -238,6 +239,7 @@ proposal_update' ProposalOperations{..} onPendingOrAccepted onRejected ProposalU
         recreate pendingVotes (optional proposalCid Some view.originalProposalCid) proposal
 
     PVR_Accepted{} -> do
+      assertWithinDeadline "expiresAt" view.expiresAt
       (context, state) <- getContext
       merged <- fetchAndMergeGovernanceLocks view.lockKey context state reason
       onPendingOrAccepted . Right <$> execute ProposalExecuteArgs with
@@ -267,6 +269,7 @@ proposal_accept : HasToInterface t V2.TransferInstruction => ProposalOperations 
 proposal_accept ops proposalCid proposal actors extraArgs = do
   let view = ops.makeView proposal
   checkPendingControllers view.controllers actors view.votes
+  assertWithinDeadline "expiresAt" view.expiresAt
   proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) True
 
 proposal_transferInstructionV1_acceptImpl

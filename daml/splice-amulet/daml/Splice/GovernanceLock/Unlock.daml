@@ -15,7 +15,7 @@ module Splice.GovernanceLock.Unlock (
 
 import Prelude hiding (forA)
 import DA.Action (unless)
-import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
+import DA.Assert (assertDeadlineExceeded)
 import DA.Functor (($>))
 import DA.List qualified as List
 import DA.Map qualified as Map
@@ -173,7 +173,6 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
 -- | Unlocks `unlockAmount` of a governance lock.
 governanceLock_executeUnlock : ProposalExecuteArgs UnlockProposal -> Update GovernanceLock_UnlockResult_Completed
 governanceLock_executeUnlock ProposalExecuteArgs{..} = do
-  assertWithinDeadline "expiresAt" proposal.expiresAt
   let FetchAndMergeLocksResult{lockCid, lock} = merged
       unlockAmount = proposal.specification.amount
   potentiallyUnsafeArchive lockCid -- safe as the lock was checked when fetched/merged

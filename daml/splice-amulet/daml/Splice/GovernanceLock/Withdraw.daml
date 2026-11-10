@@ -15,7 +15,7 @@ module Splice.GovernanceLock.Withdraw (
 ) where
 
 import Prelude hiding (forA)
-import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
+import DA.Assert (assertDeadlineExceeded)
 import DA.List qualified as List
 import DA.Map qualified as Map
 import DA.Optional
@@ -176,7 +176,6 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
 
 vestingLock_executeWithdraw : ProposalExecuteArgs WithdrawVestedFunds -> Update VestingLock_WithdrawResult_Completed
 vestingLock_executeWithdraw ProposalExecuteArgs{..} = do
-  assertWithinDeadline "expiresAt" proposal.expiresAt
   let FetchAndMergeLocksResult{lockCid, lock} = merged
   potentiallyUnsafeArchive lockCid -- safe as the lock was checked when fetched/merged
 

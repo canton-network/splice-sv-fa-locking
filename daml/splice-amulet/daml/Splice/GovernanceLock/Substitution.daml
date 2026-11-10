@@ -193,7 +193,6 @@ governanceLock_executeSubstitution : ProposalExecuteArgs GovernanceLockSubstitut
 governanceLock_executeSubstitution ProposalExecuteArgs{..} = do
   let FetchAndMergeLocksResult{lockCid} = merged
       GovernanceLockSubstitution{..} = proposal
-  assertWithinDeadline "expiresAt" expiresAt
   let forOwner = ForOwner with dso = target.dso; owner = target.owner
   (newLockedAmulet, remainingLockCid, unlockedAmulet) <- case lockedAmulet of
     Some proposalLockedAmulet -> do
