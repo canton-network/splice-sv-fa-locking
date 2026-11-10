@@ -7,6 +7,7 @@ module Splice.GovernanceLock.Controllers (
   makeControllersSpecification,
   validateControllersSpecification,
   encodeControllersSpecification,
+  parseControllersSpecification,
   allControllers,
   controllersPendingVote,
   proposersPendingWithdrawal,
@@ -15,9 +16,9 @@ module Splice.GovernanceLock.Controllers (
 
 import DA.Map qualified as Map
 import DA.Set qualified as Set
-import DA.Text qualified as Text
 
 import Splice.TokenStandard.Utils
+import Splice.Util.Json
 
 -- | Specification of controllers that can jointly authorize an action.
 -- Serializable so it can be encoded on templates, but should not be constructed directly; use ControllerSets.
@@ -49,11 +50,13 @@ makeControllersSpecification : [[Party]] -> ControllersSpecification
 makeControllersSpecification = getControllersSpecification . makeControllerSets
 
 encodeControllerSets : ControllerSets -> Text
-encodeControllerSets controllers =
-  Text.intercalate ";" (fmap (Text.intercalate "," . fmap partyToText) (getControllersSpecification controllers).controllers)
+encodeControllerSets controllers = jsonEncodePartiesLists (getControllersSpecification controllers).controllers
 
 encodeControllersSpecification : ControllersSpecification -> Text
 encodeControllersSpecification = encodeControllerSets . makeControllerSets . (.controllers)
+
+parseControllersSpecification : Text -> Either Text ControllersSpecification
+parseControllersSpecification = fmap makeControllersSpecification . jsonDecodePartiesLists
 
 validateControllersSpecification : CanAssert m => Text -> Optional ControllersSpecification -> m ()
 validateControllersSpecification _ None = pure ()
