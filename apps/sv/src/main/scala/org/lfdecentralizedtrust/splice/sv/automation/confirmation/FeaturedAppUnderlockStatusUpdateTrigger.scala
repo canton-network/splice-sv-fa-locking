@@ -11,7 +11,9 @@ import io.opentelemetry.api.trace.Tracer
 import org.apache.pekko.stream.Materializer
 import org.lfdecentralizedtrust.splice.automation.{
   PollingParallelTaskExecutionTrigger,
+  TaskNoop,
   TaskOutcome,
+  TaskStale,
   TaskSuccess,
   TriggerContext,
 }
@@ -71,16 +73,12 @@ class FeaturedAppUnderlockStatusUpdateTrigger(
   )(implicit tc: TraceContext): Future[TaskOutcome] = {
     val action = FeaturedAppUnderlockStatusUpdateTrigger.createInstructionAction(task)
     for {
-      isCurrent <- FeaturedAppUnderlockStatusUpdateTrigger.isCurrent(store, task)
+      isStale <- isStaleTask(task)
       outcome <-
-        if (!isCurrent)
-          Future.successful(TaskSuccess(show"skipping as $task is no longer current"))
+        if (isStale) Future.successful(TaskStale)
         else
           store.lookupConfirmationByActionWithOffset(svParty, action).flatMap {
-            case QueryResult(_, Some(_)) =>
-              Future.successful(
-                TaskSuccess(show"skipping as $svParty already confirmed $task")
-              )
+            case QueryResult(_, Some(_)) => Future.successful(TaskNoop)
             case QueryResult(offset, None) =>
               for {
                 dsoRules <- store.getDsoRules()
@@ -109,8 +107,7 @@ class FeaturedAppUnderlockStatusUpdateTrigger(
   override def isStaleTask(task: FeaturedAppUnderlockStatus)(implicit
       tc: TraceContext
   ): Future[Boolean] =
-    // completeTask rechecks the status
-    Future.successful(false)
+    FeaturedAppUnderlockStatusUpdateTrigger.isCurrent(store, task).map(!_)
 }
 
 object FeaturedAppUnderlockStatusUpdateTrigger {
