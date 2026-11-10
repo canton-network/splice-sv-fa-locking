@@ -1830,6 +1830,7 @@ class DbScanStoreTest
         loggerFactory,
         RetryProvider(loggerFactory, timeouts, FutureSupervisor.Noop, NoOpMetricsFactory),
         domainMigrationId,
+        synchronizerId = dummyDomain,
         participantId = mkParticipantId("ScanStoreTest"),
         IngestionConfig(),
         new DbScanStoreMetrics(new NoOpMetricsFactory(), loggerFactory, timeouts),
@@ -1844,14 +1845,10 @@ class DbScanStoreTest
           store.multiDomainAcsStore.testIngestionSink.ingestAcs(
             nextOffset(),
             Seq.empty,
-            Seq.empty,
-            Seq.empty,
           )
         case InitializeAcsAtOffset(_) =>
           store.multiDomainAcsStore.testIngestionSink.ingestAcs(
             nextOffset(),
-            Seq.empty,
-            Seq.empty,
             Seq.empty,
           )
       }
