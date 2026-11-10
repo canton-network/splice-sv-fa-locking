@@ -2236,6 +2236,8 @@ class DbSvDsoStore private (
         provider.fold(sql"")(p => sql" and featured_app_right_provider = $p")
       // The lateral join looks up each provider's locks through the index on
       // (store_id, migration_id, governance_lock_type, governance_lock_subject).
+      // Providers with an instruction awaiting execution are skipped, as executing it
+      // updates the right. Expired instructions count too, as they can still be executed.
       for {
         rows <- storage.query(
           (sql"""
@@ -2275,8 +2277,6 @@ class DbSvDsoStore private (
             select provider, underlocked
             from statuses
             where underlocked <> recorded_underlocked
-              -- Skip providers with an instruction awaiting execution, which
-              -- updates the right. Expired instructions can still be executed.
               and not exists (
                 select 1
                 from #${DsoTables.acsTableName} instr
