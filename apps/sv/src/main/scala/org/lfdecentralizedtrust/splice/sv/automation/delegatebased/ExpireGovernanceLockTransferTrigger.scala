@@ -14,6 +14,7 @@ import org.lfdecentralizedtrust.splice.store.AppStoreWithIngestion.SpliceLedgerC
 import org.lfdecentralizedtrust.splice.store.UnavailablePartiesStore
 import org.lfdecentralizedtrust.splice.sv.config.SvAppBackendConfig
 import org.lfdecentralizedtrust.splice.sv.util.ContractStakeholders
+import org.lfdecentralizedtrust.splice.util.GovernanceLockUtil
 
 import scala.concurrent.{ExecutionContext, Future}
 import scala.jdk.CollectionConverters.*
@@ -91,7 +92,7 @@ object ExpireGovernanceLockTransferTrigger
     ]
 
   override def informees(payload: transferCodegen.GovernanceLockTransfer): Seq[String] =
-    Seq(payload.source.owner, payload.receiver)
+    GovernanceLockUtil.transferInformees(payload)
 
   override def dso(payload: transferCodegen.GovernanceLockTransfer): String = payload.source.dso
 }
