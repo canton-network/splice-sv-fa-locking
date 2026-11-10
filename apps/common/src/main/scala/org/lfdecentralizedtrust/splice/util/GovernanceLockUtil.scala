@@ -34,8 +34,13 @@ object GovernanceLockUtil {
   def getGovernanceLockKind(lock: gl.GovernanceLock): gl.GovernanceLockKind =
     getSpecificationKind(lock.specification)
 
+  def getVestingLockSpecification(
+      specification: gl.GovernanceLockSpecification
+  ): Option[gl.VestingLockSpecification] =
+    foldSpecification(specification)(_ => None, Some(_))
+
   def getVestingLockSpecification(lock: gl.GovernanceLock): Option[gl.VestingLockSpecification] =
-    foldSpecification(lock.specification)(_ => None, Some(_))
+    getVestingLockSpecification(lock.specification)
 
   /** Parties observing a lock with this specification, mirroring `governanceLockObservers`
     * in `Splice.GovernanceLock`.

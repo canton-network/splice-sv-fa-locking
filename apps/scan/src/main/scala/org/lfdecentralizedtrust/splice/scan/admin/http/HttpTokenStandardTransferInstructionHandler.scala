@@ -406,6 +406,11 @@ class HttpTokenStandardTransferInstructionHandler(
   )(implicit tc: TraceContext): Future[ChoiceContext] = {
     def description(type_ : String): String = s"$type_ '$transferInstructionId'"
 
+    def vestingLockIsNotExpired(spec: splice.governancelock.GovernanceLockSpecification): Boolean =
+      GovernanceLockUtil
+        .getVestingLockSpecification(spec)
+        .fold(true)(v => clock.now.toInstant.isBefore(v.endTime))
+
     def getGovernanceLockContext(
         tpe: String,
         lockedAmuletId: Option[splice.amulet.LockedAmulet.ContractId],
@@ -424,6 +429,33 @@ class HttpTokenStandardTransferInstructionHandler(
         clock,
         newBuilder,
       )
+
+    def getGovernanceLockProposalContext(
+        tpe: String,
+        key: splice.governancelock.GovernanceLockKey,
+        discloseLocks: Boolean,
+        proposalLockedAmulet: Option[splice.amulet.LockedAmulet.ContractId] = None,
+    ) =
+      // Only proposal acceptance moves the locks and calls this with `requireLockedAmulet=true`;
+      // reject and withdraw just archive the proposal
+      if (requireLockedAmulet)
+        util.ChoiceContextBuilder.getGovernanceLockProposalContext[
+          DisclosedContract,
+          ChoiceContext,
+          Builder,
+        ](
+          description(tpe),
+          key,
+          discloseLocks,
+          vestingLockIsNotExpired(key.specification),
+          proposalLockedAmulet,
+          store,
+          contractFetcher,
+          clock,
+          newBuilder,
+        )
+      else
+        getGovernanceLockContext(tpe, proposalLockedAmulet, false)
 
     contractFetcher
       .lookupGenericContractById(new ContractId(transferInstructionId))
@@ -447,45 +479,46 @@ class HttpTokenStandardTransferInstructionHandler(
                 newBuilder,
               )
             case governanceLock: splice.governancelock.GovernanceLock =>
-              val requireLockedAmulet = GovernanceLockUtil
-                .getVestingLockSpecification(governanceLock)
-                .fold(true)(v => clock.now.toInstant.isBefore(v.endTime))
               getGovernanceLockContext(
                 "GovernanceLock",
                 Some(governanceLock.lockedAmulet),
-                requireLockedAmulet,
+                vestingLockIsNotExpired(governanceLock.specification),
               )
-            // A substitution proposed by the target lock owner locks no funds,
-            // so it has no LockedAmulet
             case substitution: splice.governancelock.substitution.GovernanceLockSubstitution =>
-              getGovernanceLockContext(
+              getGovernanceLockProposalContext(
                 "GovernanceLockSubstitution",
+                substitution.target,
+                false,
+                // A substitution proposed by the target lock owner locks no funds,
+                // so it has no LockedAmulet
                 substitution.lockedAmulet.toScala,
-                substitution.lockedAmulet.isPresent,
               )
-            // Only the lock transfer accept moves the source locks and call
-            // this with `requireLockedAmulet=true`; reject and withdraw just
-            // archive the proposal
             case lockTransfer: splice.governancelock.transfer.GovernanceLockTransfer =>
-              if (requireLockedAmulet)
-                util.ChoiceContextBuilder.getGovernanceLockTransferAcceptContext[
-                  DisclosedContract,
-                  ChoiceContext,
-                  Builder,
-                ](
-                  description("GovernanceLockTransfer"),
-                  lockTransfer.source,
-                  store,
-                  contractFetcher,
-                  clock,
-                  newBuilder,
-                )
-              else
-                getGovernanceLockContext(
-                  "GovernanceLockTransfer",
-                  None,
-                  requireLockedAmulet = false,
-                )
+              getGovernanceLockProposalContext("GovernanceLockTransfer", lockTransfer.source, true)
+            case unlock: splice.governancelock.unlock.UnlockProposal =>
+              getGovernanceLockProposalContext(
+                "UnlockProposal",
+                new splice.governancelock.GovernanceLockKey(
+                  unlock.specification.dso,
+                  unlock.specification.owner,
+                  new splice.governancelock.governancelockspecification.GLS_FullLock(
+                    unlock.specification.fullSpec
+                  ),
+                ),
+                false,
+              )
+            case withdraw: splice.governancelock.withdraw.WithdrawVestedFundsProposal =>
+              getGovernanceLockProposalContext(
+                "WithdrawVestedFundsProposal",
+                new splice.governancelock.GovernanceLockKey(
+                  withdraw.specification.dso,
+                  withdraw.specification.owner,
+                  new splice.governancelock.governancelockspecification.GLS_VestingLock(
+                    withdraw.specification.vestingSpec
+                  ),
+                ),
+                false,
+              )
             case _ => transferInstructionNotFound(transferInstructionId, Some(contract.identifier))
           }
         case None => transferInstructionNotFound(transferInstructionId, None)
