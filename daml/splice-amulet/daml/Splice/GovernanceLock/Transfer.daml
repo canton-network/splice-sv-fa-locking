@@ -107,7 +107,7 @@ governanceLockTransfer_proposalView proposal@GovernanceLockTransfer{..} = Propos
   controllers = governanceLockTransferControllers proposal
   votes = fromOptional Map.empty votes
   amount
-  lockedAmulet = None -- TODO: should this have the source lock's lockedAmulet?
+  lockedAmulet = None
   requestedAt
   expiresAt
   originalProposalCid

@@ -48,7 +48,6 @@ template UnlockProposal
   with
     specification : UnlockProposalSpecification
     proposers : [Party]
-    lockedAmulet : ContractId LockedAmulet
     votes : Map.Map Party Bool -- ^ Votes recorded so far.
     requestedAt : Time -- ^ Time of the request to create the proposal.
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
@@ -92,7 +91,7 @@ unlockProposal_proposalView UnlockProposal{..} = ProposalView with
   controllers = unlockProposalControllers specification
   votes
   amount = specification.amount
-  lockedAmulet = Some lockedAmulet
+  lockedAmulet = None
   requestedAt
   expiresAt
   originalProposalCid
@@ -163,7 +162,6 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
     proposal = UnlockProposal with
       specification
       proposers
-      lockedAmulet = lock.lockedAmulet
       votes = emptyVotes
       requestedAt
       expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
