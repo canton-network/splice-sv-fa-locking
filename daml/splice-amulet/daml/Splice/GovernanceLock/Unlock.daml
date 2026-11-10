@@ -55,8 +55,8 @@ template UnlockProposal
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
     signatory specification.target.dso, proposers
-    -- TODO: should this include `governanceLockObservers specification.target.specification`?
-    observer specification.target.owner, (Set.fromList $ concat (unlockProposalControllers specification).controllers)
+    observer specification.target.owner, governanceLockObservers specification.target.specification,
+             (Set.fromList $ concat (unlockProposalControllers specification).controllers)
     ensure specification.amount > 0.0 && (not $ null proposers) && either error (const True) (requireFullLock specification.target.specification)
 
     choice UnlockProposal_DsoExpire : UnlockProposal_DsoExpireResult
