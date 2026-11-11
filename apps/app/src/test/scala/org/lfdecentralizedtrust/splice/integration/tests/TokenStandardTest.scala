@@ -156,6 +156,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       receiver: PartyId,
       amount: BigDecimal,
       expectedKind: transferinstruction.v2.definitions.TransferFactoryWithChoiceContext.TransferKind,
+      actors: Option[List[PartyId]] = None,
       timeToLife: Duration = Duration.ofMinutes(10),
       expectedTimeBounds: Option[(CantonTimestamp, CantonTimestamp)] = None,
       beforeExecute: Option[() => Unit] = None,
@@ -172,21 +173,36 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
           receiver,
           amount,
           expectedKind,
+          actors,
           timeToLife,
           description,
         )
-        participant.ledger_api_extensions.commands
-          .submitJavaExternalOrLocal(
-            sender,
-            commands = factoryChoice.factoryId
-              .exerciseTransferFactory_Transfer(factoryChoice.args)
-              .commands
-              .asScala
-              .toSeq,
-            disclosedContracts = factoryChoice.disclosedContracts,
-            expectedTimeBounds = expectedTimeBounds,
-            beforeExecute = beforeExecute,
-          )
+        actors match {
+          case Some(actors) =>
+            participant.ledger_api_extensions.commands
+              .submitJava(
+                actors,
+                commands = factoryChoice.factoryId
+                  .exerciseTransferFactory_Transfer(factoryChoice.args)
+                  .commands
+                  .asScala
+                  .toSeq,
+                disclosedContracts = factoryChoice.disclosedContracts,
+              )
+          case None =>
+            participant.ledger_api_extensions.commands
+              .submitJavaExternalOrLocal(
+                sender,
+                commands = factoryChoice.factoryId
+                  .exerciseTransferFactory_Transfer(factoryChoice.args)
+                  .commands
+                  .asScala
+                  .toSeq,
+                disclosedContracts = factoryChoice.disclosedContracts,
+                expectedTimeBounds = expectedTimeBounds,
+                beforeExecute = beforeExecute,
+              )
+        }
         senderHoldingCids.headOption
       },
     )(
@@ -208,6 +224,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
       receiver: PartyId,
       amount: BigDecimal,
       expectedKind: transferinstruction.v2.definitions.TransferFactoryWithChoiceContext.TransferKind,
+      actors: Option[List[PartyId]] = None,
       timeToLife: Duration = Duration.ofMinutes(10),
       description: Option[String] = None,
   )(implicit
@@ -247,7 +264,7 @@ trait TokenStandardTest extends ExternallySignedPartyTestUtil {
           description.toList.map(TokenStandardMetadata.reasonMetaKey -> _).toMap.asJava
         ),
       ),
-      Seq(sender.toProtoPrimitive).asJava,
+      actors.getOrElse(List(sender)).map(_.toProtoPrimitive).asJava,
       emptyExtraArgs,
     )
     val (factory, kind) = sv1ScanBackend.getTransferFactoryV2(choiceArgs)

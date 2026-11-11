@@ -3,11 +3,15 @@
 
 package org.lfdecentralizedtrust.splice.integration.tests
 
+import cats.data.NonEmptyList
 import com.daml.ledger.javaapi.data.codegen.ContractId
 import com.digitalasset.canton.config.NonNegativeFiniteDuration
 import com.digitalasset.canton.topology.PartyId
-import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.transferinstructionv1
-import org.lfdecentralizedtrust.splice.codegen.java.splice.{amulet as amuletCodegen, governancelock}
+import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.transferinstructionv1 as tiv1
+import org.lfdecentralizedtrust.splice.codegen.java.splice.{
+  amulet as amuletCodegen,
+  governancelock as gl,
+}
 import org.lfdecentralizedtrust.splice.codegen.java.splice.wallet.install
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
@@ -27,7 +31,6 @@ import org.lfdecentralizedtrust.splice.util.{
   GovernanceLockUtil,
   TimeTestUtil,
   TokenStandardMetadata,
-  WalletTestUtil,
 }
 import org.lfdecentralizedtrust.splice.wallet.store.{
   BalanceChangeTxLogEntry,
@@ -44,7 +47,6 @@ import scala.jdk.OptionConverters.*
 @org.lfdecentralizedtrust.splice.util.scalatesttags.SpliceAmulet_0_1_25
 class GovernanceLockTimeBasedIntegrationTest
     extends IntegrationTestWithIsolatedEnvironment
-    with WalletTestUtil
     with WalletTxLogTestUtil
     with TimeTestUtil
     with GovernanceLockTest {
@@ -93,8 +95,8 @@ class GovernanceLockTimeBasedIntegrationTest
   private val lockKind = SuperValidatorLock
   private val lockSubject = "sv1"
 
-  private def checkLockKind(kind: governancelock.GovernanceLockKind): Assertion =
-    kind shouldBe a[governancelock.governancelockkind.GLK_SuperValidatorRightsOwner]
+  private def checkLockKind(kind: gl.GovernanceLockKind): Assertion =
+    kind shouldBe a[gl.governancelockkind.GLK_SuperValidatorRightsOwner]
 
   // Wallet automation runs in the background, e.g. to merge the amulets that a withdrawal unlocks,
   // so its entries could appear after the cursor of the previous lock action
@@ -140,12 +142,10 @@ class GovernanceLockTimeBasedIntegrationTest
 
   private def testTokenStandardCompat[CId <: ContractId[?], View](
       ops: TokenStandardOps[CId, View]
-  ) =
-    s"GovernanceLock TSv${ops.version} compatibility" in { implicit env =>
-      // Setup alice as the lock owner
-      val ownerParty = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
-      val owner = RichPartyId.local(ownerParty)
-
+  ) = {
+    def createLock(alice: RichPartyId, controllers: LockControllers = LockControllers())(implicit
+        env: SpliceTestConsoleEnvironment
+    ) = {
       aliceWalletClient.tap(lockAmount)
       val beforeCreate = checkTxHistory(
         aliceWalletClient,
@@ -159,11 +159,21 @@ class GovernanceLockTimeBasedIntegrationTest
       // Create the governance lock via a transfer to the magic party
       val governanceLockCid = ops.createGovernanceLock(
         aliceValidatorBackend.participantClientWithAdminToken,
-        owner,
+        alice,
         lockKind,
         lockSubject,
-        amount = lockAmount,
+        lockAmount,
+        controllers,
       )
+
+      (beforeCreate, unlockedAfterTap, governanceLockCid)
+    }
+
+    s"GovernanceLock TSv${ops.version} compatibility" in { implicit env =>
+      // Setup alice as the lock owner
+      val ownerParty = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
+      val owner = RichPartyId.local(ownerParty)
+      val (beforeCreate, unlockedAfterTap, governanceLockCid) = createLock(owner)
       val beforeUnlock = checkBalancesAndHistory(
         "creating the lock",
         beforeCreate,
@@ -175,7 +185,7 @@ class GovernanceLockTimeBasedIntegrationTest
       clue("the GovernanceLock has the correct kind") {
         val governanceLock =
           aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-            .filterJava(governancelock.GovernanceLock.COMPANION)(
+            .filterJava(gl.GovernanceLock.COMPANION)(
               ownerParty,
               predicate = _.id.contractId == governanceLockCid.contractId,
             )
@@ -213,16 +223,18 @@ class GovernanceLockTimeBasedIntegrationTest
       val (vestingLockCid, vestingLockView) = ops
         .unlockGovernanceLock(
           aliceValidatorBackend.participantClientWithAdminToken,
-          owner,
+          NonEmptyList.one(owner),
           lockKind,
           lockSubject,
           unlockAmount = lockAmount,
           vestingStartTime = vestingStartTime,
+          targetLockOwner = None,
+          LockControllers(),
         )
         .value
       val vestingLock =
         aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-          .filterJava(governancelock.GovernanceLock.COMPANION)(
+          .filterJava(gl.GovernanceLock.COMPANION)(
             ownerParty,
             predicate = _.id.contractId == vestingLockCid.contractId,
           )
@@ -260,16 +272,18 @@ class GovernanceLockTimeBasedIntegrationTest
       val (remainingVestingLockCid, remainingVestingLockView) = ops
         .withdrawVestingLock(
           aliceValidatorBackend.participantClientWithAdminToken,
-          owner,
+          NonEmptyList.one(owner),
           lockKind,
           lockSubject,
           vestingLock,
           vestedUntilTime = vestingStartTime.plusSeconds(30),
+          targetLockOwner = None,
+          LockControllers(),
         )
         .value
       val remainingVestingLock =
         aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-          .filterJava(governancelock.GovernanceLock.COMPANION)(
+          .filterJava(gl.GovernanceLock.COMPANION)(
             ownerParty,
             predicate = _.id.contractId == remainingVestingLockCid.contractId,
           )
@@ -298,14 +312,16 @@ class GovernanceLockTimeBasedIntegrationTest
 
       ops.withdrawVestingLock(
         aliceValidatorBackend.participantClientWithAdminToken,
-        owner,
+        NonEmptyList.one(owner),
         lockKind,
         lockSubject,
         remainingVestingLock,
         vestedUntilTime = vestingStartTime.plusSeconds(120),
+        targetLockOwner = None,
+        LockControllers(),
       )
       aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-        .filterJava(governancelock.GovernanceLock.COMPANION)(
+        .filterJava(gl.GovernanceLock.COMPANION)(
           ownerParty,
           c => isVestingLock(c.data),
         ) shouldBe empty
@@ -330,6 +346,83 @@ class GovernanceLockTimeBasedIntegrationTest
         BigDecimal(remainingLock.amulet.amount.initialAmount) shouldBe remainingVestingAmount
       }
     }
+
+    // Unlock and withdraw tests are grouped together because testing withdrawal requires a vesting
+    // lock, which is created by unlocking a full lock
+    s"TSv${ops.version} unlock and withdraw with custom controllers" in { implicit env =>
+      def makeControllers(controllers: List[List[PartyId]]): LockControllers =
+        LockControllers(unlockControllers = controllers, vestingControllers = controllers)
+
+      val vestingStartTime = getLedgerTime.plusSeconds(1).toInstant
+
+      val vestingLock = customControllers
+        .testProposal(ops, gl.unlock.UnlockProposal.COMPANION)(
+          makeControllers,
+          (owner, controllers) => {
+            val (_, _, cid) = createLock(owner, controllers)
+            new gl.GovernanceLock.ContractId(cid.contractId)
+          },
+          (_, participant, proposer, targetLockOwner, controllers) =>
+            ops
+              .unlockGovernanceLock(
+                participant,
+                proposer,
+                lockKind,
+                lockSubject,
+                lockAmount,
+                vestingStartTime,
+                Some(targetLockOwner.partyId),
+                controllers,
+              )
+              .value,
+          lockAmount,
+          (_, _) => GovernanceLockUtil.lockManagerParty,
+          (parties, vestingLocks) => {
+            val (_, vestingLockView, vestingLock) = vestingLocks.loneElement
+            ops.transferValues
+              .sender(vestingLockView) shouldBe parties.alice.partyId.toProtoPrimitive
+            ops.transferValues.amount(vestingLockView) shouldBe lockAmount
+            val vestingSpec = vestingLockSpecification(vestingLock.data)
+            vestingSpec.endTime
+              .minus(vestingSpec.vestingPeriod.microseconds, ChronoUnit.MICROS) shouldBe
+              vestingStartTime
+          },
+        )
+        .loneElement
+
+      advanceTime(Duration.ofSeconds(31))
+      val vestedUntilTime = vestingStartTime.plusSeconds(30)
+
+      customControllers.testProposal(ops, gl.withdraw.WithdrawVestedFundsProposal.COMPANION)(
+        makeControllers,
+        (_, _) => vestingLock.id, // lock is already setup by unlock above
+        (_, participant, proposer, targetLockOwner, controllers) =>
+          ops
+            .withdrawVestingLock(
+              participant,
+              proposer,
+              lockKind,
+              lockSubject,
+              vestingLock.data,
+              vestedUntilTime,
+              Some(targetLockOwner.partyId),
+              controllers,
+            )
+            .value,
+        lockAmount - expectedRemainingLockAmount,
+        (_, _) => GovernanceLockUtil.lockManagerParty,
+        (parties, vestingLocks) => {
+          val (_, vestingLockView, vestingLock) = vestingLocks.loneElement
+          ops.transferValues.sender(vestingLockView) shouldBe parties.alice.partyId.toProtoPrimitive
+          ops.transferValues.amount(vestingLockView) shouldBe expectedRemainingLockAmount
+          val vestingSpec = vestingLockSpecification(vestingLock.data)
+          vestingSpec.endTime
+            .minus(vestingSpec.vestingPeriod.microseconds, ChronoUnit.MICROS) shouldBe
+            vestedUntilTime
+        },
+      )
+    }
+  }
 
   testTokenStandardCompat(tsv1Operations)
   testTokenStandardCompat(tsv2Operations)
@@ -363,16 +456,19 @@ class GovernanceLockTimeBasedIntegrationTest
             participant,
             owner,
             lockKind,
-            lockSubject = lockSubject,
-            amount = lockAmount,
+            lockSubject,
+            lockAmount,
+            LockControllers(),
           )
           tsv1Operations.unlockGovernanceLock(
             participant,
-            owner,
+            NonEmptyList.one(owner),
             lockKind,
             lockSubject = lockSubject,
             unlockAmount = lockAmount,
             vestingStartTime = vestingStartTime,
+            targetLockOwner = None,
+            LockControllers(),
             isValid = _.originalInstructionCid.toScala.exists(_.contractId == cid.contractId),
           )
         }
@@ -423,6 +519,8 @@ class GovernanceLockTimeBasedIntegrationTest
           lockSubject,
           newLockOwner,
           1000,
+          LockControllers(),
+          LockControllers(),
         )
       },
     )(
@@ -492,6 +590,8 @@ class GovernanceLockTimeBasedIntegrationTest
             lockKind,
             lockSubject,
             lockAmount,
+            LockControllers(),
+            LockControllers(),
           )
         },
       )(
@@ -609,6 +709,7 @@ class GovernanceLockTimeBasedIntegrationTest
         lockKind,
         lockSubject,
         initialAliceLockAmount,
+        LockControllers(),
       )
       tsv1Operations.createGovernanceLock(
         bobParticipant,
@@ -616,16 +717,19 @@ class GovernanceLockTimeBasedIntegrationTest
         lockKind,
         lockSubject,
         initialBobLockAmount,
+        LockControllers(),
       )
       val (aliceLockCid, aliceLock) = governanceLocks(aliceParticipant, aliceParty).loneElement
 
-      val aliceToBobCid = tsv1Operations.transferGovernanceLock(
+      val (aliceToBobCid, _) = tsv1Operations.transferGovernanceLock(
         aliceParticipant,
         alice,
         lockKind,
         lockSubject,
         bobParty,
         transferAmount = lockTransferAmount,
+        LockControllers(),
+        LockControllers(),
       )
 
       clue("bob sees the proposal as an incoming transfer of the transferred amount") {
@@ -690,7 +794,15 @@ class GovernanceLockTimeBasedIntegrationTest
         compareLockMemo(
           entry.description,
           makeInputLockMemo(TransferLock, lockKind, lockSubject)(
-            (Locked, bobParty, lockTransferAmount, None, None)
+            (
+              Locked,
+              bobParty,
+              lockTransferAmount,
+              None,
+              None,
+              LockControllers(),
+              LockControllers(),
+            )
           ),
         )
       }
@@ -702,13 +814,15 @@ class GovernanceLockTimeBasedIntegrationTest
       checkTxHistory(bobWalletClient, Seq(checkAccept), ignore = isUnrelatedTo(aliceToBobCid))
 
       // Neither of bob's locks alone covers the transferred amount
-      val bobToCharlieCid = tsv1Operations.transferGovernanceLock(
+      val (bobToCharlieCid, _) = tsv1Operations.transferGovernanceLock(
         bobParticipant,
         bob,
         lockKind,
         lockSubject,
         charlieParty,
         transferAmount = onwardTransferAmount,
+        LockControllers(),
+        LockControllers(),
       )
 
       clue("Scan's accept context discloses both of bob's locks") {
@@ -737,11 +851,13 @@ class GovernanceLockTimeBasedIntegrationTest
       tsv1Operations
         .unlockGovernanceLock(
           aliceParticipant,
-          charlie,
+          NonEmptyList.one(charlie),
           lockKind,
           lockSubject,
           unlockAmount = onwardTransferAmount,
           vestingStartTime = vestingStartTime,
+          targetLockOwner = None,
+          LockControllers(),
           // The lineage of charlie's lock starts at the accepted proposal
           isValid = _.originalInstructionCid.toScala.exists(
             _.contractId == bobToCharlieCid.contractId
@@ -756,11 +872,13 @@ class GovernanceLockTimeBasedIntegrationTest
         "charlie withdraws the fully vested lock",
         tsv1Operations.withdrawVestingLock(
           aliceParticipant,
-          charlie,
+          NonEmptyList.one(charlie),
           lockKind,
           lockSubject,
           charlieVestingLock,
           vestedUntilTime = vestingStartTime.plus(vestingDuration),
+          targetLockOwner = None,
+          LockControllers(),
         ),
       )(
         "charlie has no lock left",
@@ -787,20 +905,23 @@ class GovernanceLockTimeBasedIntegrationTest
         lockKind,
         lockSubject,
         initialLockAmount,
+        LockControllers(),
       )
 
-      def proposeFullTransfer() = tsv1Operations.transferGovernanceLock(
-        aliceParticipant,
-        alice,
-        lockKind,
-        lockSubject,
-        bobParty,
-        transferAmount = initialLockAmount,
-      )
+      def proposeFullTransfer() = tsv1Operations
+        .transferGovernanceLock(
+          aliceParticipant,
+          alice,
+          lockKind,
+          lockSubject,
+          bobParty,
+          transferAmount = initialLockAmount,
+          LockControllers(),
+          LockControllers(),
+        )
+        ._1
 
-      def checkClosedAndLockUnchanged(
-          proposalCid: transferinstructionv1.TransferInstruction.ContractId
-      ) = {
+      def checkClosedAndLockUnchanged(proposalCid: tiv1.TransferInstruction.ContractId) = {
         listTransferInstructions(aliceParticipant, aliceParty).map(_._1) should not contain
           proposalCid
         governanceLocks(aliceParticipant, aliceParty).map(_._1.contractId) shouldBe
@@ -829,11 +950,13 @@ class GovernanceLockTimeBasedIntegrationTest
       val (vestingLockCid, _) = tsv1Operations
         .unlockGovernanceLock(
           aliceParticipant,
-          alice,
+          NonEmptyList.one(alice),
           lockKind,
           lockSubject,
           unlockAmount = initialLockAmount,
           vestingStartTime = getLedgerTime.plusSeconds(1).toInstant,
+          targetLockOwner = None,
+          LockControllers(),
           isValid = _.originalInstructionCid.toScala.exists(
             _.contractId == lockCid.contractId
           ),
@@ -841,13 +964,15 @@ class GovernanceLockTimeBasedIntegrationTest
         .value
       val (_, vestingLock) = governanceLocks(aliceParticipant, aliceParty).loneElement
 
-      val vestingTransferCid = tsv1Operations.transferVestingLock(vestingLock)(
+      val (vestingTransferCid, _) = tsv1Operations.transferVestingLock(vestingLock)(
         aliceParticipant,
         alice,
         lockKind,
         lockSubject,
         bobParty,
         transferAmount = vestingTransferAmount,
+        LockControllers(),
+        LockControllers(),
       )
 
       actAndCheck(
@@ -892,15 +1017,18 @@ class GovernanceLockTimeBasedIntegrationTest
       lockKind,
       lockSubject,
       lockAmount,
+      LockControllers(),
     )
     tsv1Operations
       .unlockGovernanceLock(
         aliceParticipant,
-        alice,
+        NonEmptyList.one(alice),
         lockKind,
         lockSubject,
         unlockAmount = lockAmount,
         vestingStartTime = vestingStartTime,
+        targetLockOwner = None,
+        LockControllers(),
         isValid = _.originalInstructionCid.toScala.exists(
           _.contractId == lockCid.contractId
         ),
@@ -911,14 +1039,18 @@ class GovernanceLockTimeBasedIntegrationTest
 
     val (transferCid, _) = actAndCheck(
       "alice proposes to transfer part of her vesting lock to bob",
-      tsv1Operations.transferVestingLock(vestingLock)(
-        aliceParticipant,
-        alice,
-        lockKind,
-        lockSubject,
-        bobParty,
-        transferAmount = lockAmount / 4,
-      ),
+      tsv1Operations
+        .transferVestingLock(vestingLock)(
+          aliceParticipant,
+          alice,
+          lockKind,
+          lockSubject,
+          bobParty,
+          transferAmount = lockAmount / 4,
+          LockControllers(),
+          LockControllers(),
+        )
+        ._1,
     )(
       "Scan's accept context discloses the lock and its LockedAmulet",
       transferCid =>
@@ -955,9 +1087,9 @@ class GovernanceLockTimeBasedIntegrationTest
   private def governanceLocks(
       participant: ParticipantClientReference,
       owner: PartyId,
-  ): Seq[(governancelock.GovernanceLock.ContractId, governancelock.GovernanceLock)] =
+  ): Seq[(gl.GovernanceLock.ContractId, gl.GovernanceLock)] =
     participant.ledger_api_extensions.acs
-      .filterJava(governancelock.GovernanceLock.COMPANION)(
+      .filterJava(gl.GovernanceLock.COMPANION)(
         owner,
         _.data.owner == owner.toProtoPrimitive,
       )
@@ -965,7 +1097,7 @@ class GovernanceLockTimeBasedIntegrationTest
 
   /** Ignores all wallet history entries that are not about the given transfer instruction */
   private def isUnrelatedTo(
-      instructionCid: transferinstructionv1.TransferInstruction.ContractId
+      instructionCid: tiv1.TransferInstruction.ContractId
   ): TxLogEntry => Boolean = {
     case entry: TransferTxLogEntry => entry.transferInstructionCid != instructionCid.contractId
     case _ => true
@@ -973,17 +1105,17 @@ class GovernanceLockTimeBasedIntegrationTest
 
   private def listLockSubstitutions(implicit env: SpliceTestConsoleEnvironment) =
     sv1Backend.appState.dsoStore.multiDomainAcsStore
-      .listContracts(governancelock.substitution.GovernanceLockSubstitution.COMPANION)
+      .listContracts(gl.substitution.GovernanceLockSubstitution.COMPANION)
       .futureValue
 
   private def listLockTransfers(implicit env: SpliceTestConsoleEnvironment) =
     sv1Backend.appState.dsoStore.multiDomainAcsStore
-      .listContracts(governancelock.transfer.GovernanceLockTransfer.COMPANION)
+      .listContracts(gl.transfer.GovernanceLockTransfer.COMPANION)
       .futureValue
 
   private def listVestingLocks(implicit env: SpliceTestConsoleEnvironment) =
     sv1Backend.appState.dsoStore.multiDomainAcsStore
-      .listContracts(governancelock.GovernanceLock.COMPANION)
+      .listContracts(gl.GovernanceLock.COMPANION)
       .futureValue
       .filter(lock => GovernanceLockUtil.getVestingLockSpecification(lock.payload).isDefined)
 }

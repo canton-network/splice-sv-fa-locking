@@ -108,6 +108,7 @@ class FeaturedAppUnderlockIntegrationTest
         lockKind = ProvisionalFeaturedAppLock,
         lockSubject = charlie.toProtoPrimitive,
         amount = basicLockThreshold,
+        LockControllers(),
       ),
     )(
       "charlie's suspension is lifted",
