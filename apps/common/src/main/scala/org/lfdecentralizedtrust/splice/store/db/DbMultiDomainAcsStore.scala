@@ -33,12 +33,12 @@ import org.lfdecentralizedtrust.splice.util.{
   TemplateJsonDecoder,
   Trees,
 }
-import com.digitalasset.canton.config.CantonRequireTypes.String256M
+import com.digitalasset.canton.config.CantonRequireTypes.{String256M, String2066}
 import com.digitalasset.canton.discard.Implicits.DiscardOps
 import com.digitalasset.canton.lifecycle.{CloseContext, FutureUnlessShutdown}
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.resource.DbStorage
-import com.digitalasset.canton.topology.SynchronizerId
+import com.digitalasset.canton.topology.{PartyId, SynchronizerId}
 import com.digitalasset.canton.util.ShowUtil.showPretty
 
 import java.util.concurrent.atomic.AtomicReference
@@ -401,26 +401,55 @@ final class DbMultiDomainAcsStore[TXE] private[db] (
     } yield assigned
   }
 
+  def ignoredPartyJsonPathQueryArrayCondition(
+      ignoredPartiesArr: Array[String2066],
+      jsonPathQueryArrayExpr: SQLActionBuilder,
+  ) = sql" and not (" ++ jsonPathQueryArrayExpr ++ sql" ??| $ignoredPartiesArr)"
+
+  def ignoredPartyJsonPathsCondition(
+      baseCondition: SQLActionBuilder,
+      ignoredParties: NonEmpty[Set[PartyId]],
+      ignoredPartyJsonPaths: Seq[String],
+  ): SQLActionBuilder = {
+    val ignoredPartiesArr: Array[String2066] =
+      ignoredParties.map(p => lengthLimited(p.toProtoPrimitive)).toArray
+
+    ignoredPartyJsonPaths.foldLeft(baseCondition) { (acc, jsonPath) =>
+      (acc ++ ignoredPartyJsonPathQueryArrayCondition(
+        ignoredPartiesArr,
+        sql"jsonb_path_query_array(acs.create_arguments, '#$jsonPath')",
+      )).toActionBuilder
+    }
+  }
+
   override private[splice] def listExpiredFromPayloadExpiry[C, TCid <: ContractId[
     T
   ], T <: Template](
       companion: C,
       unavailablePartiesStore: Option[UnavailablePartiesStore] = None,
       ignoredPartyFields: Seq[String] = Seq.empty,
+      ignoredPartyJsonPaths: Seq[String] = Seq.empty,
   )(implicit
       companionClass: ContractCompanion[C, TCid, T]
   ): ListExpiredContracts[TCid, T] = { (now, limit) => implicit traceContext =>
     for {
       ignoredParties <- UnavailablePartiesStore.listParties(unavailablePartiesStore)
-      ignoredPartiesFilter: SQLActionBuilder =
-        if (ignoredParties.isEmpty || ignoredPartyFields.isEmpty) sql""
-        else
-          ignoredPartyFields.foldLeft(sql"") { (acc, field) =>
+      ignoredPartiesFilter: SQLActionBuilder = NonEmpty.from(ignoredParties) match {
+        case None => sql""
+        case Some(ignoredParties) =>
+          val ignoredFields = ignoredPartyFields.foldLeft(sql"") { (acc, field) =>
             (acc ++ sql" and " ++ notInClause(
               s"acs.create_arguments->>'$field'",
               ignoredParties,
             )).toActionBuilder
           }
+
+          ignoredPartyJsonPathsCondition(
+            ignoredFields,
+            ignoredParties,
+            ignoredPartyJsonPaths,
+          )
+      }
       _ <- waitUntilAcsIngested()
       result <- storage
         .query( // index: acs_store_template_sid_mid_tid_ce
