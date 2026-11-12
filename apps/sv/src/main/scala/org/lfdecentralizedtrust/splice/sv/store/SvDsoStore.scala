@@ -1935,7 +1935,8 @@ final case class FeaturedAppUnderlockConfig(
 )
 
 object FeaturedAppUnderlockConfig {
-  // The Daml code documents these defaults but has no functions for them.
+  // Defaults are encoded here and based on Featured App Guidance 2.0b: https://docs.google.com/document/d/1pLDUen2wpEcfS2pdPtF8u8DNWVHtgb6GIDpgAeiuWGE/edit?tab=t.0#heading=h.22k6ymijl3pg
+  // DO NOT CHANGE THEM.
   val defaultBasicLockThreshold: BigDecimal = BigDecimal(5_000_000)
   val defaultAssetMovingLockThreshold: BigDecimal = BigDecimal(5_000_000)
   val defaultAssetLockThreshold: BigDecimal = BigDecimal(25_000_000)

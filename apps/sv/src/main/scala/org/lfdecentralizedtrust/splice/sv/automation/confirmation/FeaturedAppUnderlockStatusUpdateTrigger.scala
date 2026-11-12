@@ -58,12 +58,12 @@ class FeaturedAppUnderlockStatusUpdateTrigger(
       tc: TraceContext
   ): Future[Seq[FeaturedAppUnderlockStatus]] =
     for {
-      featureSupport <- packageVersionSupport.supportsFeaturedAppUnderlock(
+      featuredAppUnderlocking <- packageVersionSupport.supportsFeaturedAppUnderlock(
         Seq(svParty, dsoParty),
         context.clock.now.minus(context.config.clockSkewAutomationDelay.asJava),
       )
       statusChanges <-
-        if (featureSupport.supported)
+        if (featuredAppUnderlocking.supported)
           FeaturedAppUnderlockStatusUpdateTrigger.listStatusChanges(store, provider = None)
         else Future.successful(Seq.empty)
     } yield statusChanges
