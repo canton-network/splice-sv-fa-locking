@@ -67,7 +67,7 @@ template GovernanceLockSubstitution with
       view = proposal_transferInstructionViewV1 governanceLockSubstitution_operations "substitution" target.owner this
       transferInstruction_acceptImpl = proposal_transferInstructionV1_acceptImpl governanceLockSubstitution_operations this [target.owner]
       transferInstruction_rejectImpl = proposal_transferInstructionV1_rejectImpl governanceLockSubstitution_operations this [target.owner]
-      transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl governanceLockSubstitution_operations this [owner]
+      transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl governanceLockSubstitution_operations this
       transferInstruction_updateImpl _ _ = fail "Transfers representing governance lock substitutions cannot be updated"
 
     interface instance V2.TransferInstruction for GovernanceLockSubstitution where

@@ -64,7 +64,7 @@ template UnlockProposal
       transferInstruction_acceptImpl _ _ = fail "Transfers representing unlock proposals cannot be accepted through Token Standard v1"
       transferInstruction_rejectImpl _ _ = fail "Transfers representing unlock proposals cannot be rejected through Token Standard v1"
       transferInstruction_updateImpl _ _ = fail "Transfers representing unlock proposals cannot be updated"
-      transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl unlockProposal_operations this proposers
+      transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl unlockProposal_operations this
 
     interface instance V2.TransferInstruction for UnlockProposal where
       view = proposal_transferInstructionViewV2 unlockProposal_operations this

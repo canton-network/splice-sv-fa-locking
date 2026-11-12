@@ -66,7 +66,7 @@ template GovernanceLockTransfer with
       view = proposal_transferInstructionViewV1 governanceLockTransfer_operations "transfer" receiver this
       transferInstruction_acceptImpl = proposal_transferInstructionV1_acceptImpl governanceLockTransfer_operations this [receiver]
       transferInstruction_rejectImpl = proposal_transferInstructionV1_rejectImpl governanceLockTransfer_operations this [receiver]
-      transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl governanceLockTransfer_operations this [source.owner]
+      transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl governanceLockTransfer_operations this
       transferInstruction_updateImpl _ _ = fail "Transfers representing governance lock transfers cannot be updated"
 
     interface instance V2.TransferInstruction for GovernanceLockTransfer where

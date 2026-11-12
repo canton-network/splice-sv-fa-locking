@@ -323,10 +323,11 @@ proposal_withdraw ops proposalCid proposal actors extraArgs = do
   proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) False
 
 proposal_transferInstructionV1_withdrawImpl
-  :  (HasToInterface t V2.TransferInstruction, HasFromInterface t V1.TransferInstruction)
-  => ProposalOperations t r -> t -> [Party] -> ContractId V1.TransferInstruction -> V1.TransferInstruction_Withdraw
+  :  (HasToInterface t V2.TransferInstruction, HasFromInterface t V1.TransferInstruction, HasToInterface t V1.TransferInstruction)
+  => ProposalOperations t r -> t -> ContractId V1.TransferInstruction -> V1.TransferInstruction_Withdraw
   -> Update V1.TransferInstructionResult
-proposal_transferInstructionV1_withdrawImpl ops proposal actors cid V1.TransferInstruction_Withdraw{..} = do
+proposal_transferInstructionV1_withdrawImpl ops proposal cid V1.TransferInstruction_Withdraw{..} = do
+  let actors = [(view (toInterface @V1.TransferInstruction proposal)).transfer.sender]
   downcast <$> proposal_withdraw ops (fromInterfaceContractId cid) proposal actors extraArgs
 
 proposal_transferInstructionV2_withdrawImpl

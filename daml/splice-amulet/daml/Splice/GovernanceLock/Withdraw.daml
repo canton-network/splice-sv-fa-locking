@@ -68,7 +68,7 @@ template WithdrawVestedFunds
       transferInstruction_acceptImpl _ _ = fail "Transfers representing withdrawal proposals cannot be accepted through Token Standard v1"
       transferInstruction_rejectImpl _ _ = fail "Transfers representing withdrawal proposals cannot be rejected through Token Standard v1"
       transferInstruction_updateImpl _ _ = fail "Transfers representing withdrawal proposals cannot be updated"
-      transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl withdrawVestedFunds_operations this proposers
+      transferInstruction_withdrawImpl = proposal_transferInstructionV1_withdrawImpl withdrawVestedFunds_operations this
 
     interface instance V2.TransferInstruction for WithdrawVestedFunds where
       view = proposal_transferInstructionViewV2 withdrawVestedFunds_operations this
