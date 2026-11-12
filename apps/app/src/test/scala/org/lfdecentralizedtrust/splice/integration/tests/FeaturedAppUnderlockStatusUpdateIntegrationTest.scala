@@ -60,29 +60,38 @@ class FeaturedAppUnderlockStatusUpdateIntegrationTest extends IntegrationTest wi
       )
       .map(_.data)
 
-  "create a single underlock instruction for a featured app provider without locks" in {
+  "create a single underlock instruction per featured app provider without locks" in {
     implicit env =>
       val alice = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
+      val bob = onboardWalletUser(bobWalletClient, bobValidatorBackend)
 
-      actAndCheck(
-        "alice grants herself a FeaturedAppRight without locking anything",
-        eventuallySucceeds() {
-          aliceWalletClient.selfGrantFeaturedAppRight()
-        },
+      val (_, instructionsSeen) = actAndCheck(
+        "alice and bob grant themselves a FeaturedAppRight without locking anything",
+        Seq(aliceWalletClient, bobWalletClient).foreach(client =>
+          eventuallySucceeds() {
+            client.selfGrantFeaturedAppRight()
+          }
+        ),
       )(
-        "the SVs record alice as underlocked",
-        _ => {
-          // The instruction is either awaiting execution, or already executed and suspended the right
-          val instructions = instructionsFor(alice)
-          instructions.foreach(_.underlocked shouldBe true)
-          if (instructions.isEmpty)
-            featuredAppRightsFor(alice).map(_.underlockPermanentAt.isPresent) shouldBe Seq(true)
-        },
+        "the SVs record alice and bob as underlocked",
+        _ =>
+          Seq(alice, bob).map { provider =>
+            // The instruction is either awaiting execution, or already executed and suspended the right
+            val instructions = instructionsFor(provider)
+            instructions.foreach(_.underlocked shouldBe true)
+            if (instructions.isEmpty)
+              featuredAppRightsFor(provider).map(_.underlockPermanentAt.isPresent) shouldBe Seq(true)
+            provider -> instructions.size
+          },
       )
 
       clue("no duplicate instructions are created") {
         always(10.seconds, pollIntervalMs = 1000) {
-          instructionsFor(alice).size should be <= 1
+          instructionsSeen.foreach { case (provider, seen) =>
+            val instructions = instructionsFor(provider).size
+            // Once executed, the right records the underlock, so no new instruction may appear
+            if (seen == 0) instructions shouldBe 0 else instructions should be <= 1
+          }
         }
       }
   }
