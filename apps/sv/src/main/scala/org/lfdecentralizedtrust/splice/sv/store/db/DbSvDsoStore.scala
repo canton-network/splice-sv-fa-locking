@@ -2214,7 +2214,6 @@ class DbSvDsoStore private (
               ignoredParties,
             )).toActionBuilder
           else sql""
-        synchronizerId <- getDsoRules().map(_.domain)
         result <- storage.query(
           selectFromAcsTableWithState(
             DsoTables.acsTableName,
@@ -2222,7 +2221,6 @@ class DbSvDsoStore private (
             domainMigrationId,
             splice.dso.instruction.FeaturedAppUnderlockInstruction.COMPANION,
             additionalWhere = (sql"""
-              and acs.assigned_domain = $synchronizerId
               and exists (
                 select 1
                 from #${DsoTables.acsTableName} fa_right
@@ -2232,7 +2230,6 @@ class DbSvDsoStore private (
                   and fa_right.template_id_qualified_name = ${QualifiedName(
                 FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID
               )}
-                  and fa_right.assigned_domain is not null
                   and fa_right.featured_app_right_provider =
                     acs.featured_app_right_provider
               )
