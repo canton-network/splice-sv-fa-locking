@@ -37,7 +37,8 @@ class FeaturedAppUnderlockStatusUpdateIntegrationTest
             initialGovernanceLockManagementConfig = Some(
               InitialGovernanceLockManagementConfig(
                 featuredAppUnderlockEnforcementEnabled = Some(true),
-                featuredAppBasicLockThreshold = Some(NonNegativeNumeric.tryCreate(basicLockThreshold)),
+                featuredAppBasicLockThreshold =
+                  Some(NonNegativeNumeric.tryCreate(basicLockThreshold)),
               )
             )
           )
@@ -81,7 +82,10 @@ class FeaturedAppUnderlockStatusUpdateIntegrationTest
     val sv1Party = sv1Backend.getDsoInfo().svParty
     instructionsFor(provider).foreach { instruction =>
       val dsoRulesCid =
-        participant.ledger_api_extensions.acs.filterJava(DsoRules.COMPANION)(dsoParty).loneElement.id
+        participant.ledger_api_extensions.acs
+          .filterJava(DsoRules.COMPANION)(dsoParty)
+          .loneElement
+          .id
       participant.ledger_api_extensions.commands.submitJava(
         actAs = Seq(sv1Party),
         readAs = Seq(dsoParty),
