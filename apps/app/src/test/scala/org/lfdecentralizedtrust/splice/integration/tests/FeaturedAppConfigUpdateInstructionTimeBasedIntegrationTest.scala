@@ -148,6 +148,7 @@ class FeaturedAppConfigUpdateInstructionTimeBasedIntegrationTest
             java.util.Optional.empty(),
             java.util.Optional.empty(),
             java.util.Optional.empty(),
+            java.util.Optional.empty(),
           ).create,
         ),
     )(
