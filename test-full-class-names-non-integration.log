@@ -34,6 +34,7 @@ org.lfdecentralizedtrust.splice.scan.config.TokenStandardConfigTest
 org.lfdecentralizedtrust.splice.scan.rewards.AppActivityComputationTest
 org.lfdecentralizedtrust.splice.scan.rewards.RewardComputationInputsTest
 org.lfdecentralizedtrust.splice.scan.store.DbAppActivityRecordStoreTest
+org.lfdecentralizedtrust.splice.scan.store.DbExtraActivityRecordStoreTest
 org.lfdecentralizedtrust.splice.scan.store.DbScanAppRewardsStoreTest
 org.lfdecentralizedtrust.splice.scan.store.QueryAcsSnapshotPaginationTokenTest
 org.lfdecentralizedtrust.splice.scan.store.ScanEventStoreTest
