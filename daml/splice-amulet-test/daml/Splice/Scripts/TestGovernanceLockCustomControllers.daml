@@ -12,11 +12,13 @@ import DA.Assert ((===))
 import DA.Foldable (forA_)
 import DA.Map qualified as Map
 import DA.Optional (isSome)
+import DA.TextMap qualified as TM
 import DA.Time
 
 import Daml.Script
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Request (GovernanceLockRequestTag(..), missingMemoKeyMessage)
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock
@@ -174,6 +176,31 @@ testCustomControllers_unlock_unauthorized_tsv2 = testCustomControllers_unauthori
   Some proposal <- queryContractId alice proposalCid
   pure (env, lockCid, lock, proposalCid, proposal)
 
+-- | charlie, an unlock controller but not the owner, proposes an unlock as the sender of a Token Standard v1 request.
+-- The request must name the owner of the lock, as the sender is not the owner.
+testCustomControllers_unlock_nonOwnerProposer_tsv1 : Script ()
+testCustomControllers_unlock_nonOwnerProposer_tsv1 = do
+  (TestEnv{..}, lockCid, lock) <- setupCustomUnlock tsv1Operations twoOfThreeUnlockControllers
+  vestingStartTime <- (`addRelTime` hours 1) <$> getTime
+  let unlockRequest extraEntries =
+        lockRequestV1 registriesEnv.amuletV2 charlie 0.0 $
+          tsv1RequestMemo' GLRT_UnlockAndStartVesting lock.specification $
+            TM.toList (unlockMeta 20000.0 vestingStartTime).values <> extraEntries
+
+  -- without the owner of the lock
+  expectFailureContaining (missingMemoKeyMessage targetLockOwnerMetaKey) =<<
+    submitLockRequestV1 registries =<< unlockRequest []
+  checkLockUntouched alice lockCid lock
+
+  -- with the owner of the lock
+  result <- expectSuccess $
+    submitLockRequestV1 registries =<< unlockRequest [(targetLockOwnerMetaKey, partyToText alice)]
+  proposalCid <- coerceContractId @_ @UnlockProposal <$> tsv1Operations.expectPendingTransfer result
+  Some proposal <- queryContractId alice proposalCid
+  proposal.proposers === [charlie]
+  proposal.votes === Map.fromList [(charlie, True)]
+  checkLockUntouched alice lockCid lock
+
 -- Vesting withdrawal
 ---------------------
 
@@ -269,6 +296,34 @@ testCustomControllers_vestingWithdraw_unauthorized_tsv2 = testCustomControllers_
   proposalCid <- proposeCustomVestingWithdraw tsv2Operations env vestingCid vesting
   Some proposal <- queryContractId alice proposalCid
   pure (env, vestingCid, vesting, proposalCid, proposal)
+
+-- | charlie, a vesting controller but not the owner, proposes a withdrawal as the sender of a Token Standard v1 request.
+-- The request must name the owner of the vesting lock, as the sender is not the owner.
+testCustomControllers_vestingWithdraw_nonOwnerProposer_tsv1 : Script ()
+testCustomControllers_vestingWithdraw_nonOwnerProposer_tsv1 = do
+  (TestEnv{..}, vestingCid, vesting) <- setupCustomVestingWithdraw tsv1Operations
+  vestingSpec <- requireVestingLock vesting.specification
+  vestedUntilTime <- (`addRelTime` days (-1)) <$> getTime
+  let withdrawRequest extraEntries =
+        lockRequestV1 registriesEnv.amuletV2 charlie 0.0 $
+          tsv1RequestMemo' GLRT_WithdrawVestedFunds vesting.specification $
+            vestingLockMetaEntries vestingSpec.vestingPeriod vestingSpec.endTime
+              <> TM.toList (withdrawMeta vestedUntilTime).values
+              <> extraEntries
+
+  -- without the owner of the vesting lock
+  expectFailureContaining (missingMemoKeyMessage targetLockOwnerMetaKey) =<<
+    submitLockRequestV1 registries =<< withdrawRequest []
+  checkLockUntouched alice vestingCid vesting
+
+  -- with the owner of the vesting lock
+  result <- expectSuccess $
+    submitLockRequestV1 registries =<< withdrawRequest [(targetLockOwnerMetaKey, partyToText alice)]
+  proposalCid <- coerceContractId @_ @WithdrawVestedFunds <$> tsv1Operations.expectPendingTransfer result
+  Some proposal <- queryContractId alice proposalCid
+  proposal.proposers === [charlie]
+  proposal.votes === Map.fromList [(charlie, True)]
+  checkLockUntouched alice vestingCid vesting
 
 -- Transfer and substitution fixtures
 -------------------------------------

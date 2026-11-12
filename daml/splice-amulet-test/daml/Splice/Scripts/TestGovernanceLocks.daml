@@ -539,7 +539,7 @@ tsv1Operations = GovernanceLockOperations with
       unlockAndExtractResult env.registry.instrumentId.admin cid extractPendingGovernanceLock do
         Some lock <- queryContractId env.registry.instrumentId.admin cid
         request <- lockRequestV1 env.registry lock.owner 0.0
-          (tsv1RequestMemo' GLRT_UnlockAndStartVesting lock.specification (TM.toList meta.values))
+          (tsv1RequestMemo' GLRT_UnlockAndStartVesting lock.specification (TM.toList meta.values <> [(targetLockOwnerMetaKey, partyToText lock.owner)]))
         submitLockRequestV1' env.registries actor request
     optGovernanceUnlock env cid actor meta = fmap fst3 <$> optGovernanceUnlock' env cid actor meta
     governanceUnlock env cid actor meta = ((<$>) fromSome) <$> optGovernanceUnlock env cid actor meta
@@ -549,7 +549,7 @@ tsv1Operations = GovernanceLockOperations with
       times <- requireVestingLock lock.specification
       request <- lockRequestV1 env.registriesEnv.amuletV2 lock.owner 0.0
         (tsv1RequestMemo' GLRT_WithdrawVestedFunds lock.specification
-          (vestingLockMetaEntries times.vestingPeriod times.endTime <> TM.toList meta.values))
+          (vestingLockMetaEntries times.vestingPeriod times.endTime <> TM.toList meta.values <> [(targetLockOwnerMetaKey, partyToText lock.owner)]))
       fmap extractPendingGovernanceLock <$> submitLockRequestV1' env.registries actor request
 
     proposeSubstitution env proposer args@LockSubstitutionArgs{..} = do
@@ -611,7 +611,7 @@ tsv2Operations = GovernanceLockOperations with
       unlockAndExtractResult env.registry.instrumentId.admin cid extractPendingGovernanceLock do
         Some lock <- queryContractId env.registry.instrumentId.admin cid
         request <- lockRequestV2 env.registry lock.owner 0.0
-          (tsv1RequestMemo' GLRT_UnlockAndStartVesting lock.specification (TM.toList meta.values))
+          (tsv1RequestMemo' GLRT_UnlockAndStartVesting lock.specification (TM.toList meta.values <> [(targetLockOwnerMetaKey, partyToText lock.owner)]))
         submitLockRequestV2' env.registries actor request
 
     optGovernanceUnlock env cid actor meta = fmap fst3 <$> optGovernanceUnlock' env cid actor meta
@@ -622,7 +622,7 @@ tsv2Operations = GovernanceLockOperations with
       times <- requireVestingLock lock.specification
       request <- lockRequestV2 env.registriesEnv.amuletV2 lock.owner 0.0
         (tsv1RequestMemo' GLRT_WithdrawVestedFunds lock.specification
-          (vestingLockMetaEntries times.vestingPeriod times.endTime <> TM.toList meta.values))
+          (vestingLockMetaEntries times.vestingPeriod times.endTime <> TM.toList meta.values <> [(targetLockOwnerMetaKey, partyToText lock.owner)]))
       fmap extractPendingGovernanceLock <$> submitLockRequestV2' env.registries actor request
 
     proposeSubstitution env proposer args@LockSubstitutionArgs{..} = do
