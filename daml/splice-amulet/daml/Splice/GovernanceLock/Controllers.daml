@@ -69,7 +69,7 @@ allControllers spec = Set.fromList $ concat spec.controllers
 
 controllersPendingVote : Map.Map Party a -> ControllersSpecification -> ControllersSpecification
 controllersPendingVote votes controllers =
-  ControllersSpecification $ filter (not . null) $ fmap (filter (\p -> not $ Map.member p votes)) controllers.controllers
+  makeControllersSpecification $ filter (not . null) $ fmap (filter (\p -> not $ Map.member p votes)) controllers.controllers
 
 proposersPendingWithdrawal : Map.Map Party Bool -> [Party] -> [[Party]]
 proposersPendingWithdrawal votes = fmap (\p -> [p]) . filter (\p -> Map.lookup p votes /= Some False)
