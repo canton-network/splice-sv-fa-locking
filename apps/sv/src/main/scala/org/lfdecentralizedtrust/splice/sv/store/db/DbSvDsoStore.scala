@@ -2288,8 +2288,7 @@ class DbSvDsoStore private (
                 and package_name = ${FeaturedAppRight.PACKAGE_NAME}
                 and template_id_qualified_name = ${QualifiedName(
               FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID
-            )}
-                and assigned_domain is not null""" ++ providerFilter ++ sql"""
+            )}""" ++ providerFilter ++ sql"""
               group by featured_app_right_provider
             ),
             statuses as (
