@@ -191,16 +191,26 @@ governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs {..} = 
 
 governanceLock_executeSubstitution : ProposalExecuteArgs GovernanceLockSubstitution -> Update GovernanceLock_SubstitutionResult_Completed
 governanceLock_executeSubstitution ProposalExecuteArgs{..} = do
-  let FetchAndMergeLocksResult{lockCid} = merged
+  let GovernanceLock_DsoMergeResult{lockCid} = merged
       GovernanceLockSubstitution{..} = proposal
-  let forOwner = ForOwner with dso = target.dso; owner = target.owner
+  -- The target lock owner may not be a controller of the substitution, so act on the target lock
+  -- through choices that provide the authority of its owner
   (newLockedAmulet, remainingLockCid, unlockedAmulet) <- case lockedAmulet of
     Some proposalLockedAmulet -> do
-      substituteResult <- governanceLock_dsoSubstituteImpl forOwner lockCid amount reason context state
+      substituteResult <- exercise lockCid GovernanceLock_DsoSubstitute with
+        substitutedAmount = amount
+        reason
+        context
+        state
       pure (proposalLockedAmulet, substituteResult.remainingLockCid, Some substituteResult.unlockedAmulet)
     None -> do
       -- The proposer is the owner of the target lock, so the target lock funds the new lock
-      splitResult <- governanceLock_dsoSplitForSubstitutionImpl forOwner lockCid amount target.specification reason context state
+      splitResult <- exercise lockCid GovernanceLock_DsoSplitForSubstitution with
+        splitAmount = amount
+        newSpecification = target.specification
+        reason
+        context
+        state
       pure (splitResult.splitAmulet, splitResult.remainingLockCid, None)
   newLockCid <- create GovernanceLock with
     dso = target.dso

@@ -14,24 +14,20 @@ module Splice.GovernanceLock.Withdraw (
   calculateUnvestedAmount,
 ) where
 
-import Prelude hiding (forA)
 import DA.Assert (assertDeadlineExceeded)
 import DA.List qualified as List
 import DA.Map qualified as Map
 import DA.Optional
 import DA.Set qualified as Set
 import DA.Time
-import DA.Traversable (forA)
 
 import Splice.Amulet
 import Splice.AmuletConfig (getTokenStandardMaxTTL)
 import Splice.AmuletRules
-import Splice.Api.Token.HoldingV1 (Holding)
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.ExternalPartyConfigState
-import Splice.Fees (relTimeToSeconds)
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Proposal
@@ -110,16 +106,10 @@ withdrawVestedFundsControllers WithdrawVestedFundsSpecification{target} =
 withdrawVestedFundsMetadata : GovernanceLockSpecification -> Metadata
 withdrawVestedFundsMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-withdraw-vested-funds"
 
-data VestingLock_WithdrawResult_Completed = VestingLock_WithdrawResult_Completed with
-  vestingLock : Optional (ContractId GovernanceLock)
-    -- ^ Contract ID of the continuing vesting lock with remaining funds.
-  vested : ContractId Holding
-    -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
+type VestingLock_WithdrawResult = ProposalUpdateResult WithdrawVestedFunds GovernanceLock_DsoWithdrawResult
 
-type VestingLock_WithdrawResult = ProposalUpdateResult WithdrawVestedFunds VestingLock_WithdrawResult_Completed
-
-vestingLock_withdrawResult_completed_transferInstructionResult : VestingLock_WithdrawResult_Completed -> V2.TransferInstructionResult
-vestingLock_withdrawResult_completed_transferInstructionResult VestingLock_WithdrawResult_Completed{..} =
+vestingLock_withdrawResult_completed_transferInstructionResult : GovernanceLock_DsoWithdrawResult -> V2.TransferInstructionResult
+vestingLock_withdrawResult_completed_transferInstructionResult GovernanceLock_DsoWithdrawResult{..} =
   V2.TransferInstructionResult with
     output = case vestingLock of
       Some v -> V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId v
@@ -127,15 +117,8 @@ vestingLock_withdrawResult_completed_transferInstructionResult VestingLock_Withd
     senderChangeCids = [upcast vested]
     meta = emptyMetadata
 
--- | Uses `None` to represent that no amount remains.
-calculateUnvestedAmount : Time -> Decimal -> VestingLockSpecification -> Optional Decimal
-calculateUnvestedAmount currentTime vestingAmount VestingLockSpecification{..}
-    | currentTime <= (endTime `addRelTime` (- vestingPeriod)) = Some vestingAmount
-    | currentTime >= endTime = None
-    | otherwise = Some $ (vestingAmount * relTimeToSeconds (endTime `subTime` currentTime)) / relTimeToSeconds vestingPeriod
-
 data VestingLockProposeWithdrawArgs = VestingLockProposeWithdrawArgs with
-  merged : FetchAndMergeLocksResult
+  merged : GovernanceLock_DsoMergeResult
   vestedUntilTime : Time
   actors : [Party]
   context : ExternalPartyTransferContext
@@ -174,35 +157,14 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
     reason
     getContext = pure (context, state)
 
-vestingLock_executeWithdraw : ProposalExecuteArgs WithdrawVestedFunds -> Update VestingLock_WithdrawResult_Completed
-vestingLock_executeWithdraw ProposalExecuteArgs{..} = do
-  let FetchAndMergeLocksResult{lockCid, lock} = merged
-  potentiallyUnsafeArchive lockCid -- safe as the lock was checked when fetched/merged
+-- | Withdraws the funds of a vesting lock that vested until `vestedUntilTime`.
+vestingLock_executeWithdraw : ProposalExecuteArgs WithdrawVestedFunds -> Update GovernanceLock_DsoWithdrawResult
+vestingLock_executeWithdraw ProposalExecuteArgs{..} = exercise merged.lockCid GovernanceLock_DsoWithdraw with
+  vestedUntilTime = proposal.specification.vestedUntilTime
+  reason
+  context
 
-  vestingSpec <- requireVestingLock lock.specification
-  let GovernanceLock{dso, owner, amount, lockedAmulet, originalLockCid} = lock
-      unvestedAmount = calculateUnvestedAmount proposal.specification.vestedUntilTime amount vestingSpec
-
-  case unvestedAmount of
-    None -> do -- No split or partial availability, and the holding is already available, so just make a final report and archive.
-      pure VestingLock_WithdrawResult_Completed with
-        vestingLock = None
-        vested = toInterfaceContractId lockedAmulet
-    Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
-      let withdrawAmount = amount - stillLockedAmount
-      require' ("withdraw amount", withdrawAmount) isGreaterR ("zero", 0.0)
-      (lockedOpt, unlocked) <- partialUnlock (ForOwner with dso; owner) lockedAmulet withdrawAmount context reason
-      vestingLock <- forA lockedOpt (\(lockedAmulet, vestingAmount) -> create lock with
-        lockedAmulet
-        specification = GLS_VestingLock vestingSpec with
-          vestingPeriod = vestingSpec.endTime `subTime` proposal.specification.vestedUntilTime
-        amount = vestingAmount
-        originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid)
-      pure VestingLock_WithdrawResult_Completed with
-        vestingLock
-        vested = toInterfaceContractId unlocked
-
-withdrawVestedFunds_operations : ProposalOperations WithdrawVestedFunds VestingLock_WithdrawResult_Completed
+withdrawVestedFunds_operations : ProposalOperations WithdrawVestedFunds GovernanceLock_DsoWithdrawResult
 withdrawVestedFunds_operations = ProposalOperations with
   makeView = withdrawVestedFunds_proposalView
   recreate = \votes originalProposalCid proposal ->

@@ -171,7 +171,7 @@ type ProposalUpdateResult t r = Either (ContractId t, t) r
 
 -- | Arguments required for proposal execution.
 data ProposalExecuteArgs t = ProposalExecuteArgs with
-  merged : FetchAndMergeLocksResult
+  merged : GovernanceLock_DsoMergeResult
   proposalCid : Optional (ContractId t)
   proposal : t
   context : ExternalPartyTransferContext

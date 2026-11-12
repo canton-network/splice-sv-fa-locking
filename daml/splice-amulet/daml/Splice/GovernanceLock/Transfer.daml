@@ -195,8 +195,12 @@ governanceLock_proposeTransfer GovernanceLockProposeTransferArgs{..} = do
 governanceLock_executeTransfer : ProposalExecuteArgs GovernanceLockTransfer -> Update GovernanceLock_TransferResult_Completed
 governanceLock_executeTransfer ProposalExecuteArgs{..} = do
   let GovernanceLockTransfer{..} = proposal
-  let lock = merged.lock
-  result <- governanceLock_dsoTransferImpl merged amount reason context state
+      lock = merged.lock
+  result <- exercise merged.lockCid GovernanceLock_DsoTransfer with
+    transferredAmount = amount
+    reason
+    context
+    state
   -- Lock the unlocked funds of the sender again, now for the receiver.
   -- This needs the authority of the receiver.
   ([newLockedAmulet], None) <- lockAmuletFor

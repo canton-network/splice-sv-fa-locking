@@ -13,18 +13,13 @@ module Splice.GovernanceLock.Unlock (
   unlockProposal_operations,
 ) where
 
-import Prelude hiding (forA)
-import DA.Action (unless)
 import DA.Assert (assertDeadlineExceeded)
-import DA.Functor (($>))
 import DA.List qualified as List
 import DA.Map qualified as Map
 import DA.Optional
 import DA.Set qualified as Set
 import DA.Time
-import DA.Traversable (forA)
 
-import Splice.Amulet
 import Splice.AmuletConfig (getTokenStandardMaxTTL)
 import Splice.AmuletRules
 import Splice.Api.Token.MetadataV1
@@ -34,7 +29,6 @@ import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Proposal
-import Splice.TokenStandard.Utils
 import Splice.Types
 import Splice.Util
 
@@ -106,15 +100,10 @@ unlockProposalControllers UnlockProposalSpecification{target} =
 unlockProposalMetadata : GovernanceLockSpecification -> Metadata
 unlockProposalMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-unlock-lock"
 
-data GovernanceLock_UnlockResult_Completed = GovernanceLock_UnlockResult_Completed with
-  vestingLock : Optional (ContractId GovernanceLock)
-  governanceLock : Optional (ContractId GovernanceLock)
-  unlockedAmulet : Optional (ContractId Amulet)
+type GovernanceLock_UnlockResult = ProposalUpdateResult UnlockProposal GovernanceLock_DsoUnlockResult
 
-type GovernanceLock_UnlockResult = ProposalUpdateResult UnlockProposal GovernanceLock_UnlockResult_Completed
-
-governanceLock_unlockResult_completed_transferInstructionResult : GovernanceLock_UnlockResult_Completed -> V2.TransferInstructionResult
-governanceLock_unlockResult_completed_transferInstructionResult GovernanceLock_UnlockResult_Completed{..} =
+governanceLock_unlockResult_completed_transferInstructionResult : GovernanceLock_DsoUnlockResult -> V2.TransferInstructionResult
+governanceLock_unlockResult_completed_transferInstructionResult GovernanceLock_DsoUnlockResult{..} =
   V2.TransferInstructionResult with
     output = case vestingLock of
       Some v -> V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId v
@@ -123,7 +112,7 @@ governanceLock_unlockResult_completed_transferInstructionResult GovernanceLock_U
     meta = emptyMetadata
 
 data GovernanceLockProposeUnlockArgs = GovernanceLockProposeUnlockArgs with
-  merged : FetchAndMergeLocksResult
+  merged : GovernanceLock_DsoMergeResult
   unlockAmount : Decimal
   optVestingStartTime : Optional Time
   actors : [Party]
@@ -171,58 +160,15 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
     getContext = pure (context, state)
 
 -- | Unlocks `unlockAmount` of a governance lock.
-governanceLock_executeUnlock : ProposalExecuteArgs UnlockProposal -> Update GovernanceLock_UnlockResult_Completed
-governanceLock_executeUnlock ProposalExecuteArgs{..} = do
-  let FetchAndMergeLocksResult{lockCid, lock} = merged
-      unlockAmount = proposal.specification.amount
-  potentiallyUnsafeArchive lockCid -- safe as the lock was checked when fetched/merged
+governanceLock_executeUnlock : ProposalExecuteArgs UnlockProposal -> Update GovernanceLock_DsoUnlockResult
+governanceLock_executeUnlock ProposalExecuteArgs{..} = exercise merged.lockCid GovernanceLock_DsoUnlock with
+  unlockAmount = proposal.specification.amount
+  vestingStartTime = proposal.specification.vestingStartTime
+  reason
+  context
+  state
 
-  require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", lock.amount)
-  let isFullUnlock = unlockAmount == lock.amount
-  require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
-  unless isFullUnlock $ do
-    requireMinimumLock state unlockAmount
-    requireMinimumLock state (lock.amount - unlockAmount)
-
-  fullSpec <- requireFullLock lock.specification
-  let GovernanceLock{dso, owner, lockedAmulet, originalLockCid} = lock
-
-  let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
-  let hasNoVestingPeriod = vestingPeriod == days 0
-  let endTime = proposal.specification.vestingStartTime `addRelTime` vestingPeriod
-  let specification = GLS_VestingLock VestingLockSpecification with
-        kind = fullSpec.kind
-        vestingPeriod
-        endTime
-        vestingControllers = fullSpec.vestingControllers
-  let forOwner = ForOwner with dso; owner
-
-  (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if hasNoVestingPeriod
-    then do
-      (optStillLocked, unlockedAmulet) <- partialUnlock forOwner lockedAmulet unlockAmount context reason
-      pure (None, optStillLocked, Some unlockedAmulet)
-    else do
-      (optStillLocked, vestingLockedAmulet) <- splitLockedAmulet forOwner lockedAmulet (unlockAmount, endTime) context reason
-      pure (Some vestingLockedAmulet, optStillLocked, None)
-
-  governanceLock <- forA optStillLocked (\(lockedAmulet, stillLockedAmount) -> create
-    lock with
-      lockedAmulet
-      amount = stillLockedAmount
-      originalLockCid = Some $ fromOptional (toAnyContractId lockCid) originalLockCid)
-
-  vestingLock <- forA optVestingLockedAmulet (\(lockedAmulet, amount) -> create GovernanceLock with
-    dso
-    owner
-    lockedAmulet
-    amount
-    specification
-    originalLockCid = guard isFullUnlock $> fromOptional (toAnyContractId lockCid) originalLockCid
-    requestedAt = endTime `addRelTime` (- vestingPeriod))
-
-  pure GovernanceLock_UnlockResult_Completed with vestingLock; governanceLock; unlockedAmulet
-
-unlockProposal_operations : ProposalOperations UnlockProposal GovernanceLock_UnlockResult_Completed
+unlockProposal_operations : ProposalOperations UnlockProposal GovernanceLock_DsoUnlockResult
 unlockProposal_operations = ProposalOperations with
   makeView = unlockProposal_proposalView
   recreate = \votes originalProposalCid proposal ->
