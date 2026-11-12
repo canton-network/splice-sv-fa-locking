@@ -94,7 +94,7 @@ withdrawVestedFunds_proposalView WithdrawVestedFunds{..} = ProposalView with
   votes
   amount = case requireVestingLock @(Either Text) specification.target.specification of
     Left _ -> 0.0
-    Right v -> fromOptional 0.0 $ calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount v
+    Right v -> specification.lockedAmount - fromOptional 0.0 (calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount v)
   lockedAmulet = Some lockedAmulet
   requestedAt
   expiresAt
