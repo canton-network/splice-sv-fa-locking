@@ -3081,7 +3081,7 @@ class DbSvDsoStoreTest
         _ <- MonadUtil.sequentialTraverse(locks)(dummyDomain.create(_)(store.multiDomainAcsStore))
       } yield store
 
-    "compare the sum of full locks with the threshold of the app kind" in {
+    "report providers whose summed locks are below their app kind's threshold" in {
       val basicUnder = userParty(1)
       val basicAt = userParty(2)
       val defaultKindUnder = userParty(3)
@@ -3224,7 +3224,7 @@ class DbSvDsoStoreTest
       }
     }
 
-    "use the threshold of the highest app kind among duplicate rights" in {
+    "use the threshold of the highest app kind, not the highest threshold, for a provider with several rights" in {
       // The asset mover threshold is below the basic one, so the threshold of the highest
       // app kind differs from the highest threshold
       val config = enforced.copy(basicLockThreshold = BigDecimal(300))
