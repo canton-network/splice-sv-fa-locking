@@ -58,7 +58,13 @@ import org.lfdecentralizedtrust.splice.store.{
   MultiDomainAcsStore,
   UnavailablePartiesStore,
 }
-import org.lfdecentralizedtrust.splice.sv.store.{AppRewardCouponsSum, SvDsoStore, SvStore}
+import org.lfdecentralizedtrust.splice.sv.store.{
+  AppRewardCouponsSum,
+  FeaturedAppUnderlockConfig,
+  FeaturedAppUnderlockStatus,
+  SvDsoStore,
+  SvStore,
+}
 import SvDsoStore.RoundBatch
 import com.digitalasset.canton.config.CantonRequireTypes.String2066
 import org.lfdecentralizedtrust.splice.util.*
@@ -2242,6 +2248,83 @@ class DbSvDsoStore private (
           splice.dso.instruction.FeaturedAppUnderlockInstruction.COMPANION
         )(_)
       )
+    }
+
+  override def listFeaturedAppUnderlockStatusChanges(
+      config: FeaturedAppUnderlockConfig,
+      provider: Option[PartyId],
+      limit: Limit,
+  )(implicit tc: TraceContext): Future[Seq[FeaturedAppUnderlockStatus]] =
+    waitUntilAcsIngested {
+      val providerFilter =
+        provider.fold(sql"")(p => sql" and featured_app_right_provider = $p")
+      // The lateral join looks up each provider's locks through the index on
+      // (store_id, migration_id, governance_lock_type, governance_lock_subject).
+      // Providers with an instruction awaiting execution are skipped, as executing it
+      // updates the right. Expired instructions count too, as they can still be executed.
+      // Duplicate rights get the threshold of their highest app kind, as in
+      // DsoRules_MergeFeaturedAppRights; 0, 1, 2 follow FeaturedAppKind's Ord instance.
+      for {
+        rows <- storage.query(
+          (sql"""
+            with rights as (
+              select featured_app_right_provider as provider,
+                     bool_or(create_arguments->>'underlockPermanentAt' is not null) as recorded_underlocked,
+                     case max(case create_arguments->>'appKind'
+                                when 'FAK_Asset' then 2
+                                when 'FAK_AssetMoving' then 1
+                                else 0
+                              end)
+                       when 2 then ${config.assetLockThreshold}
+                       when 1 then ${config.assetMovingLockThreshold}
+                       else ${config.basicLockThreshold}
+                     end as lock_threshold
+              from #${DsoTables.acsTableName}
+              where store_id = $acsStoreId
+                and migration_id = $domainMigrationId
+                and package_name = ${FeaturedAppRight.PACKAGE_NAME}
+                and template_id_qualified_name = ${QualifiedName(
+              FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID
+            )}""" ++ providerFilter ++ sql"""
+              group by featured_app_right_provider
+            ),
+            statuses as (
+              select rights.provider,
+                     rights.recorded_underlocked,
+                     (${config.enforcementEnabled}
+                       and coalesce(locks.locked_amount, 0) < rights.lock_threshold) as underlocked
+              from rights
+              left join lateral (
+                select sum((gl.create_arguments->>'amount')::numeric) as locked_amount
+                from #${DsoTables.acsTableName} gl
+                where gl.store_id = $acsStoreId
+                  and gl.migration_id = $domainMigrationId
+                  and gl.governance_lock_type = ${GovernanceLockUtil.StoreTypeAndKind.fullFeaturedApp.storeValue}
+                  and gl.governance_lock_subject = rights.provider
+              ) locks on true
+            )
+            select provider, underlocked
+            from statuses
+            where underlocked <> recorded_underlocked
+              and not exists (
+                select 1
+                from #${DsoTables.acsTableName} instr
+                where instr.store_id = $acsStoreId
+                  and instr.migration_id = $domainMigrationId
+                  and instr.package_name = ${splice.dso.instruction.FeaturedAppUnderlockInstruction.PACKAGE_NAME}
+                  and instr.template_id_qualified_name = ${QualifiedName(
+              splice.dso.instruction.FeaturedAppUnderlockInstruction.TEMPLATE_ID_WITH_PACKAGE_ID
+            )}
+                  and instr.featured_app_right_provider = statuses.provider
+              )
+            order by provider
+            limit ${sqlLimit(limit)}
+          """).toActionBuilder.as[(PartyId, Boolean)],
+          "listFeaturedAppUnderlockStatusChanges",
+        )
+      } yield applyLimit("listFeaturedAppUnderlockStatusChanges", limit, rows).map {
+        case (provider, underlocked) => FeaturedAppUnderlockStatus(provider, underlocked)
+      }
     }
 
   override def lookupAnsEntryContext(reference: SubscriptionRequest.ContractId)(implicit

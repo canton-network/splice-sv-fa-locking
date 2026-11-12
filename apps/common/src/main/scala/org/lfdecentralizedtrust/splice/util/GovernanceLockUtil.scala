@@ -74,6 +74,7 @@ object GovernanceLockUtil {
   }
   object StoreTypeAndKind {
     val provisionalFeaturedApp = StoreTypeAndKind(StoreType.Full, StoreKind.ProvisionalFeaturedApp)
+    val fullFeaturedApp = StoreTypeAndKind(StoreType.Full, StoreKind.FeaturedApp)
   }
 
   /** Encodes a lock as the `governance_lock_type` and `governance_lock_subject` index columns. */

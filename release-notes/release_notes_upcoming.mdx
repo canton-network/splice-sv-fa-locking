@@ -66,6 +66,12 @@
 
     - Support changing the `governanceLockManagementConfig` fields in `DsoRules` config vote requests.
 
+    - SV app automation now detects featured app providers whose full featured app locks are below the
+      lock threshold of their app kind, and votes to suspend their featured app right, or to lift the
+      suspension once they lock enough. It only acts while `featuredAppUnderlockEnforcementEnabled` is set in
+      the `governanceLockManagementConfig` of the `DsoRules` config, and checks every minute by default
+      (`featured-app-underlock-status-update-interval`).
+
   - Helm charts and Docker images
 
     - Removed the remaining CometBFT support including the cometbft helm
@@ -136,7 +142,7 @@
 
       - Add the optional `governanceLockManagementConfig` field to `DsoRulesConfig` with these fields:
 
-        - `featuredAppUnderlockEnforcementEnabled` (default true)
+        - `featuredAppUnderlockEnforcementEnabled` (default false)
         - `featuredAppBasicLockThreshold` (default 5M CC)
         - `featuredAppAssetMovingLockThreshold` (default 5M CC)
         - `featuredAppAssetLockThreshold` (default 25M CC)

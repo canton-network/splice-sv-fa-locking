@@ -67,7 +67,12 @@ import org.lfdecentralizedtrust.splice.store.{
 }
 import org.lfdecentralizedtrust.splice.sv.store.SvDsoStore.{IdleAnsSubscription, RoundBatch}
 import org.lfdecentralizedtrust.splice.sv.store.db.DbSvDsoStore
-import org.lfdecentralizedtrust.splice.sv.store.{SvDsoStore, SvStore}
+import org.lfdecentralizedtrust.splice.sv.store.{
+  FeaturedAppUnderlockConfig,
+  FeaturedAppUnderlockStatus,
+  SvDsoStore,
+  SvStore,
+}
 import org.lfdecentralizedtrust.splice.sv.util.{FeaturedAppRightValidator, SvUtil}
 import org.lfdecentralizedtrust.splice.util.{
   AssignedContract,
@@ -3305,6 +3310,369 @@ class DbSvDsoStoreTest
 
   }
 
+  "listFeaturedAppUnderlockInstructionsWithFeaturedAppRight" should {
+
+    def listCids(
+        store: SvDsoStore,
+        ignored: Option[Set[PartyId]] = None,
+    ) = store
+      .listFeaturedAppUnderlockInstructionsWithFeaturedAppRight(
+        ignored.map(new InMemoryUnavailablePartiesStore(_)),
+        PageLimit.tryCreate(100),
+      )(traceContext)
+      .map(_.map(_.contract.contractId))
+
+    "return only instructions whose provider has a live FeaturedAppRight" in {
+      val featuredProvider = userParty(1)
+      val underlocked =
+        featuredAppUnderlockInstruction(featuredProvider, underlocked = true)
+      // An instruction reporting a recovery is listed just like one
+      // reporting an underlock.
+      val recovered =
+        featuredAppUnderlockInstruction(featuredProvider, underlocked = false)
+      // An expired instruction is still listed: executing it is allowed.
+      val expired = featuredAppUnderlockInstruction(
+        featuredProvider,
+        expiresAt = time(0).toInstant,
+      )
+      // No FeaturedAppRight is created for this provider, so its
+      // instruction cannot be executed and must not be listed.
+      val unfeaturedInstruction = featuredAppUnderlockInstruction(userParty(2))
+      // The 'dso' party differs from mkStore()'s, so this is never ingested.
+      val otherDsoInstruction =
+        featuredAppUnderlockInstruction(featuredProvider, dso = userParty(4))
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(featuredProvider))(
+          store.multiDomainAcsStore
+        )
+        _ <- MonadUtil.sequentialTraverse(
+          Seq(
+            underlocked,
+            recovered,
+            expired,
+            unfeaturedInstruction,
+            otherDsoInstruction,
+          )
+        )(dummyDomain.create(_)(store.multiDomainAcsStore))
+        result <- listCids(store)
+      } yield {
+        result should contain theSameElementsAs Seq(
+          underlocked.contractId,
+          recovered.contractId,
+          expired.contractId,
+        )
+      }
+    }
+
+    "not return duplicate rows when a provider has more than one live FeaturedAppRight" in {
+      val provider = userParty(1)
+      val instruction = featuredAppUnderlockInstruction(provider)
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(instruction)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(provider))(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(provider))(store.multiDomainAcsStore)
+        result <- listCids(store)
+      } yield {
+        result should contain theSameElementsAs Seq(instruction.contractId)
+      }
+    }
+
+    "respects ignored parties" in {
+      val providerA = userParty(1)
+      val providerB = userParty(2)
+      val instructionA = featuredAppUnderlockInstruction(providerA)
+      val instructionB = featuredAppUnderlockInstruction(providerB)
+
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(instructionA)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(instructionB)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(providerA))(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(providerB))(store.multiDomainAcsStore)
+        result <- listCids(store)
+        resultNoneIgnored <- listCids(store, Some(Set.empty))
+        resultNoProviderA <- listCids(store, Some(Set(providerA)))
+        resultNoProviders <- listCids(store, Some(Set(providerA, providerB)))
+      } yield {
+        val all = Seq(instructionA.contractId, instructionB.contractId)
+        result should contain theSameElementsAs all
+        resultNoneIgnored should contain theSameElementsAs all
+        resultNoProviderA should contain theSameElementsAs Seq(instructionB.contractId)
+        resultNoProviders shouldBe empty
+      }
+    }
+  }
+
+  "listFeaturedAppUnderlockStatusChanges" should {
+
+    // Different thresholds per kind so the tests show which one applies
+    val enforced = FeaturedAppUnderlockConfig(
+      enforcementEnabled = true,
+      basicLockThreshold = BigDecimal(100),
+      assetMovingLockThreshold = BigDecimal(200),
+      assetLockThreshold = BigDecimal(500),
+    )
+    val suspendedAt = Some(time(1).toInstant)
+
+    def faLock(provider: PartyId, amount: BigDecimal, vesting: Boolean = false) =
+      governanceLock(
+        userParty(100),
+        amount = amount,
+        kind = new splice.governancelock.governancelockkind.GLK_FeaturedApp(
+          provider.toProtoPrimitive
+        ),
+        vestingEndTime = Option.when(vesting)(time(1).toInstant),
+      )
+
+    def mkStoreWith(
+        rights: Seq[
+          Contract[splice.amulet.FeaturedAppRight.ContractId, splice.amulet.FeaturedAppRight]
+        ],
+        locks: Seq[
+          Contract[
+            splice.governancelock.GovernanceLock.ContractId,
+            splice.governancelock.GovernanceLock,
+          ]
+        ] = Seq.empty,
+    ) =
+      for {
+        store <- mkStore()
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+        _ <- MonadUtil.sequentialTraverse(rights)(dummyDomain.create(_)(store.multiDomainAcsStore))
+        _ <- MonadUtil.sequentialTraverse(locks)(dummyDomain.create(_)(store.multiDomainAcsStore))
+      } yield store
+
+    "report providers whose summed locks are below their app kind's threshold" in {
+      val basicUnder = userParty(1)
+      val basicAt = userParty(2)
+      val defaultKindUnder = userParty(3)
+      val assetMovingUnder = userParty(4)
+      val assetUnder = userParty(5)
+      val assetOver = userParty(6)
+      for {
+        store <- mkStoreWith(
+          rights = Seq(
+            featuredAppRight(basicUnder, appKind = Some(splice.amulet.FeaturedAppKind.FAK_BASIC)),
+            featuredAppRight(basicAt, appKind = Some(splice.amulet.FeaturedAppKind.FAK_BASIC)),
+            featuredAppRight(defaultKindUnder),
+            featuredAppRight(
+              assetMovingUnder,
+              appKind = Some(splice.amulet.FeaturedAppKind.FAK_ASSETMOVING),
+            ),
+            featuredAppRight(assetUnder, appKind = Some(splice.amulet.FeaturedAppKind.FAK_ASSET)),
+            featuredAppRight(assetOver, appKind = Some(splice.amulet.FeaturedAppKind.FAK_ASSET)),
+          ),
+          locks = Seq(
+            // Locks of one provider are summed
+            faLock(basicUnder, BigDecimal(50)),
+            faLock(basicUnder, BigDecimal(49.5)),
+            faLock(basicAt, BigDecimal(60)),
+            faLock(basicAt, BigDecimal(40)),
+            faLock(defaultKindUnder, BigDecimal(99)),
+            // Enough for a basic app, but not for an asset mover
+            faLock(assetMovingUnder, BigDecimal(150)),
+            faLock(assetUnder, BigDecimal(499)),
+            faLock(assetOver, BigDecimal(600)),
+          ),
+        )
+        result <- store.listFeaturedAppUnderlockStatusChanges(enforced)
+      } yield {
+        result should contain theSameElementsAs Seq(
+          FeaturedAppUnderlockStatus(basicUnder, underlocked = true),
+          FeaturedAppUnderlockStatus(defaultKindUnder, underlocked = true),
+          FeaturedAppUnderlockStatus(assetMovingUnder, underlocked = true),
+          FeaturedAppUnderlockStatus(assetUnder, underlocked = true),
+        )
+      }
+    }
+
+    "treat a provider without locks as underlocked" in {
+      val provider = userParty(1)
+      for {
+        store <- mkStoreWith(rights = Seq(featuredAppRight(provider)))
+        result <- store.listFeaturedAppUnderlockStatusChanges(enforced)
+      } yield {
+        result shouldBe Seq(FeaturedAppUnderlockStatus(provider, underlocked = true))
+      }
+    }
+
+    "only count full featured app locks" in {
+      val provider = userParty(1)
+      for {
+        store <- mkStoreWith(
+          rights = Seq(featuredAppRight(provider)),
+          locks = Seq(
+            faLock(provider, BigDecimal(60)),
+            faLock(provider, BigDecimal(1000), vesting = true),
+            governanceLock(
+              userParty(100),
+              amount = BigDecimal(1000),
+              kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+                provider.toProtoPrimitive
+              ),
+            ),
+          ),
+        )
+        result <- store.listFeaturedAppUnderlockStatusChanges(enforced)
+      } yield {
+        result shouldBe Seq(FeaturedAppUnderlockStatus(provider, underlocked = true))
+      }
+    }
+
+    "report a suspended right whose provider is no longer underlocked" in {
+      val recovered = userParty(1)
+      val stillUnderlocked = userParty(2)
+      for {
+        store <- mkStoreWith(
+          rights = Seq(
+            featuredAppRight(recovered, underlockPermanentAt = suspendedAt),
+            featuredAppRight(stillUnderlocked, underlockPermanentAt = suspendedAt),
+          ),
+          locks = Seq(
+            faLock(recovered, BigDecimal(100)),
+            faLock(stillUnderlocked, BigDecimal(10)),
+          ),
+        )
+        result <- store.listFeaturedAppUnderlockStatusChanges(enforced)
+      } yield {
+        result shouldBe Seq(FeaturedAppUnderlockStatus(recovered, underlocked = false))
+      }
+    }
+
+    "consider no provider underlocked if enforcement is disabled" in {
+      val suspended = userParty(1)
+      val notSuspended = userParty(2)
+      for {
+        store <- mkStoreWith(
+          rights = Seq(
+            featuredAppRight(suspended, underlockPermanentAt = suspendedAt),
+            featuredAppRight(notSuspended),
+          )
+        )
+        result <- store.listFeaturedAppUnderlockStatusChanges(
+          enforced.copy(enforcementEnabled = false)
+        )
+      } yield {
+        result shouldBe Seq(FeaturedAppUnderlockStatus(suspended, underlocked = false))
+      }
+    }
+
+    "treat duplicate rights like the right they merge into" in {
+      // Merged right is suspended and an asset, so 300 is underlocked and already recorded
+      val alreadySuspended = userParty(1)
+      // Merged right is suspended and a basic app, so 300 is not underlocked
+      val recovered = userParty(2)
+      for {
+        store <- mkStoreWith(
+          rights = Seq(
+            featuredAppRight(alreadySuspended),
+            featuredAppRight(
+              alreadySuspended,
+              appKind = Some(splice.amulet.FeaturedAppKind.FAK_ASSET),
+              underlockPermanentAt = suspendedAt,
+            ),
+            featuredAppRight(recovered),
+            featuredAppRight(recovered, underlockPermanentAt = suspendedAt),
+          ),
+          locks = Seq(
+            faLock(alreadySuspended, BigDecimal(300)),
+            faLock(recovered, BigDecimal(300)),
+          ),
+        )
+        result <- store.listFeaturedAppUnderlockStatusChanges(enforced)
+      } yield {
+        result shouldBe Seq(FeaturedAppUnderlockStatus(recovered, underlocked = false))
+      }
+    }
+
+    "use the threshold of the highest app kind, not the highest threshold, for a provider with several rights" in {
+      // The asset mover threshold is below the basic one, so the threshold of the highest
+      // app kind differs from the highest threshold
+      val config = enforced.copy(basicLockThreshold = BigDecimal(300))
+      val basicAndAssetMoving = userParty(1)
+      val basicOnly = userParty(2)
+      for {
+        store <- mkStoreWith(
+          rights = Seq(
+            featuredAppRight(basicAndAssetMoving),
+            featuredAppRight(
+              basicAndAssetMoving,
+              appKind = Some(splice.amulet.FeaturedAppKind.FAK_ASSETMOVING),
+            ),
+            featuredAppRight(basicOnly),
+          ),
+          locks = Seq(
+            faLock(basicAndAssetMoving, BigDecimal(250)),
+            faLock(basicOnly, BigDecimal(250)),
+          ),
+        )
+        result <- store.listFeaturedAppUnderlockStatusChanges(config)
+      } yield {
+        result shouldBe Seq(FeaturedAppUnderlockStatus(basicOnly, underlocked = true))
+      }
+    }
+
+    "only consider the given provider" in {
+      val provider = userParty(1)
+      val otherProvider = userParty(2)
+      for {
+        store <- mkStoreWith(
+          rights = Seq(featuredAppRight(provider), featuredAppRight(otherProvider))
+        )
+        result <- store.listFeaturedAppUnderlockStatusChanges(enforced, Some(provider))
+      } yield {
+        result shouldBe Seq(FeaturedAppUnderlockStatus(provider, underlocked = true))
+      }
+    }
+
+    "skip providers with an instruction awaiting execution" in {
+      val pending = userParty(1)
+      val pendingExpired = userParty(2)
+      val otherDsoPending = userParty(3)
+      val noInstruction = userParty(4)
+      for {
+        store <- mkStoreWith(
+          rights = Seq(pending, pendingExpired, otherDsoPending, noInstruction).map(
+            featuredAppRight(_)
+          )
+        )
+        _ <- MonadUtil.sequentialTraverse(
+          Seq(
+            featuredAppUnderlockInstruction(pending),
+            // Expired instructions can still be executed
+            featuredAppUnderlockInstruction(pendingExpired, expiresAt = time(0).toInstant),
+            // Not ingested, so it does not count as pending
+            featuredAppUnderlockInstruction(otherDsoPending, dso = userParty(99)),
+          )
+        )(dummyDomain.create(_)(store.multiDomainAcsStore))
+        result <- store.listFeaturedAppUnderlockStatusChanges(enforced)
+      } yield {
+        result should contain theSameElementsAs Seq(
+          FeaturedAppUnderlockStatus(otherDsoPending, underlocked = true),
+          FeaturedAppUnderlockStatus(noInstruction, underlocked = true),
+        )
+      }
+    }
+
+    "apply the Daml defaults to an unset config" in {
+      FeaturedAppUnderlockConfig.fromDsoRulesConfig(
+        dsoRules().payload.config
+      ) shouldBe FeaturedAppUnderlockConfig(
+        enforcementEnabled = false,
+        basicLockThreshold = BigDecimal(5_000_000),
+        assetMovingLockThreshold = BigDecimal(5_000_000),
+        assetLockThreshold = BigDecimal(25_000_000),
+      )
+    }
+  }
+
   private def featuredAppConfigUpdateInstruction(
       provider: PartyId,
       expiresAt: Instant,
@@ -3434,106 +3802,6 @@ class DbSvDsoStoreTest
         )
       }
     }
-
-  "listFeaturedAppUnderlockInstructionsWithFeaturedAppRight" should {
-
-    def listCids(
-        store: SvDsoStore,
-        ignored: Option[Set[PartyId]] = None,
-    ) = store
-      .listFeaturedAppUnderlockInstructionsWithFeaturedAppRight(
-        ignored.map(new InMemoryUnavailablePartiesStore(_)),
-        PageLimit.tryCreate(100),
-      )(traceContext)
-      .map(_.map(_.contract.contractId))
-
-    "return only instructions whose provider has a live FeaturedAppRight" in {
-      val featuredProvider = userParty(1)
-      val underlocked =
-        featuredAppUnderlockInstruction(featuredProvider, underlocked = true)
-      // An instruction reporting a recovery is listed just like one
-      // reporting an underlock.
-      val recovered =
-        featuredAppUnderlockInstruction(featuredProvider, underlocked = false)
-      // An expired instruction is still listed: executing it is allowed.
-      val expired = featuredAppUnderlockInstruction(
-        featuredProvider,
-        expiresAt = time(0).toInstant,
-      )
-      // No FeaturedAppRight is created for this provider, so its
-      // instruction cannot be executed and must not be listed.
-      val unfeaturedInstruction = featuredAppUnderlockInstruction(userParty(2))
-      // The 'dso' party differs from mkStore()'s, so this is never ingested.
-      val otherDsoInstruction =
-        featuredAppUnderlockInstruction(featuredProvider, dso = userParty(4))
-
-      for {
-        store <- mkStore()
-        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(featuredAppRight(featuredProvider))(
-          store.multiDomainAcsStore
-        )
-        _ <- MonadUtil.sequentialTraverse(
-          Seq(
-            underlocked,
-            recovered,
-            expired,
-            unfeaturedInstruction,
-            otherDsoInstruction,
-          )
-        )(dummyDomain.create(_)(store.multiDomainAcsStore))
-        result <- listCids(store)
-      } yield {
-        result should contain theSameElementsAs Seq(
-          underlocked.contractId,
-          recovered.contractId,
-          expired.contractId,
-        )
-      }
-    }
-
-    "not return duplicate rows when a provider has more than one live FeaturedAppRight" in {
-      val provider = userParty(1)
-      val instruction = featuredAppUnderlockInstruction(provider)
-
-      for {
-        store <- mkStore()
-        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(instruction)(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(featuredAppRight(provider))(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(featuredAppRight(provider))(store.multiDomainAcsStore)
-        result <- listCids(store)
-      } yield {
-        result should contain theSameElementsAs Seq(instruction.contractId)
-      }
-    }
-
-    "respects ignored parties" in {
-      val providerA = userParty(1)
-      val providerB = userParty(2)
-      val instructionA = featuredAppUnderlockInstruction(providerA)
-      val instructionB = featuredAppUnderlockInstruction(providerB)
-
-      for {
-        store <- mkStore()
-        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(instructionA)(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(instructionB)(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(featuredAppRight(providerA))(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(featuredAppRight(providerB))(store.multiDomainAcsStore)
-        result <- listCids(store)
-        resultNoneIgnored <- listCids(store, Some(Set.empty))
-        resultNoProviderA <- listCids(store, Some(Set(providerA)))
-        resultNoProviders <- listCids(store, Some(Set(providerA, providerB)))
-      } yield {
-        val all = Seq(instructionA.contractId, instructionB.contractId)
-        result should contain theSameElementsAs all
-        resultNoneIgnored should contain theSameElementsAs all
-        resultNoProviderA should contain theSameElementsAs Seq(instructionB.contractId)
-        resultNoProviders shouldBe empty
-      }
-    }
-
   }
 
   "listVoteRequestsReadyToBeClosed" should {

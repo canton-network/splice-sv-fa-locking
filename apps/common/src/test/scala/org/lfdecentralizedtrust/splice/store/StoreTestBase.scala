@@ -819,6 +819,7 @@ abstract class StoreTestBase
       activityWeight: Option[BigDecimal] = None,
       appKind: Option[FeaturedAppKind] = None,
       opsParties: Option[Seq[PartyId]] = None,
+      underlockPermanentAt: Option[Instant] = None,
   ) = {
     val template = new FeaturedAppRight(
       dsoParty.toProtoPrimitive,
@@ -826,7 +827,7 @@ abstract class StoreTestBase
       activityWeight.map(_.bigDecimal).toJava,
       appKind.toJava,
       opsParties.map(_.map(_.toProtoPrimitive).asJava).toJava,
-      Optional.empty(),
+      underlockPermanentAt.toJava,
     )
     contract(
       FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID,
