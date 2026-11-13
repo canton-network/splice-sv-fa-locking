@@ -47,7 +47,7 @@ lockWithSpec
 lockWithSpec ops env owner amount specification = do
   let registry = env.registriesEnv.amuletV2
   AmuletRegistryV2.tapFaucet registry owner amount
-  lockCid <- expectSuccess $ ops.governanceLock (testEnvRegistries env) owner amount (governanceLockKind specification)
+  lockCid <- expectSuccess $ ops.governanceLock (testEnvRegistries env) owner amount specification
   Some lock <- queryContractId owner lockCid
   pure (lockCid, lock)
 
@@ -233,7 +233,7 @@ testLockTransfer_failures ops expectedAuthFailure = do
   expectFailureContaining (missingMemoKeyMessage newLockOwnerMemoKey) =<<
     ops.proposeTransfer' (testEnvRegistries env) alice transfer \r -> r with
       meta = reasonToMeta
-        (tsv1RequestMemo' GLRT_TransferLock (governanceLockKind lock.specification) [(transferAmountMemoKey, "40000.0")])
+        (tsv1RequestMemo' GLRT_TransferLock lock.specification [(transferAmountMemoKey, "40000.0")])
         emptyMetadata
 
   -- A source vesting lock that has fully vested cannot be transferred.
