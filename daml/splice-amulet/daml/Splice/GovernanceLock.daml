@@ -50,6 +50,7 @@ module Splice.GovernanceLock (
   invalidLockSubjectMessage,
   encodeCommonLockMemoEntries,
   encodeLockCompatMemo,
+  encodeControllersSpecificationMemoEntries,
   encodeGovernanceLockMetadataWithRequest,
   cipMemoPrefix,
   requestMemoKey,
@@ -62,6 +63,9 @@ module Splice.GovernanceLock (
   lockStatusMemoKey,
   lockVestingDurationMemoKey,
   lockVestingEndTimeMemoKey,
+  substitutionControllersMemoKey,
+  unlockControllersMemoKey,
+  vestingControllersMemoKey,
   vestingStartTimeMemoKey,
   vestedUntilTimeMemoKey,
 
@@ -768,7 +772,16 @@ targetLockMemoPrefix = "target-"
 -- | Memo key that specifies the owner of a target lock.
 targetLockOwnerMemoKey = targetLockMemoPrefix <> "lock-owner"
 
--- | The metadata entries of the kind, subject and status of a lock, in the order of the CIP.
+-- | Memo key that specifies custom vesting controllers.
+vestingControllersMemoKey = "vesting-controllers"
+
+-- | Memo key that specifies custom substitution controllers.
+substitutionControllersMemoKey = "substitution-controllers"
+
+-- | Memo key that specifies custom unlock controllers.
+unlockControllersMemoKey = "unlock-controllers"
+
+-- | The memo entries of the kind, subject and status of a lock, in the order of the CIP.
 encodeCommonLockMemoEntries : GovernanceLockKind -> LockState -> [(Text, Text)]
 encodeCommonLockMemoEntries kind state =
   let (tag, subject) = governanceLockKindToTagAndSubject kind
@@ -777,15 +790,28 @@ encodeCommonLockMemoEntries kind state =
      , (lockStatusMemoKey, lockStateToText state)
      ]
 
--- | The metadata entries of a lock specification, in the order of the CIP.
+encodeControllersSpecificationMemoEntries : Text -> Optional ControllersSpecification -> [(Text, Text)]
+encodeControllersSpecificationMemoEntries _ None = []
+encodeControllersSpecificationMemoEntries key (Some controllers) = [(key, encodeControllersSpecification controllers)]
+
+encodeGovernanceLockControllersMemoEntries : Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> [(Text, Text)]
+encodeGovernanceLockControllersMemoEntries unlockControllers substitutionControllers vestingControllers =
+  foldMap (uncurry encodeControllersSpecificationMemoEntries)
+    [ (unlockControllersMemoKey, unlockControllers)
+    , (substitutionControllersMemoKey, substitutionControllers)
+    , (vestingControllersMemoKey, vestingControllers)
+    ]
+
+-- | The memo entries of a lock specification, in the order of the CIP.
 encodeGovernanceLockSpecMemoEntries : GovernanceLockSpecification -> [(Text, Text)]
-encodeGovernanceLockSpecMemoEntries (GLS_FullLock spec) = encodeCommonLockMemoEntries spec.kind LS_Locked
+encodeGovernanceLockSpecMemoEntries (GLS_FullLock FullLockSpecification{..}) =
+  encodeCommonLockMemoEntries kind LS_Locked <> encodeGovernanceLockControllersMemoEntries unlockControllers substitutionControllers vestingControllers
 encodeGovernanceLockSpecMemoEntries (GLS_VestingLock VestingLockSpecification{..}) =
   encodeCommonLockMemoEntries kind LS_Vesting <>
     [ (lockVestingDurationMemoKey, encodeRelTime vestingPeriod)
     , (lockVestingEndTimeMemoKey, encodeTime endTime)
     , (lockVestingInfoMemoKey, "\"vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime <> "\"")
-    ]
+    ] <> encodeGovernanceLockControllersMemoEntries None None vestingControllers
 
 encodeGovernanceLockMetadata : GovernanceLock -> Metadata
 encodeGovernanceLockMetadata GovernanceLock{specification} =

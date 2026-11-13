@@ -21,11 +21,13 @@ module Splice.GovernanceLock.Request (
   governanceLockRequestTSv1Parser,
 ) where
 
+import Prelude hiding (mapA)
 import DA.Action (unless)
 import DA.Assert
 import DA.Optional
 import DA.Text qualified as Text
 import DA.Time
+import DA.Traversable (mapA)
 import DA.Validation
 
 import Splice.Amulet.TokenApiUtils
@@ -35,6 +37,7 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
@@ -261,6 +264,8 @@ governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{
 -- Parsers
 ----------
 
+type ControllersSpecificationParser = Parser Memo (Optional ControllersSpecification)
+
 iso8601TimeFromTextParser : Text -> Text -> Parser i Time
 iso8601TimeFromTextParser key input = validationParser $ validate $ case parseIso8601UtcTime input of
   Left e -> Left (errorInMemoKeyMessage key e)
@@ -286,26 +291,37 @@ governanceLockMemoParser = Parser \meta -> runParser (memoParserWithAnyKeys cipM
 parseGovernanceLockMemo : CanAssert m => Metadata -> m Memo
 parseGovernanceLockMemo = assertParsed governanceLockMemoParser
 
+controllersParser : Text -> ControllersSpecificationParser
+controllersParser key =
+    optionalMemoFieldParser key >>= mapA parser
+  where
+    parser : Text -> Parser Memo ControllersSpecification
+    parser t = validationParser $ either (invalid . errorInMemoKeyMessage key) ok (parseControllersSpecification t)
+
+vestingControllersParser : ControllersSpecificationParser
+vestingControllersParser = controllersParser vestingControllersMemoKey
+
+substitutionControllersParser : ControllersSpecificationParser
+substitutionControllersParser = controllersParser substitutionControllersMemoKey
+
+unlockControllersParser : ControllersSpecificationParser
+unlockControllersParser = controllersParser unlockControllersMemoKey
+
 fullLockSpecificationParser : Parser Memo FullLockSpecification
 fullLockSpecificationParser =
   FullLockSpecification <$>
     governanceLockKindParser <*>
-    -- TODO(canton-network/splice-sv-fa-locking#76): specify these
-    pure None <*>
-    pure None <*>
-    pure None
+    unlockControllersParser <*>
+    substitutionControllersParser <*>
+    vestingControllersParser
 
 vestingLockSpecificationParser : Parser Memo VestingLockSpecification
-vestingLockSpecificationParser = do
-  kind <- governanceLockKindParser
-  vestingPeriod <- vestingDurationParser
-  endTime <- vestingEndTimeParser
-  pure $ VestingLockSpecification with
-    kind
-    vestingPeriod
-    endTime
-    -- TODO(canton-network/splice-sv-fa-locking#76): specify this
-    vestingControllers = None
+vestingLockSpecificationParser =
+  VestingLockSpecification <$>
+    governanceLockKindParser <*>
+    vestingDurationParser <*>
+    vestingEndTimeParser <*>
+    vestingControllersParser
 
 governanceLockSpecificationParser : LockState -> Parser Memo GovernanceLockSpecification
 governanceLockSpecificationParser LS_Locked = GLS_FullLock <$> fullLockSpecificationParser

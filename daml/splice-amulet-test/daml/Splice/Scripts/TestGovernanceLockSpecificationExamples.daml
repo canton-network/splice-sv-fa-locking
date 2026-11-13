@@ -16,6 +16,7 @@ import Splice.Amulet
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Expiry (TimeLock(..))
 import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers (makeControllersSpecification)
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
@@ -83,11 +84,14 @@ submitMemo env sender amount memo = do
   expectSuccess $ submitLockRequestV1 env.registries request with inputHoldingCids = downcast <$> inputs
 
 -- | Creates the 5M FA lock of `A` for `X` with the memo of the "Creating Locks" example.
-createExampleLock : TestEnv -> ExampleParties -> Script (ContractId V1.TransferInstruction)
-createExampleLock env ExampleParties{a} = do
+createExampleLock' : TestEnv -> ExampleParties -> Text -> Script (ContractId V1.TransferInstruction)
+createExampleLock' env ExampleParties{a} extraMemo = do
   AmuletRegistryV2.tapFaucet env.registriesEnv.amuletV2 a 5000000.0
   tsv1Operations.expectPendingTransfer =<< submitMemo env a 5000000.0
-    "cip-127/memo:request=create-lock&lock-kind=fa-lock&lock-subject=X"
+    ("cip-127/memo:request=create-lock&lock-kind=fa-lock&lock-subject=X" <> extraMemo)
+
+createExampleLock : TestEnv -> ExampleParties -> Script (ContractId V1.TransferInstruction)
+createExampleLock env parties = createExampleLock' env parties ""
 
 -- | The pending transfer that displays the FA lock of `owner` for `X`.
 displayedFaLock : Text -> Decimal -> DisplayedTransfer
@@ -133,7 +137,7 @@ test_example_lockDisplay = do
           kind = GLK_FeaturedApp x
           vestingPeriod
           endTime
-          vestingControllers = None
+          vestingControllers = Some $ makeControllersSpecification [[a, x]]
         originalLockCid = None
         requestedAt = epoch
 
@@ -141,7 +145,7 @@ test_example_lockDisplay = do
     sender = "A"
     receiver = lockManager
     amount = 1000000.0
-    memo = "cip-127/memo:lock-kind=fa-lock&lock-subject=X&lock-status=vesting&lock-vesting-duration-micros=5184000000000&lock-vesting-end-time-micros=5184000000000&lock-vesting-info=\"vesting for 60.0 days until 1970-03-02T00:00:00Z\""
+    memo = "cip-127/memo:lock-kind=fa-lock&lock-subject=X&lock-status=vesting&lock-vesting-duration-micros=5184000000000&lock-vesting-end-time-micros=5184000000000&lock-vesting-info=\"vesting for 60.0 days until 1970-03-02T00:00:00Z\"&vesting-controllers=[[\"A\",\"X\"]]"
 
 -- Creating Locks
 -----------------
@@ -151,13 +155,18 @@ test_example_createLock = do
   env@TestEnv{..} <- setupTest
   parties@ExampleParties{..} <- setupExampleParties
 
-  lockCid <- createExampleLock env parties
+  lockCid <- createExampleLock' env parties "&unlock-controllers=[[\"A\",\"X\"]]"
 
   Some lock <- queryContractId a (fromInterfaceContractId @GovernanceLock lockCid)
   lock.owner === a
-  lock.specification === fullLockSpecification (GLK_FeaturedApp x)
+  lock.specification === GLS_FullLock FullLockSpecification with
+    kind = GLK_FeaturedApp x
+    unlockControllers = Some $ makeControllersSpecification [[a, x]]
+    substitutionControllers = None
+    vestingControllers = None
   lock.amount === 5000000.0
-  checkDisplayedAs a lockCid $ displayedFaLock "A" 5000000.0
+  checkDisplayedAs a lockCid $ (displayedFaLock "A" 5000000.0) with
+    memo = "cip-127/memo:lock-kind=fa-lock&lock-subject=X&lock-status=locked&unlock-controllers=[[\"A\",\"X\"]]"
   -- The lock subject `X` observes the lock
   Some _ <- queryContractId x (fromInterfaceContractId @GovernanceLock lockCid)
   checkBalances env a (0.0, 5000000.0)
