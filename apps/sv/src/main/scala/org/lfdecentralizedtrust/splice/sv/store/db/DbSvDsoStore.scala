@@ -78,6 +78,7 @@ import com.digitalasset.canton.topology.{ParticipantId, PartyId, SynchronizerId}
 import io.grpc.Status
 import org.lfdecentralizedtrust.splice.codegen.java.splice.dso.instruction.{
   FeaturedAppConfigUpdateInstruction,
+  FeaturedAppUnderlockInstruction,
   RevokeFeaturedAppRightInstruction,
 }
 import org.lfdecentralizedtrust.splice.config.IngestionConfig
@@ -2246,60 +2247,61 @@ class DbSvDsoStore private (
         )
       }
 
-  override def listFeaturedAppUnderlockInstructionsWithFeaturedAppRight(
-      unavailablePartiesStore: Option[UnavailablePartiesStore] = None,
-      limit: Limit = defaultLimit,
-  )(implicit tc: TraceContext): Future[Seq[AssignedContract[
-    splice.dso.instruction.FeaturedAppUnderlockInstruction.ContractId,
-    splice.dso.instruction.FeaturedAppUnderlockInstruction,
-  ]]] =
+  override def listFeaturedAppUnderlockInstructionSample(limit: Limit)(implicit
+      tc: TraceContext
+  ): Future[Seq[SvDsoStore.FeaturedAppUnderlockInstructionWithRight]] =
     waitUntilAcsIngested {
       for {
-        ignoredParties <- UnavailablePartiesStore.listParties(unavailablePartiesStore)
-        // Executing an instruction archives and recreates the provider's
-        // FeaturedAppRight, which the provider observes, so skip unavailable
-        // providers.
-        filterClause =
-          if (ignoredParties.nonEmpty)
-            (sql" and " ++ notInClause(
-              "acs.featured_app_right_provider",
-              ignoredParties,
-            )).toActionBuilder
-          else sql""
-        result <- storage.query(
-          selectFromAcsTableWithState(
-            DsoTables.acsTableName,
-            acsStoreId,
-            domainMigrationId,
-            splice.dso.instruction.FeaturedAppUnderlockInstruction.COMPANION,
-            additionalWhere = (sql"""
-              and exists (
-                select 1
-                from #${DsoTables.acsTableName} fa_right
-                where fa_right.store_id = acs.store_id
-                  and fa_right.migration_id = acs.migration_id
-                  and fa_right.package_name = ${FeaturedAppRight.PACKAGE_NAME}
-                  and fa_right.template_id_qualified_name = ${QualifiedName(
+        result <- storage
+          .query(
+            (sql"""
+             select #${AcsQueries.SelectFromAcsTableResult
+                .sqlColumnsCommaSeparated("sample.")}, sample.fa_right_cid
+             from (
+               select #${AcsQueries.SelectFromAcsTableResult
+                .sqlColumnsCommaSeparated("acs.")},
+                      fa_right.contract_id as fa_right_cid
+               from #${DsoTables.acsTableName} acs
+               cross join lateral (
+                 select r.contract_id
+                 from #${DsoTables.acsTableName} r
+                 where r.store_id = acs.store_id
+                   and r.migration_id = acs.migration_id
+                   and r.package_name = ${FeaturedAppRight.PACKAGE_NAME}
+                   and r.template_id_qualified_name = ${QualifiedName(
                 FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID
               )}
-                  and fa_right.featured_app_right_provider =
-                    acs.featured_app_right_provider
-              )
-            """ ++ filterClause).toActionBuilder,
-            orderLimit = sql"""order by acs.event_number limit ${sqlLimit(limit)}""",
-          ),
-          "listFeaturedAppUnderlockInstructionsWithFeaturedAppRight",
-        )
+                   and r.featured_app_right_provider =
+                     acs.featured_app_right_provider
+                 limit 1
+               ) fa_right
+               where acs.store_id = $acsStoreId
+                 and acs.migration_id = $domainMigrationId
+                 and acs.package_name =
+                   ${FeaturedAppUnderlockInstruction.PACKAGE_NAME}
+                 and acs.template_id_qualified_name = ${QualifiedName(
+                FeaturedAppUnderlockInstruction.TEMPLATE_ID_WITH_PACKAGE_ID
+              )}
+               limit greatest(1000, ${10 * sqlLimit(limit)})
+             ) sample
+             order by random()
+             limit ${sqlLimit(limit)}
+           """).as[(AcsQueries.SelectFromAcsTableResult, String)],
+            "listFeaturedAppUnderlockInstructionSample",
+          )
         limited = applyLimit(
-          "listFeaturedAppUnderlockInstructionsWithFeaturedAppRight",
+          "listFeaturedAppUnderlockInstructionSample",
           limit,
           result,
         )
-      } yield limited.map(
-        assignedContractFromRow(
-          splice.dso.instruction.FeaturedAppUnderlockInstruction.COMPANION
-        )(_)
-      )
+      } yield limited.map { case (row, rightCid) =>
+        SvDsoStore.FeaturedAppUnderlockInstructionWithRight(
+          assignedContractFromRow(
+            FeaturedAppUnderlockInstruction.COMPANION
+          )(row),
+          new FeaturedAppRight.ContractId(rightCid),
+        )
+      }
     }
 
   override def listFeaturedAppUnderlockStatusChanges(
