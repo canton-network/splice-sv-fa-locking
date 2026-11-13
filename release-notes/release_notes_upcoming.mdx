@@ -18,6 +18,10 @@
       `/v0/onboard/sv/party-migration/prepare`, `/v0/onboard/sv/sequencer/prepare` and
       `/v0/onboard/sv/download/{id}` endpoints, which are tagged `x-external-audience: svs`.
 
+    - SVs now run `ExecuteFeaturedAppUnderlockInstructionTrigger`, which
+      applies each `FeaturedAppUnderlockInstruction` to the featured app
+      right of its provider, suspending or unsuspending the right.
+
     - Support changing the `governanceLockManagementConfig` fields in `DsoRules` config vote requests.
 
     - SV app automation now detects featured app providers whose full featured app locks are below the
