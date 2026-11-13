@@ -27,9 +27,9 @@ trait GovernanceLockTest extends TokenStandardTest {
   // Same as `defaultGovernanceLockMinimumLockAmount` in Daml.
   protected val minimumLockAmount = BigDecimal(10000.0)
 
-  private val lockStatusMetaKey = "lock-status"
-  private val lockVestingDurationMetaKey = "lock-vesting-duration-micros"
-  private val lockVestingEndTimeMetaKey = "lock-vesting-end-time-micros"
+  private val lockStatusMemoKey = "lock-status"
+  private val lockVestingDurationMemoKey = "lock-vesting-duration-micros"
+  private val lockVestingEndTimeMemoKey = "lock-vesting-end-time-micros"
 
   private def durationToRelTime(d: Duration): RelTime =
     new RelTime(TimeUnit.NANOSECONDS.toMicros(d.toNanos))
@@ -68,8 +68,8 @@ trait GovernanceLockTest extends TokenStandardTest {
         { case (vestedUntilTime, vestingPeriod, vestingEndTime) =>
           List(
             "vested-until-time" -> formatInstant(vestedUntilTime),
-            lockVestingDurationMetaKey -> vestingPeriod.microseconds.toString,
-            lockVestingEndTimeMetaKey -> instantToMicros(vestingEndTime).toString,
+            lockVestingDurationMemoKey -> vestingPeriod.microseconds.toString,
+            lockVestingEndTimeMemoKey -> instantToMicros(vestingEndTime).toString,
           )
         },
       )
@@ -81,11 +81,11 @@ trait GovernanceLockTest extends TokenStandardTest {
         "substitute-lock",
         { case (lockStatus, targetLockOwner, vestingPeriod, vestingEndTime) =>
           List(
-            lockStatusMetaKey -> lockStatus.status,
+            lockStatusMemoKey -> lockStatus.status,
             "target-lock-owner" -> targetLockOwner.toProtoPrimitive,
           ) ++
-            vestingPeriod.map(t => (lockVestingDurationMetaKey, t.microseconds.toString)) ++
-            vestingEndTime.map(t => (lockVestingEndTimeMetaKey, instantToMicros(t).toString))
+            vestingPeriod.map(t => (lockVestingDurationMemoKey, t.microseconds.toString)) ++
+            vestingEndTime.map(t => (lockVestingEndTimeMemoKey, instantToMicros(t).toString))
         },
       )
 
@@ -96,12 +96,12 @@ trait GovernanceLockTest extends TokenStandardTest {
         "transfer-lock",
         { case (lockStatus, newLockOwner, transferAmount, vestingPeriod, vestingEndTime) =>
           List(
-            lockStatusMetaKey -> lockStatus.status,
+            lockStatusMemoKey -> lockStatus.status,
             "new-lock-owner" -> newLockOwner.toProtoPrimitive,
             "transfer-amount" -> transferAmount.toString,
           ) ++
-            vestingPeriod.map(t => (lockVestingDurationMetaKey, t.microseconds.toString)) ++
-            vestingEndTime.map(t => (lockVestingEndTimeMetaKey, instantToMicros(t).toString))
+            vestingPeriod.map(t => (lockVestingDurationMemoKey, t.microseconds.toString)) ++
+            vestingEndTime.map(t => (lockVestingEndTimeMemoKey, instantToMicros(t).toString))
         },
       )
 
@@ -131,7 +131,7 @@ trait GovernanceLockTest extends TokenStandardTest {
   ): String =
     makeLockMemo(
       commonLockMemoEntries(lockKind, lockSubject) ++
-        Map(lockStatusMetaKey -> lockStatus.status)
+        Map(lockStatusMemoKey -> lockStatus.status)
     )
 
   /** The memo of a pending transfer of a lock that is not vesting */
@@ -139,7 +139,7 @@ trait GovernanceLockTest extends TokenStandardTest {
     makeLockMemo(
       List("request" -> "accept-to-transfer-lock") ++
         commonLockMemoEntries(lockKind, lockSubject) ++
-        Map(lockStatusMetaKey -> Locked.status)
+        Map(lockStatusMemoKey -> Locked.status)
     )
 
   // Using a Map so order doesn't matter when comparing below

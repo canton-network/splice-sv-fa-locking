@@ -282,7 +282,7 @@ testSubstitution_vestingTarget ops = do
   AmuletRegistryV2.tapFaucet registry bob 20000.0
   lockCid <- expectSuccess $ ops.governanceLock (testEnvRegistries env) alice 50000.0 kind
   unlockAt <- (`addRelTime` hours 1) <$> getTime
-  vestingCid <- expectSuccess $ ops.governanceUnlock (testEnvRegistries env) lockCid alice (unlockMeta 50000.0 unlockAt)
+  vestingCid <- expectSuccess $ ops.governanceUnlock (testEnvRegistries env) lockCid alice (unlockMemo 50000.0 unlockAt)
   Some vestingLock <- queryContractId alice vestingCid
   vestingSpec <- requireVestingLock vestingLock.specification
   let newSpec = vestingSpec with kind
@@ -502,7 +502,7 @@ testSelfSubstitution_vesting
 testSelfSubstitution_vesting ops = do
   (env@TestEnv{..}, lockCid, _) <- setupSelfSubstitution ops $ fullLockSpecification selfSubstitutionKind
   unlockAt <- (`addRelTime` hours 1) <$> getTime
-  vestingCid <- expectSuccess $ ops.governanceUnlock (testEnvRegistries env) lockCid alice (unlockMeta 50000.0 unlockAt)
+  vestingCid <- expectSuccess $ ops.governanceUnlock (testEnvRegistries env) lockCid alice (unlockMemo 50000.0 unlockAt)
   Some vestingLock <- queryContractId alice vestingCid
   vestingTimes <- requireVestingLock vestingLock.specification
 
