@@ -16,13 +16,13 @@ import Splice.Amulet
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Expiry (TimeLock(..))
 import Splice.GovernanceLock
-import Splice.GovernanceLock.Request
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 import Splice.TokenStandard.Utils (basicAccount, downcast, reasonFromMeta)
+import Splice.Util.Memo
 
 -- | The receiver of all lock requests, as written in the CIP.
 lockManager : Text
