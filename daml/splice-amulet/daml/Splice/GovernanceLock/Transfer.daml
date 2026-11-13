@@ -51,14 +51,14 @@ template GovernanceLockTransfer with
       -- ^ New custom substitution controllers of the transferred lock.
     newVestingControllers : Optional ControllersSpecification
       -- ^ New custom vesting controllers of the transferred lock.
-    votes : Optional (Map.Map Party Bool)
+    votes : Optional ProposalVotes
       -- ^ Votes recorded so far.
     originalProposalCid : Optional (ContractId GovernanceLockTransfer)
   where
     signatory source.dso, source.owner,
               -- Make the receiver a signatory once they've approved the transfer
               -- This is necessary for `governanceLock_executeTransfer` to have the authority of the receiver when locking amulet
-              optional [] (const [receiver]) (guard (Map.lookup receiver (fromOptional Map.empty votes) == Some True))
+              optional [] (const [receiver]) (guard (Map.lookup receiver (fromOptional Map.empty votes) == Some PV_Accept))
     observer receiver, (Set.fromList $ concat (governanceLockTransferControllers this).controllers)
     ensure governanceLockTransferIsValid this
 
@@ -225,13 +225,13 @@ governanceLock_executeTransfer ProposalExecuteArgs{..} = do
 
 governanceLockTransfer_operations : ProposalOperations GovernanceLockTransfer GovernanceLock_TransferResult_Completed
 governanceLockTransfer_operations = ProposalOperations with
-  makeView = governanceLockTransfer_proposalView
+  mkView = governanceLockTransfer_proposalView
   recreate = \votes originalProposalCid proposal ->
     let updatedProposal = proposal with votes = Some votes; originalProposalCid
     in (, updatedProposal) <$> create updatedProposal
   execute = governanceLock_executeTransfer
-  completedResult = governanceLock_transferResult_completed_transferInstructionResult
-  rejectedResult = None
+  mkCompletedResult = governanceLock_transferResult_completed_transferInstructionResult
+  mkRejectedResult = None
 
 -- Instances
 ------------

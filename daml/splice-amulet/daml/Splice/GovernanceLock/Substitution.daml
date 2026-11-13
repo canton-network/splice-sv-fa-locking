@@ -47,7 +47,7 @@ template GovernanceLockSubstitution with
     newUnlockControllers : Optional ControllersSpecification -- ^ New custom unlock controllers of the substituted lock.
     newSubstitutionControllers : Optional ControllersSpecification -- ^ New custom substitution controllers of the substituted lock.
     newVestingControllers : Optional ControllersSpecification -- ^ New custom vesting controllers of the substituted lock.
-    votes : Optional (Map.Map Party Bool) -- ^ Votes recorded so far.
+    votes : Optional ProposalVotes -- ^ Votes recorded so far.
   where
     signatory target.dso, owner
     observer target.owner, governanceLockObservers target.specification,
@@ -237,13 +237,13 @@ substitution_returnFunds dso proposer specification (Some lockedAmuletCid) = do
 
 governanceLockSubstitution_operations : ProposalOperations GovernanceLockSubstitution GovernanceLock_SubstitutionResult_Completed
 governanceLockSubstitution_operations = ProposalOperations with
-  makeView = governanceLockSubstitution_proposalView
+  mkView = governanceLockSubstitution_proposalView
   recreate = \votes originalSubstitutionCid proposal ->
     let updatedProposal = proposal with votes = Some votes; originalSubstitutionCid
     in (, updatedProposal) <$> create updatedProposal
   execute = governanceLock_executeSubstitution
-  completedResult = governanceLock_substitutionResult_completed_transferInstructionResult
-  rejectedResult = Some $ \ProposalUpdateArgs{proposal = GovernanceLockSubstitution{..}} -> do
+  mkCompletedResult = governanceLock_substitutionResult_completed_transferInstructionResult
+  mkRejectedResult = Some $ \ProposalUpdateArgs{proposal = GovernanceLockSubstitution{..}} -> do
     unlockedAmulet <- substitution_returnFunds target.dso owner target.specification lockedAmulet
     pure V2.TransferInstructionResult with
       output = V2.TransferInstructionResult_Failed

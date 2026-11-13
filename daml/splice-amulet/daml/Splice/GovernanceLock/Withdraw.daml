@@ -46,7 +46,7 @@ template WithdrawVestedFunds
     specification : WithdrawVestedFundsSpecification
     proposers : [Party]
     lockedAmulet : ContractId LockedAmulet
-    votes : Map.Map Party Bool -- ^ Votes recorded so far.
+    votes : ProposalVotes -- ^ Votes recorded so far.
     requestedAt : Time -- ^ Time of the request to create the proposal.
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
     originalProposalCid : Optional (ContractId WithdrawVestedFunds)
@@ -141,8 +141,6 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
       proposers = List.dedupSort actors
       emptyVotes = Map.empty
 
-  checkPendingControllers (withdrawVestedFundsControllers specification) proposers emptyVotes
-
   proposal_create withdrawVestedFunds_operations ProposalUpdateArgs with
     proposalCid = None
     proposal = WithdrawVestedFunds with
@@ -166,13 +164,13 @@ vestingLock_executeWithdraw ProposalExecuteArgs{..} = exercise merged.lockCid Go
 
 withdrawVestedFunds_operations : ProposalOperations WithdrawVestedFunds GovernanceLock_DsoWithdrawResult
 withdrawVestedFunds_operations = ProposalOperations with
-  makeView = withdrawVestedFunds_proposalView
+  mkView = withdrawVestedFunds_proposalView
   recreate = \votes originalProposalCid proposal ->
     let updatedProposal = proposal with votes; originalProposalCid
     in (, updatedProposal) <$> create updatedProposal
   execute = vestingLock_executeWithdraw
-  completedResult = vestingLock_withdrawResult_completed_transferInstructionResult
-  rejectedResult = None
+  mkCompletedResult = vestingLock_withdrawResult_completed_transferInstructionResult
+  mkRejectedResult = None
 
 -- Instances
 ------------

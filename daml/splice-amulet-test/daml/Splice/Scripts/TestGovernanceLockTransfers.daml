@@ -15,6 +15,7 @@ import Splice.Api.Token.HoldingV2 qualified as V2
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.GovernanceLock
+import Splice.GovernanceLock.Proposal
 import Splice.GovernanceLock.Request
 import Splice.GovernanceLock.Transfer
 import Splice.Scripts.TestGovernanceLocks
@@ -108,7 +109,7 @@ testLockTransfer_governanceLock ops setInputHoldingCids = do
         newUnlockControllers = None
         newSubstitutionControllers = None
         newVestingControllers = None
-        votes = Some $ Map.singleton transfer.source.owner True
+        votes = Some $ Map.singleton transfer.source.owner PV_Accept
   forA_ [alice, bob, instrId.admin] \p -> do
     governanceLockTransfer <- queryContractId p transferCid
     governanceLockTransfer === Some expected
@@ -151,7 +152,7 @@ testLockTransfer_governanceLock ops setInputHoldingCids = do
     newUnlockControllers = None
     newSubstitutionControllers = None
     newVestingControllers = None
-    votes = Some $ Map.singleton faTransfer.source.owner True
+    votes = Some $ Map.singleton faTransfer.source.owner PV_Accept
   Some view <- queryInterfaceContractId bob (asTransferInstruction faTransferCid)
   view.transfer.meta === governanceLockTransferMetadata faVestingLockTransfer
 

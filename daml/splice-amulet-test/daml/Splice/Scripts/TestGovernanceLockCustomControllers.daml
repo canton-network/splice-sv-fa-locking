@@ -17,6 +17,7 @@ import DA.Time
 import Daml.Script
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal
 import Splice.GovernanceLock.Request (GovernanceLockRequestTag(..), missingMemoKeyMessage)
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
@@ -100,7 +101,7 @@ proposeCustomUnlock ops env@TestEnv{..} lockCid lock = do
   -- the helper types the pending instruction as a lock, but it is the unlock proposal
   let proposalCid = coerceContractId @GovernanceLock @UnlockProposal pendingCid
   Some proposal <- queryContractId alice proposalCid
-  proposal.votes === Map.fromList [(alice, True)]
+  proposal.votes === Map.fromList [(alice, PV_Accept)]
   checkLockUntouched alice lockCid lock
   pure proposalCid
 
@@ -136,7 +137,7 @@ testCustomControllers_unlock_reject_tsv2 = do
   pendingCid <- tsv2Operations.expectPendingTransfer charlieResult
   None <- queryContractId alice proposalCid
   Some pending <- queryContractId alice (coerceContractId @_ @UnlockProposal pendingCid)
-  pending.votes === Map.fromList [(alice, True), (charlie, False)]
+  pending.votes === Map.fromList [(alice, PV_Accept), (charlie, PV_Reject)]
 
   -- provider1's rejection puts a rejection in every set
   [] <- tsv2Operations.expectFailedTransfer =<< expectSuccess (tsv2Operations.rejectInstruction env pendingCid provider1)
@@ -197,7 +198,7 @@ testCustomControllers_unlock_nonOwnerProposer_tsv1 = do
   proposalCid <- coerceContractId @_ @UnlockProposal <$> tsv1Operations.expectPendingTransfer result
   Some proposal <- queryContractId alice proposalCid
   proposal.proposers === [charlie]
-  proposal.votes === Map.fromList [(charlie, True)]
+  proposal.votes === Map.fromList [(charlie, PV_Accept)]
   checkLockUntouched alice lockCid lock
 
 -- Vesting withdrawal
@@ -231,7 +232,7 @@ proposeCustomVestingWithdraw ops env@TestEnv{..} vestingCid vesting = do
   -- the helper types the pending instruction as a lock, but it is the withdrawal proposal
   let proposalCid = coerceContractId @GovernanceLock @WithdrawVestedFunds pendingCid
   Some proposal <- queryContractId alice proposalCid
-  proposal.votes === Map.fromList [(alice, True)]
+  proposal.votes === Map.fromList [(alice, PV_Accept)]
   checkLockUntouched alice vestingCid vesting
   pure proposalCid
 
@@ -321,7 +322,7 @@ testCustomControllers_vestingWithdraw_nonOwnerProposer_tsv1 = do
   proposalCid <- coerceContractId @_ @WithdrawVestedFunds <$> tsv1Operations.expectPendingTransfer result
   Some proposal <- queryContractId alice proposalCid
   proposal.proposers === [charlie]
-  proposal.votes === Map.fromList [(charlie, True)]
+  proposal.votes === Map.fromList [(charlie, PV_Accept)]
   checkLockUntouched alice vestingCid vesting
 
 -- Transfer and substitution fixtures
@@ -371,7 +372,7 @@ setupCustomTransfer ops = do
     requestedAt
     extraMemoEntries = newControllersMemoEntries env
   Some transfer <- queryContractId alice transferCid
-  transfer.votes === Some (Map.fromList [(alice, True)])
+  transfer.votes === Some (Map.fromList [(alice, PV_Accept)])
   checkLockUntouched alice lockCid lock
   pure (env, lockCid, lock, transferCid)
 
@@ -460,7 +461,7 @@ setupCustomSubstitution ops = do
     extraMemoEntries = newControllersMemoEntries env
   substitutionCid <- coerceContractId @_ @GovernanceLockSubstitution <$> ops.expectPendingTransfer result
   Some substitution <- queryContractId alice substitutionCid
-  substitution.votes === Some (Map.fromList [(bob, True)])
+  substitution.votes === Some (Map.fromList [(bob, PV_Accept)])
   assertMsg "the proposal must hold bob's funds" (isSome substitution.lockedAmulet)
   checkBalances env bob (0.0, 20000.0)
   checkLockUntouched alice lockCid lock
@@ -575,7 +576,7 @@ proposeCustomSelfSubstitution ops env lockCid lock = do
   substitutionCid <- coerceContractId @_ @GovernanceLockSubstitution <$> ops.expectPendingTransfer result
   Some substitution <- queryContractId env.alice substitutionCid
   substitution.lockedAmulet === None
-  substitution.votes === Some (Map.fromList [(env.alice, True)])
+  substitution.votes === Some (Map.fromList [(env.alice, PV_Accept)])
   checkLockUntouched env.alice lockCid lock
   checkBalances env env.alice (0.0, 50000.0)
   pure substitutionCid

@@ -3,18 +3,13 @@
 
 module Splice.GovernanceLock.Controllers (
   ControllersSpecification,
-  NewControllersSpecifications(..),
   makeControllersSpecification,
   validateControllersSpecification,
   encodeControllersSpecification,
   parseControllersSpecification,
   allControllers,
-  controllersPendingVote,
-  proposersPendingWithdrawal,
-  checkPendingControllers,
 ) where
 
-import DA.Map qualified as Map
 import DA.Set qualified as Set
 
 import Splice.TokenStandard.Utils
@@ -25,15 +20,6 @@ import Splice.Util.Json
 data ControllersSpecification = ControllersSpecification with
     controllers : [[Party]]
       -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
-  deriving (Eq, Show, Serializable)
-
-data NewControllersSpecifications = NewControllersSpecifications with
-    unlockControllers : Optional ControllersSpecification
-      -- ^ Controllers that can unlock the lock.
-    substitutionControllers : Optional ControllersSpecification
-      -- ^ Controllers that can authorize a substitution.
-    vestingControllers : Optional ControllersSpecification
-      -- ^ Controllers that can control the disbursal of vesting funds via withdrawals, substitutions, or transfers.
   deriving (Eq, Show, Serializable)
 
 -- | Sets of controllers that can jointly authorize an action.
@@ -66,14 +52,3 @@ validateControllersSpecification controllerType (Some ControllersSpecification{c
 
 allControllers : ControllersSpecification -> Set.Set Party
 allControllers spec = Set.fromList $ concat spec.controllers
-
-controllersPendingVote : Map.Map Party a -> ControllersSpecification -> ControllersSpecification
-controllersPendingVote votes controllers =
-  makeControllersSpecification $ filter (not . null) $ fmap (filter (\p -> not $ Map.member p votes)) controllers.controllers
-
-proposersPendingWithdrawal : Map.Map Party Bool -> [Party] -> [[Party]]
-proposersPendingWithdrawal votes = fmap (\p -> [p]) . filter (\p -> Map.lookup p votes /= Some False)
-
-checkPendingControllers : ControllersSpecification -> [Party] -> Map.Map Party Bool -> Update ()
-checkPendingControllers controllers actors votes =
-  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", (controllersPendingVote votes controllers).controllers)

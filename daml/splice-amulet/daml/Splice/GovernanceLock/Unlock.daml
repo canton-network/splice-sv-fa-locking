@@ -42,7 +42,7 @@ template UnlockProposal
   with
     specification : UnlockProposalSpecification
     proposers : [Party]
-    votes : Map.Map Party Bool -- ^ Votes recorded so far.
+    votes : ProposalVotes -- ^ Votes recorded so far.
     requestedAt : Time -- ^ Time of the request to create the proposal.
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
     originalProposalCid : Optional (ContractId UnlockProposal)
@@ -144,8 +144,6 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
       proposers = List.dedupSort actors
       emptyVotes = Map.empty
 
-  checkPendingControllers (unlockProposalControllers specification) proposers emptyVotes
-
   proposal_create unlockProposal_operations ProposalUpdateArgs with
     proposalCid = None
     proposal = UnlockProposal with
@@ -170,13 +168,13 @@ governanceLock_executeUnlock ProposalExecuteArgs{..} = exercise merged.lockCid G
 
 unlockProposal_operations : ProposalOperations UnlockProposal GovernanceLock_DsoUnlockResult
 unlockProposal_operations = ProposalOperations with
-  makeView = unlockProposal_proposalView
+  mkView = unlockProposal_proposalView
   recreate = \votes originalProposalCid proposal ->
     let updatedProposal = proposal with votes; originalProposalCid
     in (, updatedProposal) <$> create updatedProposal
   execute = governanceLock_executeUnlock
-  completedResult = governanceLock_unlockResult_completed_transferInstructionResult
-  rejectedResult = None
+  mkCompletedResult = governanceLock_unlockResult_completed_transferInstructionResult
+  mkRejectedResult = None
 
 -- Instances
 ------------

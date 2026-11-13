@@ -214,7 +214,7 @@ governanceLock_transferFactoryV1_unlockImpl actors V1.TransferFactory_Transfer{t
     reason
     requestedAt = transfer.requestedAt
 
-  pure $ downcast $ proposalUpdateResult_transferInstructionResult unlockProposal_operations None result
+  pure $ downcast $ proposalUpdateResultToTransferInstructionResult unlockProposal_operations None result
 
 governanceLock_transferFactoryV1_transferLockImpl
   :  V1.TransferFactory_Transfer
@@ -253,7 +253,7 @@ governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{tr
         inputHoldingCids = outputTransfer.inputHoldingCids
         meta = governanceLockTransferMetadata pendingProposal
 
-  pure $ downcast $ proposalUpdateResult_transferInstructionResult governanceLockTransfer_operations None result
+  pure $ downcast $ proposalUpdateResultToTransferInstructionResult governanceLockTransfer_operations None result
 
 governanceLock_transferFactoryV1_withdrawVestedFundsImpl
   :  [Party]
@@ -275,7 +275,7 @@ governanceLock_transferFactoryV1_withdrawVestedFundsImpl actors V1.TransferFacto
     reason
     requestedAt = transfer.requestedAt
 
-  pure $ downcast $ proposalUpdateResult_transferInstructionResult withdrawVestedFunds_operations None result
+  pure $ downcast $ proposalUpdateResultToTransferInstructionResult withdrawVestedFunds_operations None result
 
 governanceLock_transferFactoryV1_substituteImpl
   :  Party
@@ -315,7 +315,7 @@ governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{
         inputHoldingCids = substitutionTransfer.inputHoldingCids
         meta = substitutionTransfer.meta
 
-  pure $ downcast $ proposalUpdateResult_transferInstructionResult governanceLockSubstitution_operations (toInterfaceContractId <$> changeCid) result
+  pure $ downcast $ proposalUpdateResultToTransferInstructionResult governanceLockSubstitution_operations (toInterfaceContractId <$> changeCid) result
 
 -- Parsers
 ----------

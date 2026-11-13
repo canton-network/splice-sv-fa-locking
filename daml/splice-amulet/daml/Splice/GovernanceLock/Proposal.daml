@@ -2,13 +2,17 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 module Splice.GovernanceLock.Proposal (
+  ProposalVote(..),
+  ProposalVotes,
   ProposalView(..),
   ProposalOperations(..),
+  controllersPendingVote,
+  proposersPendingWithdrawal,
   proposal_transferInstructionViewV1,
   proposal_transferInstructionViewV2,
   proposal_create,
   ProposalUpdateResult(..),
-  proposalUpdateResult_transferInstructionResult,
+  proposalUpdateResultToTransferInstructionResult,
   ProposalUpdateArgs(..),
   proposal_transferInstructionV1_acceptImpl,
   proposal_transferInstructionV2_acceptImpl,
@@ -39,20 +43,27 @@ import Splice.GovernanceLock.Controllers
 import Splice.TokenStandard.Utils hiding (require)
 import Splice.Util
 
--- | A view of a proposal to modify a GovernanceLock.
+-- | Vote recorded on a proposal.
+data ProposalVote = PV_Accept | PV_Reject
+  deriving (Eq, Show, Serializable)
+
+-- | Votes recorded on a proposal.
+type ProposalVotes = Map.Map Party ProposalVote
+
+-- | A view of a proposal to act on a GovernanceLock.
 data ProposalView t = ProposalView with
   lockKey : GovernanceLockKey
-    -- ^ The lock that the proposal relates to.
+    -- ^ The lock on which the proposal acts.
   proposers : [Party]
-    -- ^ The parties that proposed the proposal.
+    -- ^ The parties that proposed the action.
   controllers : ControllersSpecification
-    -- ^ Sets of parties that can jointly authorize actions on the proposal.
-  votes : Map.Map Party Bool
+    -- ^ Sets of parties that can jointly authorize the proposed action.
+  votes : ProposalVotes
     -- ^ Votes recorded so far.
   amount : Decimal
-    -- ^ The amount of the proposal.
+    -- ^ The amount of locked funds affected by the proposal.
   lockedAmulet : Optional (ContractId LockedAmulet)
-    -- ^ The holding that funds the proposal.
+    -- ^ The holding funding the proposal, if there is any.
   requestedAt : Time
     -- ^ Time of the request to create the proposal.
   expiresAt : Time
@@ -64,16 +75,30 @@ data ProposalView t = ProposalView with
 -- | Common operations used by proposal views, creation, update, and execution.
 -- `t` is the proposal template and `r` is the result of a completed/executed proposal.
 data ProposalOperations t r = ProposalOperations with
-  makeView : t -> ProposalView t
-  recreate : Map.Map Party Bool -> Optional (ContractId t) -> t -> Update (ContractId t, t)
+  mkView : t -> ProposalView t
+  recreate : ProposalVotes -> Optional (ContractId t) -> t -> Update (ContractId t, t)
   execute : ProposalExecuteArgs t -> Update r
-  completedResult : r -> V2.TransferInstructionResult
-  rejectedResult : Optional (ProposalUpdateArgs t -> Update V2.TransferInstructionResult)
+  mkCompletedResult : r -> V2.TransferInstructionResult
+  mkRejectedResult : Optional (ProposalUpdateArgs t -> Update V2.TransferInstructionResult)
+
+-- | Compute the controllers that have not yet voted on a proposal.
+controllersPendingVote : ProposalVotes -> ControllersSpecification -> ControllersSpecification
+controllersPendingVote votes controllers =
+  makeControllersSpecification $ filter (not . null) $ fmap (filter (\p -> not $ Map.member p votes)) controllers.controllers
+
+-- | Compute the proposers that have not withdrawn a proposal.
+proposersPendingWithdrawal : ProposalVotes -> [Party] -> [[Party]]
+proposersPendingWithdrawal votes = fmap (\p -> [p]) . filter (\p -> Map.lookup p votes /= Some PV_Reject)
+
+-- | Check that `actors` is a subset of a set of controllers that have not yet voted on a proposal.
+checkPendingControllers : ControllersSpecification -> [Party] -> ProposalVotes -> Update ()
+checkPendingControllers controllers actors votes =
+  require' ("actors", actors) (oneOfR isSubsetOfR) ("controllers", (controllersPendingVote votes controllers).controllers)
 
 -- | View of a proposal as a TSv1 TransferInstructionView.
 proposal_transferInstructionViewV1 : HasToInterface t V1.TransferInstruction => ProposalOperations t r -> Text -> Party -> t -> V1.TransferInstructionView
 proposal_transferInstructionViewV1 ops type_ receiver proposal =
-  let ProposalView{..} = ops.makeView proposal
+  let ProposalView{..} = ops.mkView proposal
   in V1.TransferInstructionView with
     originalInstructionCid = toInterfaceContractId <$> originalProposalCid
     transfer = V1.Transfer with
@@ -98,7 +123,7 @@ proposal_transferInstructionViewV1 ops type_ receiver proposal =
 -- | View of a proposal as a TSv2 TransferInstructionView.
 proposal_transferInstructionViewV2 : (HasToInterface t V1.TransferInstruction, HasToInterface t V2.TransferInstruction) => ProposalOperations t r -> t -> V2.TransferInstructionView
 proposal_transferInstructionViewV2 ops proposal =
-  let ProposalView{..} = ops.makeView proposal
+  let ProposalView{..} = ops.mkView proposal
       v1View = view @V1.TransferInstruction (toInterface proposal)
   in V2.TransferInstructionView with
     originalInstructionCid = toInterfaceContractId <$> originalProposalCid
@@ -113,9 +138,8 @@ proposal_transferInstructionViewV2 ops proposal =
 -- | The resulting state of a proposal after an update to its votes.
 data ProposalVoteResult
   = PVR_Pending with
-      pendingVotes : Map.Map Party Bool
-  | PVR_Accepted with
-      acceptors : [Party]
+      pendingVotes : ProposalVotes
+  | PVR_Accepted
   | PVR_Rejected with
       rejectors : [Party]
 
@@ -127,24 +151,24 @@ data ProposalVoteResult
 -- A proposal is considered accepted when all controllers from any controllers set have accepted it.
 --
 -- Otherwise the proposal is still pending.
-proposalVoteResult : ControllersSpecification -> [Party] -> Map.Map Party Bool -> ProposalVoteResult
+proposalVoteResult : ControllersSpecification -> [Party] -> ProposalVotes -> ProposalVoteResult
 proposalVoteResult controllers proposers votes =
   let
-    checkVote : Bool -> Party -> Bool
+    checkVote : ProposalVote -> Party -> Bool
     checkVote wanted party = Map.lookup party votes == Some wanted
 
-    allProposersRejected = all (checkVote False) proposers
-    rejectedControllers = forA controllers.controllers (NonEmpty.nonEmpty . filter (checkVote False))
-    acceptedControllers = find (all (checkVote True)) controllers.controllers
+    allProposersRejected = all (checkVote PV_Reject) proposers
+    rejectedControllers = forA controllers.controllers (NonEmpty.nonEmpty . filter (checkVote PV_Reject))
+    acceptedControllers = find (all (checkVote PV_Accept)) controllers.controllers
   in
     case (allProposersRejected, rejectedControllers, acceptedControllers) of
       (True, _, _) -> PVR_Rejected with rejectors = proposers
       (False, Some rejectors, _) -> PVR_Rejected with rejectors = concatMap NonEmpty.toList rejectors
-      (False, None, Some acceptors) -> PVR_Accepted with acceptors
+      (False, None, Some _) -> PVR_Accepted
       (False, None, None) -> PVR_Pending with pendingVotes = votes
 
 -- | Updates votes to record the action taken by the given actor.
-updateProposalVote : ControllersSpecification -> Bool -> Party -> Map.Map Party Bool -> Update (Map.Map Party Bool)
+updateProposalVote : ControllersSpecification -> ProposalVote -> Party -> ProposalVotes -> Update (ProposalVotes)
 updateProposalVote controllers vote actor votes = do
   require' ("actor", actor) isMemberR ("controllers", concat controllers.controllers)
   let updated = Map.insert actor vote votes
@@ -152,7 +176,7 @@ updateProposalVote controllers vote actor votes = do
   pure updated
 
 -- | Updates votes to record the action taken by the given actors, and checks the state of the updated votes.
-updateProposalVotes : ControllersSpecification -> [Party] -> Bool -> [Party] -> Map.Map Party Bool -> Update ProposalVoteResult
+updateProposalVotes : ControllersSpecification -> [Party] -> ProposalVote -> [Party] -> ProposalVotes -> Update ProposalVoteResult
 updateProposalVotes controllers proposers vote actors votes = do
   updatedVotes <- foldrA (updateProposalVote controllers vote) votes actors
   pure $ proposalVoteResult controllers proposers updatedVotes
@@ -179,24 +203,24 @@ data ProposalExecuteArgs t = ProposalExecuteArgs with
   reason : Text
 
 -- | Convert a ProposalUpdateResult to a TSv2 TransferInstructionResult.
-proposalUpdateResult_transferInstructionResult
+proposalUpdateResultToTransferInstructionResult
   :  HasToInterface t V2.TransferInstruction
   => ProposalOperations t r
   -> Optional (ContractId Holding)
   -> ProposalUpdateResult t r
   -> V2.TransferInstructionResult
-proposalUpdateResult_transferInstructionResult ProposalOperations{completedResult} senderChangeCid result = do
+proposalUpdateResultToTransferInstructionResult ops senderChangeCid result = do
   case result of
     Left (pendingProposal, _) -> V2.TransferInstructionResult with
       output = V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId pendingProposal
       senderChangeCids = optionalToList senderChangeCid
       meta = emptyMetadata
-    Right result -> completedResult result
+    Right result -> ops.mkCompletedResult result
 
--- | Make a set of ProposalUpdateArgs; used on accept, reject, and withdraw.
+-- | Make an instance of ProposalUpdateArgs; used on accept, reject, and withdraw.
 makeProposalUpdateArgs : ProposalOperations t r -> ContractId t -> t -> [Party] -> ExtraArgs -> ProposalUpdateArgs t
 makeProposalUpdateArgs ops proposalCid proposal actors extraArgs =
-  let view = ops.makeView proposal
+  let view = ops.mkView proposal
   in ProposalUpdateArgs with
     proposalCid = Some proposalCid
     proposal
@@ -206,12 +230,18 @@ makeProposalUpdateArgs ops proposalCid proposal actors extraArgs =
 
 -- | Create a proposal.
 --
--- Fails if the updated proposal is rejected, as this is an unexpected state.
--- The proposal should either be accepted, if `actors` is a superset of one of the controller sets,
--- or pending, if `actors` is a subset of one of the controller sets. Callers must validate this.
+-- The checks here prove that the proposal is created with no votes, and that `actors` is a subset or matching set
+-- of one of the controller sets.
+--
+-- The proposal update therefore fails if the updated proposal is rejected, as this is an unexpected state.
+-- The actors' votes are immediately applied, so the proposal should either be accepted, if `actors` is a matching set,
+-- or pending, if `actors` is a subset of one of the controller sets.
 proposal_create : ProposalOperations t r -> ProposalUpdateArgs t -> Update (ProposalUpdateResult t r)
-proposal_create ops args =
-  proposal_update' ops identity (\rejectors -> fail ("Unexpected proposal rejection by rejectors: " <> show rejectors)) args True
+proposal_create ops args@ProposalUpdateArgs{..} = do
+  let view = ops.mkView proposal
+  requireMatchExpected ("proposal votes", view.votes) Map.empty
+  checkPendingControllers view.controllers actors view.votes
+  proposal_update' ops identity (\rejectors -> fail ("Unexpected proposal rejection by rejectors: " <> show rejectors)) args PV_Accept
 
 -- | Update a proposal and handle its updated voting state.
 --
@@ -228,21 +258,21 @@ proposal_update'
   -> (ProposalUpdateResult t r -> o)
   -> ([Party] -> Update o)
   -> ProposalUpdateArgs t
-  -> Bool
+  -> ProposalVote
   -> Update o
-proposal_update' ProposalOperations{..} onPendingOrAccepted onRejected ProposalUpdateArgs{..} vote = do
-  let view = makeView proposal
+proposal_update' ops onPendingOrAccepted onRejected ProposalUpdateArgs{..} vote = do
+  let view = ops.mkView proposal
   result <- updateProposalVotes view.controllers view.proposers vote actors view.votes
   case result of
     PVR_Pending{pendingVotes} ->
       onPendingOrAccepted . Left <$>
-        recreate pendingVotes (optional proposalCid Some view.originalProposalCid) proposal
+        ops.recreate pendingVotes (optional proposalCid Some view.originalProposalCid) proposal
 
-    PVR_Accepted{} -> do
+    PVR_Accepted -> do
       assertWithinDeadline "expiresAt" view.expiresAt
       (context, state) <- getContext
       merged <- fetchAndMergeGovernanceLocks view.lockKey context state reason
-      onPendingOrAccepted . Right <$> execute ProposalExecuteArgs with
+      onPendingOrAccepted . Right <$> ops.execute ProposalExecuteArgs with
         merged
         proposalCid
         proposal
@@ -250,13 +280,13 @@ proposal_update' ProposalOperations{..} onPendingOrAccepted onRejected ProposalU
         state
         reason
 
-    PVR_Rejected{rejectors} -> onRejected rejectors
+    PVR_Rejected rejectors -> onRejected rejectors
 
 -- | Update a proposal, returning a TSv2 TransferInstructionResult.
-proposal_update : HasToInterface t V2.TransferInstruction => ProposalOperations t r -> ProposalUpdateArgs t -> Bool -> Update V2.TransferInstructionResult
+proposal_update : HasToInterface t V2.TransferInstruction => ProposalOperations t r -> ProposalUpdateArgs t -> ProposalVote -> Update V2.TransferInstructionResult
 proposal_update ops args =
-  proposal_update' ops (proposalUpdateResult_transferInstructionResult ops None)
-    (\_ -> case ops.rejectedResult of
+  proposal_update' ops (proposalUpdateResultToTransferInstructionResult ops None)
+    (\_rejectors -> case ops.mkRejectedResult of
       Some f -> f args
       None -> pure V2.TransferInstructionResult with
         output = V2.TransferInstructionResult_Failed
@@ -267,10 +297,10 @@ proposal_update ops args =
 -- | Update a proposal to record that `actors` have accepted it.
 proposal_accept : HasToInterface t V2.TransferInstruction => ProposalOperations t r -> ContractId t -> t -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
 proposal_accept ops proposalCid proposal actors extraArgs = do
-  let view = ops.makeView proposal
+  let view = ops.mkView proposal
   checkPendingControllers view.controllers actors view.votes
   assertWithinDeadline "expiresAt" view.expiresAt
-  proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) True
+  proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) PV_Accept
 
 proposal_transferInstructionV1_acceptImpl
   :  (HasToInterface t V2.TransferInstruction, HasFromInterface t V1.TransferInstruction)
@@ -293,9 +323,9 @@ proposal_transferInstructionV2_acceptImpl ops proposal cid V2.TransferInstructio
 -- | Update a proposal to record that `actors` have rejected it.
 proposal_reject : HasToInterface t V2.TransferInstruction => ProposalOperations t r -> ContractId t -> t -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
 proposal_reject ops proposalCid proposal actors extraArgs = do
-  let view = ops.makeView proposal
+  let view = ops.mkView proposal
   checkPendingControllers view.controllers actors view.votes
-  proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) False
+  proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) PV_Reject
 
 proposal_transferInstructionV1_rejectImpl
   :  (HasToInterface t V2.TransferInstruction, HasFromInterface t V1.TransferInstruction)
@@ -318,9 +348,9 @@ proposal_transferInstructionV2_rejectImpl ops proposal cid V2.TransferInstructio
 -- | Update a proposal to record that `actors` have withdrawn it.
 proposal_withdraw : HasToInterface t V2.TransferInstruction => ProposalOperations t r -> ContractId t -> t -> [Party] -> ExtraArgs -> Update V2.TransferInstructionResult
 proposal_withdraw ops proposalCid proposal actors extraArgs = do
-  let view = ops.makeView proposal
+  let view = ops.mkView proposal
   require' ("actors", actors) isSubsetOfR ("proposers", view.proposers)
-  proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) False
+  proposal_update ops (makeProposalUpdateArgs ops proposalCid proposal actors extraArgs) PV_Reject
 
 proposal_transferInstructionV1_withdrawImpl
   :  (HasToInterface t V2.TransferInstruction, HasFromInterface t V1.TransferInstruction, HasToInterface t V1.TransferInstruction)
