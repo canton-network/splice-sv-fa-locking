@@ -28,7 +28,7 @@ module Splice.GovernanceLock.Request (
   governanceLockRequestTSv1Parser,
 ) where
 
-import Prelude hiding (forA)
+import Prelude hiding (forA, mapA)
 import DA.Action (unless)
 import DA.Assert
 import DA.Date (Month(Jan), date)
@@ -37,7 +37,7 @@ import DA.Optional
 import DA.Text qualified as Text
 import DA.TextMap qualified as TextMap
 import DA.Time
-import DA.Traversable (forA)
+import DA.Traversable (forA, mapA)
 import DA.Validation
 
 import Splice.Amulet.TokenApiUtils
@@ -47,28 +47,37 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
+import Splice.GovernanceLock.Unlock
+import Splice.GovernanceLock.Withdraw
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
-import Splice.Util
 
 data GovernanceLockRequest
   = GLR_CreateGovernanceLock with
       fullSpecification : FullLockSpecification
   | GLR_UnlockGovernanceLock with
-      fullSpecification : FullLockSpecification
+      target : GovernanceLockKey
       unlockAmount : Decimal
       vestingStartTime : Optional Time
         -- ^ `None` for provisional featured app locks, as they do not vest.
   | GLR_TransferLock with
       specification : GovernanceLockSpecification
       newOwner : Party
+      newUnlockControllers : Optional ControllersSpecification
+      newSubstitutionControllers : Optional ControllersSpecification
+      newVestingControllers : Optional ControllersSpecification
       transferAmount : Decimal
   | GLR_WithdrawVestingLock with
-      vestingSpecification : VestingLockSpecification
+      target : GovernanceLockKey
       vestedUntilTime : Time
   | GLR_SubstituteLock with
       target : GovernanceLockKey
+      newUnlockControllers : Optional ControllersSpecification
+      newSubstitutionControllers : Optional ControllersSpecification
+      newVestingControllers : Optional ControllersSpecification
   deriving (Show)
 
 data GovernanceLockRequestTag
@@ -133,35 +142,32 @@ governanceLock_transferFactoryV1_transferImpl
   -> V1.TransferFactory_Transfer
   -> Update V1.TransferInstructionResult
 governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_Transfer{expectedAdmin, transfer, extraArgs} = do
-  checkActors actors [[transfer.sender]]
-
-  -- validate call to factory and retrieve context
   requireMatchExpected ("admin", expectedAdmin) dso
   requireMatchExpected ("instrumentId", transfer.instrumentId) (amuletInstrumentId dso)
   assertInPast24Hours "transfer.requestedAt" transfer.requestedAt
   assertWithinDeadline "transfer.executeBefore" transfer.executeBefore
 
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
-  request <- parseGovernanceLockRequestTSv1 dso transfer.receiver state.governanceLockConfig transfer.meta
+  request <- parseGovernanceLockRequestTSv1 dso transfer.sender transfer.receiver state.governanceLockConfig transfer.meta
 
   case request of
-    GLR_CreateGovernanceLock{fullSpecification} ->
+    GLR_CreateGovernanceLock{fullSpecification} -> do
+      checkActors actors [[transfer.sender]]
       governanceLock_transferFactoryV1_lockImpl dso arg fullSpecification
-    GLR_UnlockGovernanceLock{fullSpecification, unlockAmount, vestingStartTime} ->
-      governanceLock_transferFactoryV1_unlockImpl dso arg fullSpecification unlockAmount vestingStartTime context state
-    GLR_TransferLock{specification,  newOwner, transferAmount} ->
-      governanceLock_transferFactoryV1_transferLockImpl
-        arg
-        GovernanceLockKey with
-          dso
-          owner = transfer.sender
-          specification
-        newOwner
-        transferAmount
-    GLR_WithdrawVestingLock{vestingSpecification, vestedUntilTime} ->
-      governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso arg vestingSpecification vestedUntilTime context state
-    GLR_SubstituteLock{target} ->
-      governanceLock_transferFactoryV1_substituteImpl dso arg target context state
+    GLR_UnlockGovernanceLock{target, unlockAmount, vestingStartTime} ->
+      governanceLock_transferFactoryV1_unlockImpl actors arg target unlockAmount vestingStartTime context state
+    GLR_TransferLock{specification,  newOwner, newUnlockControllers, newSubstitutionControllers, newVestingControllers, transferAmount} -> do
+      checkActors actors [[transfer.sender]]
+      let source = GovernanceLockKey with
+            dso
+            owner = transfer.sender
+            specification
+      governanceLock_transferFactoryV1_transferLockImpl arg source newOwner newUnlockControllers newSubstitutionControllers newVestingControllers transferAmount context state
+    GLR_WithdrawVestingLock{target, vestedUntilTime} ->
+      governanceLock_transferFactoryV1_withdrawVestedFundsImpl actors arg target vestedUntilTime context state
+    GLR_SubstituteLock{target, newUnlockControllers, newSubstitutionControllers, newVestingControllers} -> do
+      checkActors actors [[transfer.sender]]
+      governanceLock_transferFactoryV1_substituteImpl dso arg target newUnlockControllers newSubstitutionControllers newVestingControllers context state
 
 governanceLock_transferFactoryV1_lockImpl
   :  Party
@@ -187,121 +193,129 @@ governanceLock_transferFactoryV1_lockImpl dso V1.TransferFactory_Transfer{transf
     meta = emptyMetadata
 
 governanceLock_transferFactoryV1_unlockImpl
-  :  Party
+  :  [Party]
   -> V1.TransferFactory_Transfer
-  -> FullLockSpecification
+  -> GovernanceLockKey
   -> Decimal
   -> Optional Time
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_unlockImpl dso V1.TransferFactory_Transfer{transfer} specification unlockAmount vestingStartTime context state = do
-  let key = GovernanceLockKey with
-        dso
-        owner = transfer.sender
-        specification = GLS_FullLock specification
-      reason = reasonFromMeta transfer.meta
-  FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks key context state reason
-  potentiallyUnsafeArchive lockCid
-  result <- governanceLock_unlockImpl lockCid lock unlockAmount vestingStartTime [transfer.sender] context state reason
-  pure V1.TransferInstructionResult with
-    output = case result.vestingLock of
-      Some vestingLock -> V1.TransferInstructionResult_Pending with
-        transferInstructionCid = toInterfaceContractId vestingLock
-      None -> V1.TransferInstructionResult_Completed with
-        receiverHoldingCids = []
-    senderChangeCids = optionalToList $ fmap toInterfaceContractId result.unlockedAmulet
-    meta = emptyMetadata
+governanceLock_transferFactoryV1_unlockImpl actors V1.TransferFactory_Transfer{transfer} target unlockAmount optVestingStartTime context state = do
+  let reason = reasonFromMeta transfer.meta
+  merged <- fetchAndMergeGovernanceLocks target context state reason
+  result <- governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs with
+    merged
+    unlockAmount
+    optVestingStartTime
+    actors
+    context
+    state
+    reason
+    requestedAt = transfer.requestedAt
+
+  pure $ downcast $ proposalUpdateResultToTransferInstructionResult unlockProposal_operations None result
 
 governanceLock_transferFactoryV1_transferLockImpl
   :  V1.TransferFactory_Transfer
   -> GovernanceLockKey
   -> Party
+  -> Optional ControllersSpecification
+  -> Optional ControllersSpecification
+  -> Optional ControllersSpecification
   -> Decimal
+  -> ExternalPartyTransferContext
+  -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{transfer = inputTransfer, extraArgs} source newOwner transferAmount = do
-  (transferCid, transfer) <- createGovernanceLockTransfer LockTransferArgs with
+governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{transfer = inputTransfer} source newOwner newUnlockControllers newSubstitutionControllers newVestingControllers transferAmount context state = do
+  result <- governanceLock_proposeTransfer GovernanceLockProposeTransferArgs with
     source
     receiver = newOwner
+    newUnlockControllers
+    newSubstitutionControllers
+    newVestingControllers
     amount = transferAmount
+    context
+    state
+    reason = reasonFromMeta inputTransfer.meta
     requestedAt = inputTransfer.requestedAt
-    extraArgs
 
-  -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
-  let outputTransfer = (view $ toInterface @V1.TransferInstruction transfer).transfer
-  requireMatchExpected ("transfer", outputTransfer) inputTransfer with
-    -- The receiver of the transfer is the new owner, not `lockManagerParty`
-    receiver = newOwner
-    amount = outputTransfer.amount
-    executeBefore = outputTransfer.executeBefore
-    inputHoldingCids = outputTransfer.inputHoldingCids
-    meta = transferGovernanceLockMetadata source.specification
+  case result of
+    Right _ -> pure ()
+    Left (_, pendingProposal) -> do
+      -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
+      let outputTransfer = (view $ toInterface @V1.TransferInstruction pendingProposal).transfer
+      requireMatchExpected ("transfer", outputTransfer) inputTransfer with
+        -- The receiver of the transfer is the new owner, not `lockManagerParty`
+        receiver = newOwner
+        amount = outputTransfer.amount
+        executeBefore = outputTransfer.executeBefore
+        inputHoldingCids = outputTransfer.inputHoldingCids
+        meta = governanceLockTransferMetadata pendingProposal
 
-  pure V1.TransferInstructionResult with
-    output = V1.TransferInstructionResult_Pending with
-      transferInstructionCid = toInterfaceContractId transferCid
-    senderChangeCids = []
-    meta = emptyMetadata
+  pure $ downcast $ proposalUpdateResultToTransferInstructionResult governanceLockTransfer_operations None result
 
 governanceLock_transferFactoryV1_withdrawVestedFundsImpl
-  :  Party
+  :  [Party]
   -> V1.TransferFactory_Transfer
-  -> VestingLockSpecification
+  -> GovernanceLockKey
   -> Time
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso V1.TransferFactory_Transfer{..} specification vestedUntilTime context state = do
-  let key = GovernanceLockKey with
-        dso
-        owner = transfer.sender
-        specification = GLS_VestingLock specification
-      reason = reasonFromMeta transfer.meta
-  FetchAndMergeLocksResult{lockCid, lock} <- fetchAndMergeGovernanceLocks key context state reason
-  potentiallyUnsafeArchive lockCid
-  result <- vestingLock_withdrawImpl lockCid lock vestedUntilTime [transfer.sender] context reason
-  pure V1.TransferInstructionResult with
-    output = case result.vestingLock of
-      Some vestingLock -> V1.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId vestingLock
-      None -> V1.TransferInstructionResult_Completed with receiverHoldingCids = []
-    senderChangeCids = [result.vested]
-    meta = emptyMetadata
+governanceLock_transferFactoryV1_withdrawVestedFundsImpl actors V1.TransferFactory_Transfer{..} target vestedUntilTime context state = do
+  let reason = reasonFromMeta transfer.meta
+  merged <- fetchAndMergeGovernanceLocks target context state reason
+  result <- vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs with
+    merged
+    vestedUntilTime
+    actors
+    context
+    state
+    reason
+    requestedAt = transfer.requestedAt
+
+  pure $ downcast $ proposalUpdateResultToTransferInstructionResult withdrawVestedFunds_operations None result
 
 governanceLock_transferFactoryV1_substituteImpl
   :  Party
   -> V1.TransferFactory_Transfer
   -> GovernanceLockKey
+  -> Optional ControllersSpecification
+  -> Optional ControllersSpecification
+  -> Optional ControllersSpecification
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{..} target context state = do
-  (substitutionCid, substitution, changeCid) <- createSubstitution
-    CreateSubstitutionArgs with
-      dso
-      target
-      owner = transfer.sender
-      amount = transfer.amount
-      inputHoldingCids = transfer.inputHoldingCids
-      extraArgs
-      requestedAt = transfer.requestedAt
-      reason = reasonFromMeta transfer.meta
-      context
-      state
+governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{..} target newUnlockControllers newSubstitutionControllers newVestingControllers context state = do
+  (result, changeCid) <- governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs with
+    dso
+    target
+    owner = transfer.sender
+    newUnlockControllers
+    newSubstitutionControllers
+    newVestingControllers
+    amount = transfer.amount
+    inputHoldingCids = transfer.inputHoldingCids
+    extraArgs
+    requestedAt = transfer.requestedAt
+    reason = reasonFromMeta transfer.meta
+    context
+    state
 
-  -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
-  let substitutionTransfer = (view substitution).transfer
-  requireMatchExpected ("substitution transfer", substitutionTransfer) transfer with
-    -- The receiver of the substitution is the owner of the target lock, not `lockManagerParty`
-    receiver = substitutionTransfer.receiver
-    executeBefore = substitutionTransfer.executeBefore
-    inputHoldingCids = substitutionTransfer.inputHoldingCids
-    meta = substitutionTransfer.meta
+  case result of
+    Right _ -> pure ()
+    Left (_, substitution) -> do
+      -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
+      let substitutionTransfer = (view $ toInterface @V1.TransferInstruction substitution).transfer
+      requireMatchExpected ("substitution transfer", substitutionTransfer) transfer with
+        -- The receiver of the substitution is the owner of the target lock, not `lockManagerParty`
+        receiver = substitutionTransfer.receiver
+        executeBefore = substitutionTransfer.executeBefore
+        inputHoldingCids = substitutionTransfer.inputHoldingCids
+        meta = substitutionTransfer.meta
 
-  pure V1.TransferInstructionResult with
-    output = V1.TransferInstructionResult_Pending with
-      transferInstructionCid = substitutionCid
-    senderChangeCids = optionalToList $ toInterfaceContractId <$> changeCid
-    meta = emptyMetadata
+  pure $ downcast $ proposalUpdateResultToTransferInstructionResult governanceLockSubstitution_operations (toInterfaceContractId <$> changeCid) result
 
 -- Parsers
 ----------
@@ -330,6 +344,7 @@ governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{
 -- `join ((\a b c -> pure . f $ E) <$> pa <*> pb <*> pc)` coming from
 -- `do { pa; pb; pc; pure . f $ E}` where `f` is itself pure.
 data Parser i o = Parser (i -> Validation Text o)
+type ControllersSpecificationParser = Parser Metadata (Optional ControllersSpecification)
 
 runParser : Parser i o -> i -> Validation Text o
 runParser (Parser f) input = f input
@@ -410,6 +425,9 @@ partyFromTextParser key party = validationParser $ (partyFromText party) <?> inv
 partyFromMetadataParser : Text -> Parser Metadata Party
 partyFromMetadataParser key = requiredMetadataParser key >>= partyFromTextParser key
 
+optPartyFromMetadataParser : Text -> Parser Metadata (Optional Party)
+optPartyFromMetadataParser key = optionalMetadataParser key >>= mapA (partyFromTextParser key)
+
 governanceLockTagParser : Parser Metadata GovernanceLockTag
 governanceLockTagParser = requiredMetadataParser lockKindMemoKey >>= \tag ->
   validationParser $ (governanceLockTagFromText tag) <?> invalidMemoValueMessage "value" lockKindMemoKey tag
@@ -431,18 +449,44 @@ governanceLockMetadataParser = do
 parseGovernanceLockMetadata : CanAssert m => Metadata -> m Metadata
 parseGovernanceLockMetadata = assertParsed governanceLockMetadataParser
 
+controllersParser : Text -> ControllersSpecificationParser
+controllersParser key =
+    optionalMetadataParser key >>= mapA parser
+  where
+    parser : Text -> Parser Metadata ControllersSpecification
+    parser t = validationParser $ either (invalid . errorInMemoKeyMessage key) ok (parseControllersSpecification t)
+
+vestingControllersParser : ControllersSpecificationParser
+vestingControllersParser = controllersParser vestingControllersMemoKey
+
+substitutionControllersParser : ControllersSpecificationParser
+substitutionControllersParser = controllersParser substitutionControllersMemoKey
+
+unlockControllersParser : ControllersSpecificationParser
+unlockControllersParser = controllersParser unlockControllersMemoKey
+
+newControllersParser : GovernanceLockSpecification -> Parser Metadata (Optional ControllersSpecification, Optional ControllersSpecification, Optional ControllersSpecification)
+newControllersParser (GLS_FullLock _) = do
+  (,,) <$>
+    controllersParser newUnlockControllersMemoKey <*>
+    controllersParser newSubstitutionControllersMemoKey <*>
+    controllersParser newVestingControllersMemoKey
+newControllersParser (GLS_VestingLock _) = do
+  (None, None,) <$> controllersParser newVestingControllersMemoKey
+
 fullLockSpecificationParser : Parser Metadata FullLockSpecification
-fullLockSpecificationParser = FullLockSpecification <$> governanceLockKindParser
+fullLockSpecificationParser = FullLockSpecification <$>
+  governanceLockKindParser <*>
+  unlockControllersParser <*>
+  substitutionControllersParser <*>
+  vestingControllersParser
 
 vestingLockSpecificationParser : Parser Metadata VestingLockSpecification
-vestingLockSpecificationParser = do
-  kind <- governanceLockKindParser
-  vestingPeriod <- vestingDurationParser
-  endTime <- vestingEndTimeParser
-  pure $ VestingLockSpecification with
-    kind
-    vestingPeriod
-    endTime
+vestingLockSpecificationParser = VestingLockSpecification <$>
+  governanceLockKindParser <*>
+  vestingDurationParser <*>
+  vestingEndTimeParser <*>
+  vestingControllersParser
 
 governanceLockSpecificationParser : LockState -> Parser Metadata GovernanceLockSpecification
 governanceLockSpecificationParser LS_Locked = GLS_FullLock <$> fullLockSpecificationParser
@@ -452,16 +496,31 @@ glr_createGovernanceLock_parser : Parser Metadata GovernanceLockRequest
 glr_createGovernanceLock_parser =
   GLR_CreateGovernanceLock <$> fullLockSpecificationParser
 
-glr_unlockGovernanceLock_parser : Optional GovernanceLockConfig -> Parser Metadata GovernanceLockRequest
-glr_unlockGovernanceLock_parser config =
-  liftA2 (,) fullLockSpecificationParser unlockAmountParser >>= \(spec, unlockAmount) ->
-    GLR_UnlockGovernanceLock spec unlockAmount <$> vestingStartTimeParser spec.kind config
+glr_unlockGovernanceLock_parser : Party -> Party -> Optional GovernanceLockConfig -> Parser Metadata GovernanceLockRequest
+glr_unlockGovernanceLock_parser dso sender config = do
+  specification <- fullLockSpecificationParser
+  unlockAmount <- unlockAmountParser
+  owner <- fromOptional sender <$> optTargetLockOwnerParser specification.unlockControllers
+  vestingStartTime <- vestingStartTimeParser specification.kind config
+  pure GLR_UnlockGovernanceLock with
+    target = GovernanceLockKey with
+      dso
+      owner
+      specification = GLS_FullLock specification
+    unlockAmount
+    vestingStartTime
 
-glr_withdrawVestingLock_parser : Parser Metadata GovernanceLockRequest
-glr_withdrawVestingLock_parser =
-  GLR_WithdrawVestingLock <$>
-    vestingLockSpecificationParser <*>
-    vestedUntilTimeParser
+glr_withdrawVestingLock_parser : Party -> Party -> Parser Metadata GovernanceLockRequest
+glr_withdrawVestingLock_parser dso sender = do
+  specification <- vestingLockSpecificationParser
+  owner <- fromOptional sender <$> optTargetLockOwnerParser specification.vestingControllers
+  vestedUntilTime <- vestedUntilTimeParser
+  pure GLR_WithdrawVestingLock with
+    target = GovernanceLockKey with
+      dso
+      owner
+      specification = GLS_VestingLock specification
+    vestedUntilTime
 
 lockStateParser : Parser Metadata LockState
 lockStateParser = optionalMetadataParser lockStatusMemoKey >>= \case
@@ -475,20 +534,29 @@ glr_transferLock_parser = do
   specification <- governanceLockSpecificationParser targetState
   newOwner <- partyFromMetadataParser newLockOwnerMemoKey
   transferAmount <- transferAmountParser
+  (newUnlockControllers, newSubstitutionControllers, newVestingControllers) <- newControllersParser specification
   pure GLR_TransferLock with
     specification
     newOwner
+    newUnlockControllers
+    newSubstitutionControllers
+    newVestingControllers
     transferAmount
 
 glr_substituteLock_parser : Party -> Parser Metadata GovernanceLockRequest
 glr_substituteLock_parser dso = do
   targetState <- lockStateParser
-  targetOwner <- partyFromMetadataParser targetLockOwnerMemoKey
+  targetOwner <- targetLockOwnerParser
   specification <- governanceLockSpecificationParser targetState
-  pure $ GLR_SubstituteLock GovernanceLockKey with
-    dso
-    owner = targetOwner
-    specification
+  (newUnlockControllers, newSubstitutionControllers, newVestingControllers) <- newControllersParser specification
+  pure GLR_SubstituteLock with
+    target = GovernanceLockKey with
+      dso
+      owner = targetOwner
+      specification
+    newUnlockControllers
+    newSubstitutionControllers
+    newVestingControllers
 
 governanceLockRequestTagParser : Parser Metadata GovernanceLockRequestTag
 governanceLockRequestTagParser = do
@@ -497,22 +565,29 @@ governanceLockRequestTagParser = do
     Some tag -> pure tag
     None -> assertFail $ "Invalid request: '" <> request <> "'"
 
-governanceLockRequestTSv1Parser : Party -> Party -> Optional GovernanceLockConfig -> Parser Metadata GovernanceLockRequest
-governanceLockRequestTSv1Parser dso receiver config = governanceLockRequestTagParser >>= (\tag -> checkReceiverIsLockManager *> case tag of
+governanceLockRequestTSv1Parser : Party -> Party -> Party -> Optional GovernanceLockConfig -> Parser Metadata GovernanceLockRequest
+governanceLockRequestTSv1Parser dso sender receiver config = governanceLockRequestTagParser >>= (\tag -> checkReceiverIsLockManager *> case tag of
     GLRT_CreateLock -> do glr_createGovernanceLock_parser
-    GLRT_UnlockAndStartVesting -> glr_unlockGovernanceLock_parser config
+    GLRT_UnlockAndStartVesting -> glr_unlockGovernanceLock_parser dso sender config
     GLRT_TransferLock -> glr_transferLock_parser
-    GLRT_WithdrawVestedFunds -> glr_withdrawVestingLock_parser
+    GLRT_WithdrawVestedFunds -> glr_withdrawVestingLock_parser dso sender
     GLRT_SubstituteLock -> glr_substituteLock_parser dso)
   where
     checkReceiverIsLockManager : Parser Metadata ()
     checkReceiverIsLockManager =
       unless (receiver == lockManagerParty) $ assertFail ("Invalid receiver: '" <> show receiver <> "'")
 
-parseGovernanceLockRequestTSv1 : CanAssert m => Party -> Party -> Optional GovernanceLockConfig -> Metadata -> m GovernanceLockRequest
-parseGovernanceLockRequestTSv1 dso receiver config rawMeta = do
+parseGovernanceLockRequestTSv1 : CanAssert m => Party -> Party -> Party -> Optional GovernanceLockConfig -> Metadata -> m GovernanceLockRequest
+parseGovernanceLockRequestTSv1 dso sender receiver config rawMeta = do
   meta <- parseGovernanceLockMetadata rawMeta
-  assertParsed (governanceLockRequestTSv1Parser dso receiver config) meta
+  assertParsed (governanceLockRequestTSv1Parser dso sender receiver config) meta
+
+targetLockOwnerParser : Parser Metadata Party
+targetLockOwnerParser = partyFromMetadataParser targetLockOwnerMemoKey
+
+optTargetLockOwnerParser : Optional ControllersSpecification -> Parser Metadata (Optional Party)
+optTargetLockOwnerParser (Some _) = Some <$> targetLockOwnerParser
+optTargetLockOwnerParser None = optPartyFromMetadataParser targetLockOwnerMemoKey
 
 amountParser : Text -> Parser Metadata Decimal
 amountParser key = requiredMetadataParser key >>= \t ->

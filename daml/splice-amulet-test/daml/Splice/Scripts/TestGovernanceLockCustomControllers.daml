@@ -1,0 +1,634 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Tests for governance locks with custom controllers (CIP-0127).
+--
+-- A custom controller (charlie) can only vote through Token Standard v2. The scenarios that take
+-- `GovernanceLockOperations` use it to create proposals and for the votes of the owner or receiver,
+-- and `tsv2Operations` for the votes of charlie.
+module Splice.Scripts.TestGovernanceLockCustomControllers where
+
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import DA.Map qualified as Map
+import DA.Optional (isSome)
+import DA.Time
+
+import Daml.Script
+import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal
+import Splice.GovernanceLock.Request (GovernanceLockRequestTag(..), missingMemoKeyMessage)
+import Splice.GovernanceLock.Substitution
+import Splice.GovernanceLock.Transfer
+import Splice.GovernanceLock.Unlock
+import Splice.GovernanceLock.Withdraw
+import Splice.Scripts.TestGovernanceLocks
+import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
+import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
+import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
+
+-- Common setup
+---------------
+
+customControllersKind : GovernanceLockKind
+customControllersKind = GLK_SuperValidatorRightsOwner "TestSV"
+
+-- | `setupTest`, plus batching utilities for the parties that act through the wallet client in these tests,
+-- which `setupTest` only creates for alice and bob. The instrument admin is the party that is a stakeholder
+-- of every proposal but never a controller.
+setupCustomControllersTest : Script TestEnv
+setupCustomControllersTest = do
+  env@TestEnv{..} <- setupTest
+  forA_ [charlie, provider1, instrId.admin] WalletClientV2.createBatchingUtility
+  pure env
+
+testCustomControllers_tsv1Unsupported
+  :  (Template t, HasEnsure t, Eq t, Show t)
+  => Script (TestEnv, ContractId GovernanceLock, GovernanceLock, ContractId t, t)
+  -> Script ()
+testCustomControllers_tsv1Unsupported setup = do
+  (env@TestEnv{..}, lockCid, lock, proposalCid, proposal) <- setup
+  expectFailureContaining "Authorization failure" =<< tsv1Operations.acceptInstruction env (coerceContractId proposalCid) charlie
+  expectFailureContaining "Authorization failure" =<< tsv1Operations.rejectInstruction env (coerceContractId proposalCid) charlie
+  checkLockUntouched alice proposalCid proposal
+  checkLockUntouched alice lockCid lock
+
+testCustomControllers_unauthorized_tsv2
+  :  (Template t, HasEnsure t, Eq t, Show t)
+  => Script (TestEnv, ContractId GovernanceLock, GovernanceLock, ContractId t, t)
+  -> Script ()
+testCustomControllers_unauthorized_tsv2 setup = do
+  (env@TestEnv{..}, lockCid, lock, proposalCid, proposal) <- setup
+  let instructionCid = coerceContractId proposalCid
+  expectFailureContaining "'actors' is not a subset of one of 'controllers'" =<<
+    tsv2Operations.acceptInstruction env instructionCid instrId.admin
+  expectFailureContaining "'actors' is not a subset of one of 'controllers'" =<<
+    tsv2Operations.rejectInstruction env instructionCid instrId.admin
+  expectFailureContaining "'actors' is not a subset of 'proposers'" =<<
+    tsv2Operations.withdrawInstruction env instructionCid charlie
+  checkLockUntouched alice proposalCid proposal
+  checkLockUntouched alice lockCid lock
+
+-- Unlock
+---------
+
+-- | Any two of alice, charlie and provider1 can unlock.
+twoOfThreeUnlockControllers : TestEnv -> [[Party]]
+twoOfThreeUnlockControllers TestEnv{..} = [[alice, charlie], [alice, provider1], [charlie, provider1]]
+
+-- | alice holds a 50000.0 lock with the given unlock controllers.
+setupCustomUnlock
+  :  GovernanceLockOperations i r t -> (TestEnv -> [[Party]])
+  -> Script (TestEnv, ContractId GovernanceLock, GovernanceLock)
+setupCustomUnlock ops unlockControllers = do
+  env <- setupCustomControllersTest
+  (lockCid, lock) <- lockWithSpec ops env env.alice 50000.0 $ GLS_FullLock FullLockSpecification with
+    kind = customControllersKind
+    unlockControllers = Some $ makeControllersSpecification (unlockControllers env)
+    substitutionControllers = None
+    vestingControllers = None
+  pure (env, lockCid, lock)
+
+-- | alice proposes to unlock 20000.0 of her lock. The proposal stays pending with her vote, and the lock is unchanged.
+proposeCustomUnlock
+  :  GovernanceLockOperations i r t -> TestEnv -> ContractId GovernanceLock -> GovernanceLock
+  -> Script (ContractId UnlockProposal)
+proposeCustomUnlock ops env@TestEnv{..} lockCid lock = do
+  vestingStartTime <- (`addRelTime` hours 1) <$> getTime
+  Some pendingCid <- expectSuccess $
+    ops.optGovernanceUnlock (testEnvRegistries env) lockCid alice (unlockMemo 20000.0 vestingStartTime)
+  -- the helper types the pending instruction as a lock, but it is the unlock proposal
+  let proposalCid = coerceContractId @GovernanceLock @UnlockProposal pendingCid
+  Some proposal <- queryContractId alice proposalCid
+  proposal.votes === Map.fromList [(alice, PV_Accept)]
+  checkLockUntouched alice lockCid lock
+  pure proposalCid
+
+-- | charlie's vote completes the set {alice, charlie}, which unlocks the funds into a vesting lock.
+testCustomControllers_unlock_accept_tsv2 : Script ()
+testCustomControllers_unlock_accept_tsv2 = do
+  (env@TestEnv{..}, lockCid, lock) <- setupCustomUnlock tsv2Operations twoOfThreeUnlockControllers
+  proposalCid <- proposeCustomUnlock tsv2Operations env lockCid lock
+
+  result <- expectSuccess $ tsv2Operations.acceptInstruction env (coerceContractId proposalCid) charlie
+  -- a completed unlock reports the new vesting lock as a pending instruction
+  vestingCid <- coerceContractId @_ @GovernanceLock <$> tsv2Operations.expectPendingTransfer result
+  None <- queryContractId alice proposalCid
+
+  Some vesting <- queryContractId alice vestingCid
+  vesting.amount === 20000.0
+  vestingSpec <- requireVestingLock vesting.specification
+  -- the vesting lock takes the vesting controllers of the full lock, which has none
+  vestingSpec.vestingControllers === None
+
+  [(_, remaining)] <- governanceLocksOf alice
+  remaining.amount === 30000.0
+  remaining.specification === lock.specification
+
+-- | A rejection completes only when every controller set holds a rejection.
+testCustomControllers_unlock_reject_tsv2 : Script ()
+testCustomControllers_unlock_reject_tsv2 = do
+  (env@TestEnv{..}, lockCid, lock) <- setupCustomUnlock tsv2Operations twoOfThreeUnlockControllers
+  proposalCid <- proposeCustomUnlock tsv2Operations env lockCid lock
+
+  -- charlie's rejection leaves the set {alice, provider1} without a rejection
+  charlieResult <- expectSuccess $ tsv2Operations.rejectInstruction env (coerceContractId proposalCid) charlie
+  pendingCid <- tsv2Operations.expectPendingTransfer charlieResult
+  None <- queryContractId alice proposalCid
+  Some pending <- queryContractId alice (coerceContractId @_ @UnlockProposal pendingCid)
+  pending.votes === Map.fromList [(alice, PV_Accept), (charlie, PV_Reject)]
+
+  -- provider1's rejection puts a rejection in every set
+  [] <- tsv2Operations.expectFailedTransfer =<< expectSuccess (tsv2Operations.rejectInstruction env pendingCid provider1)
+  None <- queryContractId alice (coerceContractId @_ @UnlockProposal pendingCid)
+  checkLockUntouched alice lockCid lock
+
+testCustomControllers_unlock_withdraw_tsv1 : Script ()
+testCustomControllers_unlock_withdraw_tsv1 = testCustomControllers_unlock_withdraw tsv1Operations
+
+testCustomControllers_unlock_withdraw_tsv2 : Script ()
+testCustomControllers_unlock_withdraw_tsv2 = testCustomControllers_unlock_withdraw tsv2Operations
+
+-- | The proposer withdraws a pending unlock proposal.
+testCustomControllers_unlock_withdraw : GovernanceLockOperations i r t -> Script ()
+testCustomControllers_unlock_withdraw ops = do
+  (env@TestEnv{..}, lockCid, lock) <- setupCustomUnlock ops twoOfThreeUnlockControllers
+  proposalCid <- proposeCustomUnlock ops env lockCid lock
+
+  [] <- ops.expectFailedTransfer =<< expectSuccess (ops.withdrawInstruction env (coerceContractId proposalCid) alice)
+  None <- queryContractId alice proposalCid
+  checkLockUntouched alice lockCid lock
+
+-- | Token Standard v1 cannot accept or reject an unlock proposal: its receiver is the lock manager party.
+testCustomControllers_unlock_tsv1Unsupported : Script ()
+testCustomControllers_unlock_tsv1Unsupported = testCustomControllers_tsv1Unsupported do
+  (env@TestEnv{..}, lockCid, lock) <- setupCustomUnlock tsv1Operations twoOfThreeUnlockControllers
+  proposalCid <- proposeCustomUnlock tsv1Operations env lockCid lock
+  Some proposal <- queryContractId alice proposalCid
+  pure (env, lockCid, lock, proposalCid, proposal)
+
+-- | Only controllers can accept or reject, and only proposers can withdraw.
+testCustomControllers_unlock_unauthorized_tsv2 : Script ()
+testCustomControllers_unlock_unauthorized_tsv2 = testCustomControllers_unauthorized_tsv2 do
+  (env@TestEnv{..}, lockCid, lock) <- setupCustomUnlock tsv2Operations twoOfThreeUnlockControllers
+  proposalCid <- proposeCustomUnlock tsv2Operations env lockCid lock
+  Some proposal <- queryContractId alice proposalCid
+  pure (env, lockCid, lock, proposalCid, proposal)
+
+-- | charlie, an unlock controller but not the owner, proposes an unlock as the sender of a Token Standard v1 request.
+-- The request must name the owner of the lock, as the sender is not the owner.
+testCustomControllers_unlock_nonOwnerProposer_tsv1 : Script ()
+testCustomControllers_unlock_nonOwnerProposer_tsv1 = do
+  (TestEnv{..}, lockCid, lock) <- setupCustomUnlock tsv1Operations twoOfThreeUnlockControllers
+  vestingStartTime <- (`addRelTime` hours 1) <$> getTime
+  let unlockRequest extraEntries =
+        lockRequestV1 registriesEnv.amuletV2 charlie 0.0 $
+          tsv1RequestMemo' GLRT_UnlockAndStartVesting lock.specification $
+            unlockMemo 20000.0 vestingStartTime <> extraEntries
+
+  -- without the owner of the lock
+  expectFailureContaining (missingMemoKeyMessage targetLockOwnerMemoKey) =<<
+    submitLockRequestV1 registries =<< unlockRequest []
+  checkLockUntouched alice lockCid lock
+
+  -- with the owner of the lock
+  result <- expectSuccess $
+    submitLockRequestV1 registries =<< unlockRequest [(targetLockOwnerMemoKey, partyToText alice)]
+  proposalCid <- coerceContractId @_ @UnlockProposal <$> tsv1Operations.expectPendingTransfer result
+  Some proposal <- queryContractId alice proposalCid
+  proposal.proposers === [charlie]
+  proposal.votes === Map.fromList [(charlie, PV_Accept)]
+  checkLockUntouched alice lockCid lock
+
+-- Vesting withdrawal
+---------------------
+
+aliceAndCharlie : TestEnv -> ControllersSpecification
+aliceAndCharlie TestEnv{..} = makeControllersSpecification [[alice, charlie]]
+
+-- | alice holds a 50000.0 vesting lock with vesting controllers {alice, charlie}, and vesting is under way.
+-- The full lock has no unlock controllers, so alice unlocks it on her own.
+setupCustomVestingWithdraw : GovernanceLockOperations i r t -> Script (TestEnv, ContractId GovernanceLock, GovernanceLock)
+setupCustomVestingWithdraw ops = do
+  env <- setupCustomControllersTest
+  (lockCid, _) <- lockWithSpec ops env env.alice 50000.0 $ GLS_FullLock FullLockSpecification with
+    kind = customControllersKind
+    unlockControllers = None
+    substitutionControllers = None
+    vestingControllers = Some $ aliceAndCharlie env
+  (vestingCid, vesting) <- vestingLockFor ops env env.alice lockCid 50000.0
+  passTime (days 30)
+  pure (env, vestingCid, vesting)
+
+-- | alice proposes to withdraw the funds vested until a day ago. The proposal stays pending with her vote,
+-- and the vesting lock is unchanged.
+proposeCustomVestingWithdraw
+  :  GovernanceLockOperations i r t -> TestEnv -> ContractId GovernanceLock -> GovernanceLock
+  -> Script (ContractId WithdrawVestedFunds)
+proposeCustomVestingWithdraw ops env@TestEnv{..} vestingCid vesting = do
+  vestedUntilTime <- (`addRelTime` days (-1)) <$> getTime
+  Some pendingCid <- expectSuccess $ ops.vestingWithdraw env vestingCid alice (withdrawMemo vestedUntilTime)
+  -- the helper types the pending instruction as a lock, but it is the withdrawal proposal
+  let proposalCid = coerceContractId @GovernanceLock @WithdrawVestedFunds pendingCid
+  Some proposal <- queryContractId alice proposalCid
+  proposal.votes === Map.fromList [(alice, PV_Accept)]
+  checkLockUntouched alice vestingCid vesting
+  pure proposalCid
+
+-- | charlie's vote completes the withdrawal: alice gets the vested funds, and the rest stays in a vesting lock
+-- with the same vesting controllers.
+testCustomControllers_vestingWithdraw_accept_tsv2 : Script ()
+testCustomControllers_vestingWithdraw_accept_tsv2 = do
+  (env@TestEnv{..}, vestingCid, vesting) <- setupCustomVestingWithdraw tsv2Operations
+  proposalCid <- proposeCustomVestingWithdraw tsv2Operations env vestingCid vesting
+
+  result <- expectSuccess $ tsv2Operations.acceptInstruction env (coerceContractId proposalCid) charlie
+  -- a partial withdrawal reports the remaining vesting lock as a pending instruction
+  remainingCid <- coerceContractId @_ @GovernanceLock <$> tsv2Operations.expectPendingTransfer result
+  None <- queryContractId alice proposalCid
+  None <- queryContractId alice vestingCid
+
+  Some remaining <- queryContractId alice remainingCid
+  assertMsg "some funds must have vested" (remaining.amount < 50000.0)
+  remainingSpec <- requireVestingLock remaining.specification
+  remainingSpec.vestingControllers === Some (aliceAndCharlie env)
+  [vested] <- pure result.senderChangeCids
+  WalletClientV2.checkHolding alice vested (50000.0 - remaining.amount)
+
+testCustomControllers_vestingWithdraw_reject_tsv2 : Script ()
+testCustomControllers_vestingWithdraw_reject_tsv2 = do
+  (env@TestEnv{..}, vestingCid, vesting) <- setupCustomVestingWithdraw tsv2Operations
+  proposalCid <- proposeCustomVestingWithdraw tsv2Operations env vestingCid vesting
+
+  [] <- tsv2Operations.expectFailedTransfer =<< expectSuccess (tsv2Operations.rejectInstruction env (coerceContractId proposalCid) charlie)
+  None <- queryContractId alice proposalCid
+  checkLockUntouched alice vestingCid vesting
+
+testCustomControllers_vestingWithdraw_withdraw_tsv1 : Script ()
+testCustomControllers_vestingWithdraw_withdraw_tsv1 = testCustomControllers_vestingWithdraw_withdraw tsv1Operations
+
+testCustomControllers_vestingWithdraw_withdraw_tsv2 : Script ()
+testCustomControllers_vestingWithdraw_withdraw_tsv2 = testCustomControllers_vestingWithdraw_withdraw tsv2Operations
+
+-- | The proposer withdraws a pending withdrawal proposal.
+testCustomControllers_vestingWithdraw_withdraw : GovernanceLockOperations i r t -> Script ()
+testCustomControllers_vestingWithdraw_withdraw ops = do
+  (env@TestEnv{..}, vestingCid, vesting) <- setupCustomVestingWithdraw ops
+  proposalCid <- proposeCustomVestingWithdraw ops env vestingCid vesting
+
+  [] <- ops.expectFailedTransfer =<< expectSuccess (ops.withdrawInstruction env (coerceContractId proposalCid) alice)
+  None <- queryContractId alice proposalCid
+  checkLockUntouched alice vestingCid vesting
+
+-- | Token Standard v1 cannot accept or reject a withdrawal proposal: its receiver is the lock manager party.
+testCustomControllers_vestingWithdraw_tsv1Unsupported : Script ()
+testCustomControllers_vestingWithdraw_tsv1Unsupported = testCustomControllers_tsv1Unsupported do
+  (env@TestEnv{..}, vestingCid, vesting) <- setupCustomVestingWithdraw tsv1Operations
+  proposalCid <- proposeCustomVestingWithdraw tsv1Operations env vestingCid vesting
+  Some proposal <- queryContractId alice proposalCid
+  pure (env, vestingCid, vesting, proposalCid, proposal)
+
+-- | Only controllers can accept or reject, and only proposers can withdraw.
+testCustomControllers_vestingWithdraw_unauthorized_tsv2 : Script ()
+testCustomControllers_vestingWithdraw_unauthorized_tsv2 = testCustomControllers_unauthorized_tsv2 do
+  (env@TestEnv{..}, vestingCid, vesting) <- setupCustomVestingWithdraw tsv2Operations
+  proposalCid <- proposeCustomVestingWithdraw tsv2Operations env vestingCid vesting
+  Some proposal <- queryContractId alice proposalCid
+  pure (env, vestingCid, vesting, proposalCid, proposal)
+
+-- | charlie, a vesting controller but not the owner, proposes a withdrawal as the sender of a Token Standard v1 request.
+-- The request must name the owner of the vesting lock, as the sender is not the owner.
+testCustomControllers_vestingWithdraw_nonOwnerProposer_tsv1 : Script ()
+testCustomControllers_vestingWithdraw_nonOwnerProposer_tsv1 = do
+  (TestEnv{..}, vestingCid, vesting) <- setupCustomVestingWithdraw tsv1Operations
+  vestingSpec <- requireVestingLock vesting.specification
+  vestedUntilTime <- (`addRelTime` days (-1)) <$> getTime
+  let withdrawRequest extraEntries =
+        lockRequestV1 registriesEnv.amuletV2 charlie 0.0 $
+          tsv1RequestMemo' GLRT_WithdrawVestedFunds vesting.specification $
+            vestingLockMemoEntries vestingSpec.vestingPeriod vestingSpec.endTime
+              <> withdrawMemo vestedUntilTime
+              <> extraEntries
+
+  -- without the owner of the vesting lock
+  expectFailureContaining (missingMemoKeyMessage targetLockOwnerMemoKey) =<<
+    submitLockRequestV1 registries =<< withdrawRequest []
+  checkLockUntouched alice vestingCid vesting
+
+  -- with the owner of the vesting lock
+  result <- expectSuccess $
+    submitLockRequestV1 registries =<< withdrawRequest [(targetLockOwnerMemoKey, partyToText alice)]
+  proposalCid <- coerceContractId @_ @WithdrawVestedFunds <$> tsv1Operations.expectPendingTransfer result
+  Some proposal <- queryContractId alice proposalCid
+  proposal.proposers === [charlie]
+  proposal.votes === Map.fromList [(charlie, PV_Accept)]
+  checkLockUntouched alice vestingCid vesting
+
+-- Transfer and substitution fixtures
+-------------------------------------
+
+-- | alice's lock in the transfer and substitution tests: transfers and substitutions also need charlie.
+charlieSubstitutionSpecification : TestEnv -> GovernanceLockSpecification
+charlieSubstitutionSpecification TestEnv{..} = GLS_FullLock FullLockSpecification with
+  kind = customControllersKind
+  unlockControllers = None
+  substitutionControllers = Some $ makeControllersSpecification [[charlie]]
+  vestingControllers = None
+
+-- | The memo entries that set new controllers for bob's lock. No new unlock controllers.
+newControllersMemoEntries : TestEnv -> [(Text, Text)]
+newControllersMemoEntries TestEnv{..} =
+  encodeGovernanceLockNewCustomControllersMemoEntries
+    None
+    (Some $ makeControllersSpecification [[bob, charlie]])
+    (Some $ makeControllersSpecification [[bob], [charlie]])
+
+-- | The specification of bob's new lock: the new controllers, and no unlock controllers, as none were given.
+expectedNewLockSpecification : TestEnv -> GovernanceLockSpecification
+expectedNewLockSpecification TestEnv{..} = GLS_FullLock FullLockSpecification with
+  kind = customControllersKind
+  unlockControllers = None
+  substitutionControllers = Some $ makeControllersSpecification [[bob, charlie]]
+  vestingControllers = Some $ makeControllersSpecification [[bob], [charlie]]
+
+-- Transfer
+-----------
+
+-- | alice holds a 50000.0 lock that needs charlie for transfers, and proposes to transfer 20000.0 of it to bob,
+-- with new controllers for bob's lock. The controllers of the proposal are {alice, bob, charlie}.
+-- The proposal stays pending with alice's vote, and the lock is unchanged.
+setupCustomTransfer
+  :  GovernanceLockOperations i r t
+  -> Script (TestEnv, ContractId GovernanceLock, GovernanceLock, ContractId GovernanceLockTransfer)
+setupCustomTransfer ops = do
+  env@TestEnv{..} <- setupCustomControllersTest
+  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 (charlieSubstitutionSpecification env)
+  requestedAt <- getTime
+  transferCid <- expectSuccess $ ops.proposeTransfer (testEnvRegistries env) alice LockTransferArgs with
+    source = key lock
+    receiver = bob
+    amount = 20000.0
+    requestedAt
+    extraMemoEntries = newControllersMemoEntries env
+  Some transfer <- queryContractId alice transferCid
+  transfer.votes === Some (Map.fromList [(alice, PV_Accept)])
+  checkLockUntouched alice lockCid lock
+  pure (env, lockCid, lock, transferCid)
+
+testCustomControllers_transfer_accept_tsv1 : Script ()
+testCustomControllers_transfer_accept_tsv1 = testCustomControllers_transfer_accept tsv1Operations
+
+testCustomControllers_transfer_accept_tsv2 : Script ()
+testCustomControllers_transfer_accept_tsv2 = testCustomControllers_transfer_accept tsv2Operations
+
+-- | The transfer needs both charlie and bob. bob's new lock gets the new controllers of the proposal.
+testCustomControllers_transfer_accept : GovernanceLockOperations i r t -> Script ()
+testCustomControllers_transfer_accept ops = do
+  (env@TestEnv{..}, _, lock, transferCid) <- setupCustomTransfer ops
+
+  -- charlie's vote leaves bob's vote pending
+  charlieResult <- expectSuccess $ tsv2Operations.acceptInstruction env (coerceContractId transferCid) charlie
+  pendingCid <- tsv2Operations.expectPendingTransfer charlieResult
+  None <- queryContractId alice transferCid
+
+  -- bob's vote completes the transfer
+  [] <- ops.expectCompletedTransfer =<< expectSuccess (ops.acceptInstruction env (coerceContractId pendingCid) bob)
+  None <- queryContractId alice (coerceContractId @_ @GovernanceLockTransfer pendingCid)
+
+  [(_, newLock)] <- governanceLocksOf bob
+  newLock.amount === 20000.0
+  newLock.specification === expectedNewLockSpecification env
+  [(_, remaining)] <- governanceLocksOf alice
+  remaining.amount === 30000.0
+  remaining.specification === lock.specification
+
+-- | charlie rejects the transfer.
+testCustomControllers_transfer_reject_tsv2 : Script ()
+testCustomControllers_transfer_reject_tsv2 = do
+  (env@TestEnv{..}, lockCid, lock, transferCid) <- setupCustomTransfer tsv2Operations
+
+  [] <- tsv2Operations.expectFailedTransfer =<<
+    expectSuccess (tsv2Operations.rejectInstruction env (coerceContractId transferCid) charlie)
+  None <- queryContractId alice transferCid
+  checkLockUntouched alice lockCid lock
+  [] <- governanceLocksOf bob
+  pure ()
+
+testCustomControllers_transfer_withdraw_tsv1 : Script ()
+testCustomControllers_transfer_withdraw_tsv1 = testCustomControllers_transfer_withdraw tsv1Operations
+
+testCustomControllers_transfer_withdraw_tsv2 : Script ()
+testCustomControllers_transfer_withdraw_tsv2 = testCustomControllers_transfer_withdraw tsv2Operations
+
+-- | alice withdraws the transfer after charlie accepted it.
+testCustomControllers_transfer_withdraw : GovernanceLockOperations i r t -> Script ()
+testCustomControllers_transfer_withdraw ops = do
+  (env@TestEnv{..}, lockCid, lock, transferCid) <- setupCustomTransfer ops
+  charlieResult <- expectSuccess $ tsv2Operations.acceptInstruction env (coerceContractId transferCid) charlie
+  pendingCid <- tsv2Operations.expectPendingTransfer charlieResult
+
+  [] <- ops.expectFailedTransfer =<< expectSuccess (ops.withdrawInstruction env (coerceContractId pendingCid) alice)
+  None <- queryContractId alice (coerceContractId @_ @GovernanceLockTransfer pendingCid)
+  checkLockUntouched alice lockCid lock
+  [] <- governanceLocksOf bob
+  pure ()
+
+-- | Only controllers can accept or reject, and only proposers can withdraw.
+testCustomControllers_transfer_unauthorized_tsv2 : Script ()
+testCustomControllers_transfer_unauthorized_tsv2 = testCustomControllers_unauthorized_tsv2 do
+  (env@TestEnv{..}, lockCid, lock, transferCid) <- setupCustomTransfer tsv2Operations
+  Some transfer <- queryContractId alice transferCid
+  pure (env, lockCid, lock, transferCid, transfer)
+
+-- Substitution
+---------------
+
+-- | alice holds a 50000.0 lock that needs charlie for substitutions, and bob proposes to substitute 20000.0 of it,
+-- with new controllers for his lock. The controllers of the proposal are {alice, bob, charlie}.
+-- The proposal stays pending with bob's vote and holds bob's funds, and alice's lock is unchanged.
+setupCustomSubstitution
+  :  GovernanceLockOperations i r t
+  -> Script (TestEnv, ContractId GovernanceLock, GovernanceLock, ContractId GovernanceLockSubstitution)
+setupCustomSubstitution ops = do
+  env@TestEnv{..} <- setupCustomControllersTest
+  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 (charlieSubstitutionSpecification env)
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 bob 20000.0
+  result <- expectSuccess $ ops.proposeSubstitution (testEnvRegistries env) bob LockSubstitutionArgs with
+    target = key lock
+    amount = 20000.0
+    requestedAt = None
+    extraMemoEntries = newControllersMemoEntries env
+  substitutionCid <- coerceContractId @_ @GovernanceLockSubstitution <$> ops.expectPendingTransfer result
+  Some substitution <- queryContractId alice substitutionCid
+  substitution.votes === Some (Map.fromList [(bob, PV_Accept)])
+  assertMsg "the proposal must hold bob's funds" (isSome substitution.lockedAmulet)
+  checkBalances env bob (0.0, 20000.0)
+  checkLockUntouched alice lockCid lock
+  pure (env, lockCid, lock, substitutionCid)
+
+testCustomControllers_substitution_accept_tsv1 : Script ()
+testCustomControllers_substitution_accept_tsv1 = testCustomControllers_substitution_accept tsv1Operations
+
+testCustomControllers_substitution_accept_tsv2 : Script ()
+testCustomControllers_substitution_accept_tsv2 = testCustomControllers_substitution_accept tsv2Operations
+
+-- | The substitution needs both charlie and alice. alice gets the substituted funds, and bob's new lock gets
+-- the new controllers of the proposal.
+testCustomControllers_substitution_accept : GovernanceLockOperations i r t -> Script ()
+testCustomControllers_substitution_accept ops = do
+  (env@TestEnv{..}, _, lock, substitutionCid) <- setupCustomSubstitution ops
+
+  -- charlie's vote leaves alice's vote pending
+  charlieResult <- expectSuccess $ tsv2Operations.acceptInstruction env (coerceContractId substitutionCid) charlie
+  pendingCid <- tsv2Operations.expectPendingTransfer charlieResult
+  None <- queryContractId alice substitutionCid
+
+  -- alice's vote completes the substitution
+  [unlocked] <- ops.expectCompletedTransfer =<< expectSuccess (ops.acceptInstruction env (coerceContractId pendingCid) alice)
+  WalletClientV2.checkHolding alice (coerceContractId unlocked) 20000.0
+  None <- queryContractId alice (coerceContractId @_ @GovernanceLockSubstitution pendingCid)
+
+  [(_, newLock)] <- governanceLocksOf bob
+  newLock.amount === 20000.0
+  newLock.specification === expectedNewLockSpecification env
+  [(_, remaining)] <- governanceLocksOf alice
+  remaining.amount === 30000.0
+  remaining.specification === lock.specification
+
+-- | charlie rejects the substitution, and bob gets his funds back.
+testCustomControllers_substitution_reject_tsv2 : Script ()
+testCustomControllers_substitution_reject_tsv2 = do
+  (env@TestEnv{..}, lockCid, lock, substitutionCid) <- setupCustomSubstitution tsv2Operations
+
+  [change] <- tsv2Operations.expectFailedTransfer =<<
+    expectSuccess (tsv2Operations.rejectInstruction env (coerceContractId substitutionCid) charlie)
+  WalletClientV2.checkHolding bob (coerceContractId change) 20000.0
+  checkBalances env bob (20000.0, 0.0)
+  None <- queryContractId alice substitutionCid
+  checkLockUntouched alice lockCid lock
+
+testCustomControllers_substitution_withdraw_tsv1 : Script ()
+testCustomControllers_substitution_withdraw_tsv1 = testCustomControllers_substitution_withdraw tsv1Operations
+
+testCustomControllers_substitution_withdraw_tsv2 : Script ()
+testCustomControllers_substitution_withdraw_tsv2 = testCustomControllers_substitution_withdraw tsv2Operations
+
+-- | bob withdraws the substitution after charlie accepted it, and gets his funds back.
+testCustomControllers_substitution_withdraw : GovernanceLockOperations i r t -> Script ()
+testCustomControllers_substitution_withdraw ops = do
+  (env@TestEnv{..}, lockCid, lock, substitutionCid) <- setupCustomSubstitution ops
+  charlieResult <- expectSuccess $ tsv2Operations.acceptInstruction env (coerceContractId substitutionCid) charlie
+  pendingCid <- tsv2Operations.expectPendingTransfer charlieResult
+
+  [change] <- ops.expectFailedTransfer =<< expectSuccess (ops.withdrawInstruction env (coerceContractId pendingCid) bob)
+  WalletClientV2.checkHolding bob (coerceContractId change) 20000.0
+  checkBalances env bob (20000.0, 0.0)
+  None <- queryContractId alice (coerceContractId @_ @GovernanceLockSubstitution pendingCid)
+  checkLockUntouched alice lockCid lock
+
+-- | Only controllers can accept or reject, and only proposers can withdraw.
+testCustomControllers_substitution_unauthorized_tsv2 : Script ()
+testCustomControllers_substitution_unauthorized_tsv2 = testCustomControllers_unauthorized_tsv2 do
+  let ops = tsv2Operations
+  (env@TestEnv{..}, lockCid, lock, substitutionCid) <- setupCustomSubstitution ops
+  Some substitution <- queryContractId alice substitutionCid
+  pure (env, lockCid, lock, substitutionCid, substitution)
+
+-- Self-substitution
+--------------------
+
+-- | alice holds a 50000.0 lock, all her funds, that needs charlie for substitutions.
+setupCustomSelfSubstitution : GovernanceLockOperations i r t -> Script (TestEnv, ContractId GovernanceLock, GovernanceLock)
+setupCustomSelfSubstitution ops = do
+  env@TestEnv{..} <- setupCustomControllersTest
+  AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 49000.0 -- alice starts with 1000.0
+  lockCid <- expectSuccess $ ops.governanceLock (testEnvRegistries env) alice 50000.0 (charlieSubstitutionSpecification env)
+  Some lock <- queryContractId alice lockCid
+  checkBalances env alice (0.0, 50000.0)
+  pure (env, lockCid, lock)
+
+-- | The specification of the lock that alice moves funds into: provider1 replaces charlie as substitution controller.
+selfSubstitutionNewSpecification : TestEnv -> GovernanceLockSpecification
+selfSubstitutionNewSpecification TestEnv{..} = GLS_FullLock FullLockSpecification with
+  kind = customControllersKind
+  unlockControllers = None
+  substitutionControllers = Some $ makeControllersSpecification [[provider1]]
+  vestingControllers = None
+
+-- | alice proposes to move 20000.0 of her lock into a lock with substitution controller provider1.
+-- The controllers of the proposal are {alice, charlie}. The proposal stays pending with alice's vote,
+-- locks none of her funds, and her lock is unchanged.
+proposeCustomSelfSubstitution
+  :  HasField "senderChangeCids" r [ContractId h]
+  => GovernanceLockOperations i r t -> TestEnv -> ContractId GovernanceLock -> GovernanceLock
+  -> Script (ContractId GovernanceLockSubstitution)
+proposeCustomSelfSubstitution ops env lockCid lock = do
+  result <- expectSuccess $ ops.proposeSubstitution (testEnvRegistries env) env.alice LockSubstitutionArgs with
+    target = key lock
+    amount = 20000.0
+    requestedAt = None
+    extraMemoEntries = encodeGovernanceLockNewCustomControllersMemoEntries
+      None
+      (Some $ makeControllersSpecification [[env.provider1]])
+      None
+  result.senderChangeCids === []
+  substitutionCid <- coerceContractId @_ @GovernanceLockSubstitution <$> ops.expectPendingTransfer result
+  Some substitution <- queryContractId env.alice substitutionCid
+  substitution.lockedAmulet === None
+  substitution.votes === Some (Map.fromList [(env.alice, PV_Accept)])
+  checkLockUntouched env.alice lockCid lock
+  checkBalances env env.alice (0.0, 50000.0)
+  pure substitutionCid
+
+testCustomControllers_selfSubstitution_accept_tsv1 : Script ()
+testCustomControllers_selfSubstitution_accept_tsv1 = testCustomControllers_selfSubstitution_accept tsv1Operations
+
+testCustomControllers_selfSubstitution_accept_tsv2 : Script ()
+testCustomControllers_selfSubstitution_accept_tsv2 = testCustomControllers_selfSubstitution_accept tsv2Operations
+
+-- | charlie's vote completes the self-substitution. The target lock funds the new lock, so no funds are returned.
+testCustomControllers_selfSubstitution_accept
+  :  HasField "senderChangeCids" r [ContractId h]
+  => GovernanceLockOperations i r t -> Script ()
+testCustomControllers_selfSubstitution_accept ops = do
+  (env@TestEnv{..}, lockCid, lock) <- setupCustomSelfSubstitution ops
+  substitutionCid <- proposeCustomSelfSubstitution ops env lockCid lock
+
+  result <- expectSuccess $ tsv2Operations.acceptInstruction env (coerceContractId substitutionCid) charlie
+  result.senderChangeCids === []
+  [] <- tsv2Operations.expectCompletedTransfer result
+  None <- queryContractId alice substitutionCid
+  None <- queryContractId alice lockCid
+
+  [(_, newLock)] <- queryFilter @GovernanceLock alice \l -> l.specification == selfSubstitutionNewSpecification env
+  newLock.amount === 20000.0
+  [(_, remaining)] <- queryFilter @GovernanceLock alice \l -> l.specification == lock.specification
+  remaining.amount === 30000.0
+  checkBalances env alice (0.0, 50000.0)
+
+testCustomControllers_selfSubstitution_rejectAndWithdraw_tsv1 : Script ()
+testCustomControllers_selfSubstitution_rejectAndWithdraw_tsv1 = testCustomControllers_selfSubstitution_rejectAndWithdraw tsv1Operations
+
+testCustomControllers_selfSubstitution_rejectAndWithdraw_tsv2 : Script ()
+testCustomControllers_selfSubstitution_rejectAndWithdraw_tsv2 = testCustomControllers_selfSubstitution_rejectAndWithdraw tsv2Operations
+
+-- | charlie rejects one self-substitution and alice withdraws another. Neither returns funds or changes the lock.
+testCustomControllers_selfSubstitution_rejectAndWithdraw
+  :  HasField "senderChangeCids" r [ContractId h]
+  => GovernanceLockOperations i r t -> Script ()
+testCustomControllers_selfSubstitution_rejectAndWithdraw ops = do
+  (env@TestEnv{..}, lockCid, lock) <- setupCustomSelfSubstitution ops
+
+  rejectedCid <- proposeCustomSelfSubstitution ops env lockCid lock
+  [] <- tsv2Operations.expectFailedTransfer =<<
+    expectSuccess (tsv2Operations.rejectInstruction env (coerceContractId rejectedCid) charlie)
+  None <- queryContractId alice rejectedCid
+  checkLockUntouched alice lockCid lock
+  checkBalances env alice (0.0, 50000.0)
+
+  withdrawnCid <- proposeCustomSelfSubstitution ops env lockCid lock
+  [] <- ops.expectFailedTransfer =<< expectSuccess (ops.withdrawInstruction env (coerceContractId withdrawnCid) alice)
+  None <- queryContractId alice withdrawnCid
+  checkLockUntouched alice lockCid lock
+  checkBalances env alice (0.0, 50000.0)

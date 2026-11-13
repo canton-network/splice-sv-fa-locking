@@ -17,6 +17,13 @@ import Splice.TokenStandard.Utils
 testAdmin : Party
 testAdmin = fromSome $ partyFromText "registry-admin"
 
+fullLockSpecification : GovernanceLockKind -> FullLockSpecification
+fullLockSpecification kind = FullLockSpecification with
+  kind
+  unlockControllers = None
+  substitutionControllers = None
+  vestingControllers = None
+
 -- | Fully explicit test cases for the TSv1 encoding, to ensure that the specification lines up.
 test_tsv1Encoding : Script ()
 test_tsv1Encoding = do
@@ -27,7 +34,7 @@ test_tsv1Encoding = do
       === ("cip-127/memo:lock-kind=provisional-fa-lock&lock-subject=" <> partyToText provider <> "&lock-status=vesting")
     -- The lock information is only in the memo, not in separate metadata entries
     encodeGovernanceLockMetadataWithRequest "accept-to-transfer-lock"
-        (GLS_FullLock FullLockSpecification with kind = GLK_SuperValidatorRightsOwner "someSv")
+        (GLS_FullLock (fullLockSpecification $ GLK_SuperValidatorRightsOwner "someSv"))
       === Metadata (TextMap.singleton reasonMetaKey
             "cip-127/memo:request=accept-to-transfer-lock&lock-kind=sv-lock&lock-subject=someSv&lock-status=locked")
   where
@@ -38,26 +45,26 @@ test_parseGovernanceLockRequestTSv1_memo : Script ()
 test_parseGovernanceLockRequestTSv1_memo = do
     let memo = "cip-127/memo:request=create-lock&lock-kind=sv-lock&lock-subject=someSv"
     GLR_CreateGovernanceLock{fullSpecification} <- parse $ Metadata $ TextMap.fromList [(reasonMetaKey, memo)]
-    fullSpecification === FullLockSpecification with kind = GLK_SuperValidatorRightsOwner "someSv"
+    fullSpecification === fullLockSpecification (GLK_SuperValidatorRightsOwner "someSv")
   where
-    parse = parseGovernanceLockRequestTSv1 testAdmin lockManagerParty None
+    parse = parseGovernanceLockRequestTSv1 testAdmin testAdmin lockManagerParty None
 
 -- | Round-trip testing to cover the GovernanceLockKind space in the parsers.
 -- A lock's memo, with a request added, parses back to the lock's specification.
 test_governanceLockSpecificationTSv1_roundTrip : Script ()
 test_governanceLockSpecificationTSv1_roundTrip = do
-    assertRoundTrip serializeThenParse $ FullLockSpecification with
-      kind = GLK_SuperValidatorRightsOwner with svName = "some-other-sv"
-    assertRoundTrip serializeThenParse $ FullLockSpecification with
-      kind = GLK_FeaturedApp with provider = fromSome $ partyFromText "some-other-sv"
-    assertRoundTrip serializeThenParse $ FullLockSpecification with
-      kind = GLK_ProvisionalFeaturedApp with provider = fromSome $ partyFromText "someFA::122abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcab"
+    assertRoundTrip serializeThenParse $ fullLockSpecification $
+      GLK_SuperValidatorRightsOwner with svName = "some-other-sv"
+    assertRoundTrip serializeThenParse $ fullLockSpecification $
+      GLK_FeaturedApp with provider = fromSome $ partyFromText "some-other-sv"
+    assertRoundTrip serializeThenParse $ fullLockSpecification $
+      GLK_ProvisionalFeaturedApp with provider = fromSome $ partyFromText "someFA::122abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcab"
   where
     serializeThenParse : FullLockSpecification -> Script FullLockSpecification
     serializeThenParse specification = do
       let memo = encodeLockCompatMemo $
             (requestMemoKey, "create-lock") :: encodeCommonLockMemoEntries specification.kind LS_Locked
-      request <- parseGovernanceLockRequestTSv1 testAdmin lockManagerParty None $ Metadata $ TextMap.singleton reasonMetaKey memo
+      request <- parseGovernanceLockRequestTSv1 testAdmin testAdmin lockManagerParty None $ Metadata $ TextMap.singleton reasonMetaKey memo
       case request of
         GLR_CreateGovernanceLock{fullSpecification} -> pure fullSpecification
         _ -> fail "Expected GLR_CreateGovernanceLock"

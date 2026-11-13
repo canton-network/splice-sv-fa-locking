@@ -147,3 +147,34 @@
         - `featuredAppAssetMovingLockThreshold` (default 5M CC)
         - `featuredAppAssetLockThreshold` (default 25M CC)
         - `featuredAppUnderlockGracePeriod` (default 7 days)
+
+      - Add custom controllers for governance locks, as specified in
+        [CIP-127](https://github.com/canton-foundation/cips/blob/main/cip-0127/cip-0127.md):
+
+        - Add the optional `unlockControllers`, `substitutionControllers` and `vestingControllers` fields
+          to the governance lock specifications. Each field is a list of controller sets.
+          An action executes once all members of one controller set approve it.
+          If a field is not set, the lock owner alone controls the action.
+
+        - Lock requests set the custom controllers with the `unlock-controllers`, `substitution-controllers`
+          and `vesting-controllers` keys of the `cip-127/memo:` memo. Substitution and transfer requests set the
+          custom controllers of the new lock with the `new-unlock-controllers`, `new-substitution-controllers`
+          and `new-vesting-controllers` keys. The value separates controller sets with `;` and the parties of a set with `,`.
+
+        - Unlock and vested-funds withdrawal requests now create an `UnlockProposal` or a `WithdrawVestedFunds` proposal.
+          These proposals implement the `TransferInstruction` interface, and the controllers accept, reject or withdraw them
+          with the V1 and V2 token standard choices. If the proposers alone complete a controller set,
+          the unlock or withdrawal executes immediately.
+
+        - Deviation from CIP-127: the controllers do not each give a timepoint when they approve an unlock or a withdrawal,
+          and the implementation does not combine timepoints as the "Controller Consensus on Withdrawal and Unlock Times" section describes.
+          The proposer sets the timepoint when they create the proposal: `vestingStartTime` on `UnlockProposal`, which must be
+          in the next 24 hours, and `vestedUntilTime` on `WithdrawVestedFunds`, which must be in the past.
+          The other controllers approve or reject the proposal with that timepoint.
+
+        - `GovernanceLockSubstitution` and `GovernanceLockTransfer` use the same approval flow, and get the optional
+          `newSpecification` and `approvals` fields. The owners of the source and target locks of a substitution,
+          and the sender and receiver of a transfer, are members of every controller set.
+
+        - Add `DsoRules_UnlockProposal_DsoExpire` and `DsoRules_WithdrawVestedFunds_DsoExpire`,
+          which SVs use to archive expired unlock and withdrawal proposals.

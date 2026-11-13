@@ -23,10 +23,17 @@ class GovernanceLockUtilTest extends AnyWordSpec with BaseTest {
   ): gl.GovernanceLockSpecification =
     if (vesting)
       new gl.governancelockspecification.GLS_VestingLock(
-        new gl.VestingLockSpecification(kind, new RelTime(1_000_000), Instant.EPOCH)
+        new gl.VestingLockSpecification(
+          kind,
+          new RelTime(1_000_000),
+          Instant.EPOCH,
+          Optional.empty(),
+        )
       )
     else
-      new gl.governancelockspecification.GLS_FullLock(new gl.FullLockSpecification(kind))
+      new gl.governancelockspecification.GLS_FullLock(
+        new gl.FullLockSpecification(kind, Optional.empty(), Optional.empty(), Optional.empty())
+      )
 
   "specificationTypeAndSubject" should {
     "encode every kind of full lock" in {
@@ -78,6 +85,10 @@ class GovernanceLockUtilTest extends AnyWordSpec with BaseTest {
       Optional.empty(),
       Instant.EPOCH,
       Instant.EPOCH,
+      Optional.empty(),
+      Optional.empty(),
+      Optional.empty(),
+      Optional.empty(),
       Optional.empty(),
     )
 

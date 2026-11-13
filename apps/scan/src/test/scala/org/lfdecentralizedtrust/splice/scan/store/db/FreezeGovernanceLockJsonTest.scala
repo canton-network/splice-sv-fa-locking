@@ -7,7 +7,10 @@ import org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock as gl
 import org.lfdecentralizedtrust.splice.store.db.AcsJdbcTypes
 import com.digitalasset.canton.BaseTest
+import io.circe.Json
+import io.circe.syntax.*
 import java.time.Instant
+import java.util.Optional
 import org.scalatest.wordspec.AnyWordSpec
 
 // ATTENTION: if this test fails, make sure that
@@ -44,59 +47,117 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
   private val superValidatorVestingPeriod = new RelTime(31_557_600_000_000L)
   private val endTime = Instant.parse("2026-10-27T12:34:56.123456Z")
 
-  private def fullLock(kind: gl.GovernanceLockKind): String =
+  private def fullLock(kind: gl.GovernanceLockKind): Json =
     AcsJdbcTypes
       .payloadJsonFromDefinedDataType(
         new gl.governancelockspecification.GLS_FullLock(
-          new gl.FullLockSpecification(kind)
+          new gl.FullLockSpecification(kind, Optional.empty(), Optional.empty(), Optional.empty())
         )
       )
-      .noSpaces
 
   private def vestingLock(
       kind: gl.GovernanceLockKind,
       vestingPeriod: RelTime,
-  ): String =
+  ): Json =
     AcsJdbcTypes
       .payloadJsonFromDefinedDataType(
         new gl.governancelockspecification.GLS_VestingLock(
-          new gl.VestingLockSpecification(kind, vestingPeriod, endTime)
+          new gl.VestingLockSpecification(kind, vestingPeriod, endTime, Optional.empty())
         )
       )
-      .noSpaces
 
   "The JSON of a governance lock specification" should {
     "not change for a featured app full lock" in {
-      fullLock(featuredApp) shouldBe
-        """{"tag":"GLS_FullLock","value":{"kind":{"tag":"GLK_FeaturedApp","value":{"provider":"provider::1220aaaa"}}}}"""
+      fullLock(featuredApp) shouldBe Json.obj(
+        "tag" := "GLS_FullLock",
+        "value" := Json.obj(
+          "kind" := Json.obj(
+            "tag" := "GLK_FeaturedApp",
+            "value" := Json.obj("provider" := provider),
+          ),
+          "unlockControllers" := Json.Null,
+          "substitutionControllers" := Json.Null,
+          "vestingControllers" := Json.Null,
+        ),
+      )
     }
 
     "not change for a provisional featured app full lock" in {
-      fullLock(provisionalFeaturedApp) shouldBe
-        """{"tag":"GLS_FullLock","value":{"kind":{"tag":"GLK_ProvisionalFeaturedApp","value":{"provider":"provider::1220aaaa"}}}}"""
+      fullLock(provisionalFeaturedApp) shouldBe Json.obj(
+        "tag" := "GLS_FullLock",
+        "value" := Json.obj(
+          "kind" := Json.obj(
+            "tag" := "GLK_ProvisionalFeaturedApp",
+            "value" := Json.obj("provider" := provider),
+          ),
+          "unlockControllers" := Json.Null,
+          "substitutionControllers" := Json.Null,
+          "vestingControllers" := Json.Null,
+        ),
+      )
     }
 
     "not change for a super validator full lock" in {
-      fullLock(superValidator) shouldBe
-        """{"tag":"GLS_FullLock","value":{"kind":{"tag":"GLK_SuperValidatorRightsOwner","value":{"svName":"sv1"}}}}"""
+      fullLock(superValidator) shouldBe Json.obj(
+        "tag" := "GLS_FullLock",
+        "value" := Json.obj(
+          "kind" := Json.obj(
+            "tag" := "GLK_SuperValidatorRightsOwner",
+            "value" := Json.obj("svName" := "sv1"),
+          ),
+          "unlockControllers" := Json.Null,
+          "substitutionControllers" := Json.Null,
+          "vestingControllers" := Json.Null,
+        ),
+      )
     }
 
     "not change for a featured app vesting lock" in {
-      vestingLock(featuredApp, featuredAppVestingPeriod) shouldBe
-        """{"tag":"GLS_VestingLock","value":{"kind":{"tag":"GLK_FeaturedApp","value":{"provider":"provider::1220aaaa"}},"vestingPeriod":{"microseconds":5184000000000},"endTime":"2026-10-27T12:34:56.123456Z"}}"""
+      vestingLock(featuredApp, featuredAppVestingPeriod) shouldBe Json.obj(
+        "tag" := "GLS_VestingLock",
+        "value" := Json.obj(
+          "kind" := Json.obj(
+            "tag" := "GLK_FeaturedApp",
+            "value" := Json.obj("provider" := provider),
+          ),
+          "vestingPeriod" := Json.obj("microseconds" := 5184000000000L),
+          "endTime" := "2026-10-27T12:34:56.123456Z",
+          "vestingControllers" := Json.Null,
+        ),
+      )
     }
 
     "not change for a provisional featured app vesting lock" in {
       vestingLock(
         provisionalFeaturedApp,
         provisionalFeaturedAppVestingPeriod,
-      ) shouldBe
-        """{"tag":"GLS_VestingLock","value":{"kind":{"tag":"GLK_ProvisionalFeaturedApp","value":{"provider":"provider::1220aaaa"}},"vestingPeriod":{"microseconds":0},"endTime":"2026-10-27T12:34:56.123456Z"}}"""
+      ) shouldBe Json.obj(
+        "tag" := "GLS_VestingLock",
+        "value" := Json.obj(
+          "kind" := Json.obj(
+            "tag" := "GLK_ProvisionalFeaturedApp",
+            "value" := Json.obj("provider" := provider),
+          ),
+          "vestingPeriod" := Json.obj("microseconds" := 0),
+          "endTime" := "2026-10-27T12:34:56.123456Z",
+          "vestingControllers" := Json.Null,
+        ),
+      )
     }
 
     "not change for a super validator vesting lock" in {
-      vestingLock(superValidator, superValidatorVestingPeriod) shouldBe
-        """{"tag":"GLS_VestingLock","value":{"kind":{"tag":"GLK_SuperValidatorRightsOwner","value":{"svName":"sv1"}},"vestingPeriod":{"microseconds":31557600000000},"endTime":"2026-10-27T12:34:56.123456Z"}}"""
+      vestingLock(superValidator, superValidatorVestingPeriod) shouldBe Json.obj(
+        "tag" := "GLS_VestingLock",
+        "value" := Json.obj(
+          "kind" := Json.obj(
+            "tag" := "GLK_SuperValidatorRightsOwner",
+            "value" := Json.obj("svName" := "sv1"),
+          ),
+          "vestingPeriod" := Json.obj("microseconds" := 31557600000000L),
+          "endTime" := "2026-10-27T12:34:56.123456Z",
+          "vestingControllers" := Json.Null,
+        ),
+      )
     }
   }
 }
