@@ -264,6 +264,14 @@ class DsoDelegateBasedAutomationService(
         unavailablePartiesStore,
       )
     )
+    registerTrigger(
+      new FeaturedAppPermanentUnderlockTrigger(
+        config,
+        triggerContext,
+        svTaskContext,
+        unavailablePartiesStore,
+      )
+    )
   }
 }
 
@@ -311,6 +319,7 @@ object DsoDelegateBasedAutomationService extends AutomationServiceCompanion {
     aTrigger[ExpireGovernanceLockTransferTrigger],
     aTrigger[ExpireGovernanceLockSubstitutionTrigger],
     aTrigger[ProvisionalFeaturedAppLockConversionTrigger],
+    aTrigger[FeaturedAppPermanentUnderlockTrigger],
     aTrigger[ExecuteFeaturedAppConfigUpdateInstructionTrigger],
     aTrigger[ExpireFeaturedAppConfigUpdateInstructionTrigger],
   )
