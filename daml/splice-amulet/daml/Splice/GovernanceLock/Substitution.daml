@@ -107,7 +107,7 @@ governanceLockSubstitutionControllers GovernanceLockSubstitution{target, owner} 
 governanceLockSubstitutionMetadata : GovernanceLockSubstitution -> Metadata
 governanceLockSubstitutionMetadata GovernanceLockSubstitution{..} =
   encodeGovernanceLockMetadataWithRequest'
-    (<> encodeGovernanceLockNewCustomControllersMetadataEntries newUnlockControllers newSubstitutionControllers newVestingControllers)
+    (<> encodeGovernanceLockNewCustomControllersMemoEntries newUnlockControllers newSubstitutionControllers newVestingControllers)
     "accept-to-substitute-lock"
     target.specification
 

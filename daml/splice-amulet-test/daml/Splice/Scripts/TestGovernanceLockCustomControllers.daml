@@ -12,7 +12,6 @@ import DA.Assert ((===))
 import DA.Foldable (forA_)
 import DA.Map qualified as Map
 import DA.Optional (isSome)
-import DA.TextMap qualified as TM
 import DA.Time
 
 import Daml.Script
@@ -97,7 +96,7 @@ proposeCustomUnlock
 proposeCustomUnlock ops env@TestEnv{..} lockCid lock = do
   vestingStartTime <- (`addRelTime` hours 1) <$> getTime
   Some pendingCid <- expectSuccess $
-    ops.optGovernanceUnlock (testEnvRegistries env) lockCid alice (unlockMeta 20000.0 vestingStartTime)
+    ops.optGovernanceUnlock (testEnvRegistries env) lockCid alice (unlockMemo 20000.0 vestingStartTime)
   -- the helper types the pending instruction as a lock, but it is the unlock proposal
   let proposalCid = coerceContractId @GovernanceLock @UnlockProposal pendingCid
   Some proposal <- queryContractId alice proposalCid
@@ -185,16 +184,16 @@ testCustomControllers_unlock_nonOwnerProposer_tsv1 = do
   let unlockRequest extraEntries =
         lockRequestV1 registriesEnv.amuletV2 charlie 0.0 $
           tsv1RequestMemo' GLRT_UnlockAndStartVesting lock.specification $
-            TM.toList (unlockMeta 20000.0 vestingStartTime).values <> extraEntries
+            unlockMemo 20000.0 vestingStartTime <> extraEntries
 
   -- without the owner of the lock
-  expectFailureContaining (missingMemoKeyMessage targetLockOwnerMetaKey) =<<
+  expectFailureContaining (missingMemoKeyMessage targetLockOwnerMemoKey) =<<
     submitLockRequestV1 registries =<< unlockRequest []
   checkLockUntouched alice lockCid lock
 
   -- with the owner of the lock
   result <- expectSuccess $
-    submitLockRequestV1 registries =<< unlockRequest [(targetLockOwnerMetaKey, partyToText alice)]
+    submitLockRequestV1 registries =<< unlockRequest [(targetLockOwnerMemoKey, partyToText alice)]
   proposalCid <- coerceContractId @_ @UnlockProposal <$> tsv1Operations.expectPendingTransfer result
   Some proposal <- queryContractId alice proposalCid
   proposal.proposers === [charlie]
@@ -228,7 +227,7 @@ proposeCustomVestingWithdraw
   -> Script (ContractId WithdrawVestedFunds)
 proposeCustomVestingWithdraw ops env@TestEnv{..} vestingCid vesting = do
   vestedUntilTime <- (`addRelTime` days (-1)) <$> getTime
-  Some pendingCid <- expectSuccess $ ops.vestingWithdraw env vestingCid alice (withdrawMeta vestedUntilTime)
+  Some pendingCid <- expectSuccess $ ops.vestingWithdraw env vestingCid alice (withdrawMemo vestedUntilTime)
   -- the helper types the pending instruction as a lock, but it is the withdrawal proposal
   let proposalCid = coerceContractId @GovernanceLock @WithdrawVestedFunds pendingCid
   Some proposal <- queryContractId alice proposalCid
@@ -307,18 +306,18 @@ testCustomControllers_vestingWithdraw_nonOwnerProposer_tsv1 = do
   let withdrawRequest extraEntries =
         lockRequestV1 registriesEnv.amuletV2 charlie 0.0 $
           tsv1RequestMemo' GLRT_WithdrawVestedFunds vesting.specification $
-            vestingLockMetaEntries vestingSpec.vestingPeriod vestingSpec.endTime
-              <> TM.toList (withdrawMeta vestedUntilTime).values
+            vestingLockMemoEntries vestingSpec.vestingPeriod vestingSpec.endTime
+              <> withdrawMemo vestedUntilTime
               <> extraEntries
 
   -- without the owner of the vesting lock
-  expectFailureContaining (missingMemoKeyMessage targetLockOwnerMetaKey) =<<
+  expectFailureContaining (missingMemoKeyMessage targetLockOwnerMemoKey) =<<
     submitLockRequestV1 registries =<< withdrawRequest []
   checkLockUntouched alice vestingCid vesting
 
   -- with the owner of the vesting lock
   result <- expectSuccess $
-    submitLockRequestV1 registries =<< withdrawRequest [(targetLockOwnerMetaKey, partyToText alice)]
+    submitLockRequestV1 registries =<< withdrawRequest [(targetLockOwnerMemoKey, partyToText alice)]
   proposalCid <- coerceContractId @_ @WithdrawVestedFunds <$> tsv1Operations.expectPendingTransfer result
   Some proposal <- queryContractId alice proposalCid
   proposal.proposers === [charlie]
@@ -339,7 +338,7 @@ charlieSubstitutionSpecification TestEnv{..} = GLS_FullLock FullLockSpecificatio
 -- | The memo entries that set new controllers for bob's lock. No new unlock controllers.
 newControllersMemoEntries : TestEnv -> [(Text, Text)]
 newControllersMemoEntries TestEnv{..} =
-  encodeGovernanceLockNewCustomControllersMetadataEntries
+  encodeGovernanceLockNewCustomControllersMemoEntries
     None
     (Some $ makeControllersSpecification [[bob, charlie]])
     (Some $ makeControllersSpecification [[bob], [charlie]])
@@ -568,7 +567,7 @@ proposeCustomSelfSubstitution ops env lockCid lock = do
     target = key lock
     amount = 20000.0
     requestedAt = None
-    extraMemoEntries = encodeGovernanceLockNewCustomControllersMetadataEntries
+    extraMemoEntries = encodeGovernanceLockNewCustomControllersMemoEntries
       None
       (Some $ makeControllersSpecification [[env.provider1]])
       None

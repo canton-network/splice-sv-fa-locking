@@ -429,11 +429,11 @@ optPartyFromMetadataParser : Text -> Parser Metadata (Optional Party)
 optPartyFromMetadataParser key = optionalMetadataParser key >>= mapA (partyFromTextParser key)
 
 governanceLockTagParser : Parser Metadata GovernanceLockTag
-governanceLockTagParser = requiredMetadataParser lockKindMetaKey >>= \tag ->
-  validationParser $ (governanceLockTagFromText tag) <?> invalidMemoValueMessage "value" lockKindMetaKey tag
+governanceLockTagParser = requiredMetadataParser lockKindMemoKey >>= \tag ->
+  validationParser $ (governanceLockTagFromText tag) <?> invalidMemoValueMessage "value" lockKindMemoKey tag
 
 governanceLockSubjectParser : Parser Metadata Text
-governanceLockSubjectParser = requiredMetadataParser lockSubjectMetaKey
+governanceLockSubjectParser = requiredMetadataParser lockSubjectMemoKey
 
 governanceLockKindParser : Parser Metadata GovernanceLockKind
 governanceLockKindParser = governanceLockTagParser >>= \tag ->
@@ -457,22 +457,22 @@ controllersParser key =
     parser t = validationParser $ either (invalid . errorInMemoKeyMessage key) ok (parseControllersSpecification t)
 
 vestingControllersParser : ControllersSpecificationParser
-vestingControllersParser = controllersParser vestingControllersMetaKey
+vestingControllersParser = controllersParser vestingControllersMemoKey
 
 substitutionControllersParser : ControllersSpecificationParser
-substitutionControllersParser = controllersParser substitutionControllersMetaKey
+substitutionControllersParser = controllersParser substitutionControllersMemoKey
 
 unlockControllersParser : ControllersSpecificationParser
-unlockControllersParser = controllersParser unlockControllersMetaKey
+unlockControllersParser = controllersParser unlockControllersMemoKey
 
 newControllersParser : GovernanceLockSpecification -> Parser Metadata (Optional ControllersSpecification, Optional ControllersSpecification, Optional ControllersSpecification)
 newControllersParser (GLS_FullLock _) = do
   (,,) <$>
-    controllersParser newUnlockControllersMetaKey <*>
-    controllersParser newSubstitutionControllersMetaKey <*>
-    controllersParser newVestingControllersMetaKey
+    controllersParser newUnlockControllersMemoKey <*>
+    controllersParser newSubstitutionControllersMemoKey <*>
+    controllersParser newVestingControllersMemoKey
 newControllersParser (GLS_VestingLock _) = do
-  (None, None,) <$> controllersParser newVestingControllersMetaKey
+  (None, None,) <$> controllersParser newVestingControllersMemoKey
 
 fullLockSpecificationParser : Parser Metadata FullLockSpecification
 fullLockSpecificationParser = FullLockSpecification <$>
@@ -523,16 +523,16 @@ glr_withdrawVestingLock_parser dso sender = do
     vestedUntilTime
 
 lockStateParser : Parser Metadata LockState
-lockStateParser = optionalMetadataParser lockStatusMetaKey >>= \case
+lockStateParser = optionalMetadataParser lockStatusMemoKey >>= \case
   None -> pure LS_Locked
   Some t | Some state <- lockStateFromText t -> pure state
-  Some t -> assertFail $ invalidMemoValueMessage "value" lockStatusMetaKey t
+  Some t -> assertFail $ invalidMemoValueMessage "value" lockStatusMemoKey t
 
 glr_transferLock_parser : Parser Metadata GovernanceLockRequest
 glr_transferLock_parser = do
   targetState <- lockStateParser
   specification <- governanceLockSpecificationParser targetState
-  newOwner <- partyFromMetadataParser newLockOwnerMetaKey
+  newOwner <- partyFromMetadataParser newLockOwnerMemoKey
   transferAmount <- transferAmountParser
   (newUnlockControllers, newSubstitutionControllers, newVestingControllers) <- newControllersParser specification
   pure GLR_TransferLock with
@@ -560,7 +560,7 @@ glr_substituteLock_parser dso = do
 
 governanceLockRequestTagParser : Parser Metadata GovernanceLockRequestTag
 governanceLockRequestTagParser = do
-  request <- requiredMetadataParser requestMetaKey
+  request <- requiredMetadataParser requestMemoKey
   case governanceLockRequestTagFromText request of
     Some tag -> pure tag
     None -> assertFail $ "Invalid request: '" <> request <> "'"
@@ -583,33 +583,33 @@ parseGovernanceLockRequestTSv1 dso sender receiver config rawMeta = do
   assertParsed (governanceLockRequestTSv1Parser dso sender receiver config) meta
 
 targetLockOwnerParser : Parser Metadata Party
-targetLockOwnerParser = partyFromMetadataParser targetLockOwnerMetaKey
+targetLockOwnerParser = partyFromMetadataParser targetLockOwnerMemoKey
 
 optTargetLockOwnerParser : Optional ControllersSpecification -> Parser Metadata (Optional Party)
 optTargetLockOwnerParser (Some _) = Some <$> targetLockOwnerParser
-optTargetLockOwnerParser None = optPartyFromMetadataParser targetLockOwnerMetaKey
+optTargetLockOwnerParser None = optPartyFromMetadataParser targetLockOwnerMemoKey
 
 amountParser : Text -> Parser Metadata Decimal
 amountParser key = requiredMetadataParser key >>= \t ->
   validationParser $ (Text.parseDecimal t) <?> invalidMemoValueMessage "decimal" key t
 
 unlockAmountParser : Parser Metadata Decimal
-unlockAmountParser = amountParser unlockAmountMetaKey
+unlockAmountParser = amountParser unlockAmountMemoKey
 
 transferAmountParser : Parser Metadata Decimal
-transferAmountParser = amountParser transferAmountMetaKey
+transferAmountParser = amountParser transferAmountMemoKey
 
 vestingStartTimeParser : GovernanceLockKind -> Optional GovernanceLockConfig -> Parser Metadata (Optional Time)
 vestingStartTimeParser kind config =
   if vestingDurationFor kind config == days 0
     then pure None
-    else Some <$> iso8601TimeMetadataParser vestingStartTimeMetaKey
+    else Some <$> iso8601TimeMetadataParser vestingStartTimeMemoKey
 
 vestedUntilTimeParser : Parser Metadata Time
-vestedUntilTimeParser = iso8601TimeMetadataParser vestedUntilTimeMetaKey
+vestedUntilTimeParser = iso8601TimeMetadataParser vestedUntilTimeMemoKey
 
 vestingDurationParser : Parser Metadata RelTime
-vestingDurationParser = relTimeMetadataParser lockVestingDurationMetaKey
+vestingDurationParser = relTimeMetadataParser lockVestingDurationMemoKey
 
 vestingEndTimeParser : Parser Metadata Time
-vestingEndTimeParser = timeMetadataParser lockVestingEndTimeMetaKey
+vestingEndTimeParser = timeMetadataParser lockVestingEndTimeMemoKey

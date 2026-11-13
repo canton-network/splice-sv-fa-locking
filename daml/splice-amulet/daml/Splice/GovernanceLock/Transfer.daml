@@ -124,7 +124,7 @@ governanceLockTransferControllers GovernanceLockTransfer{source, receiver} =
 governanceLockTransferMetadata : GovernanceLockTransfer -> Metadata
 governanceLockTransferMetadata GovernanceLockTransfer{..} =
   encodeGovernanceLockMetadataWithRequest'
-    (<> encodeGovernanceLockNewCustomControllersMetadataEntries newUnlockControllers newSubstitutionControllers newVestingControllers)
+    (<> encodeGovernanceLockNewCustomControllersMemoEntries newUnlockControllers newSubstitutionControllers newVestingControllers)
     "accept-to-transfer-lock"
     source.specification
 

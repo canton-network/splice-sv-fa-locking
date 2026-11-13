@@ -85,7 +85,7 @@ setupVestingLock = do
 
   -- `unlockAmount = testVestingAmount` unlocks the full amount, so no `GovernanceLock` remains.
   vestingLockCid <- expectSuccess $
-    tsv1Operations.governanceUnlock (TestEnvRegistries registries registry) governanceLockCid alice.primaryParty (unlockMeta testVestingAmount unlockAt)
+    tsv1Operations.governanceUnlock (TestEnvRegistries registries registry) governanceLockCid alice.primaryParty (unlockMemo testVestingAmount unlockAt)
 
   [(lockedAmuletCid, lockedAmulet)] <- query @LockedAmulet alice.primaryParty
 
@@ -405,7 +405,7 @@ setupVestingSubstitution = do
 
   unlockAt <- (`addRelTime` hours 1) <$> getTime
   vestingLockCid <- expectSuccess $
-    tsv1Operations.governanceUnlock (TestEnvRegistries registries registry) governanceLockCid alice.primaryParty (unlockMeta testVestingAmount unlockAt)
+    tsv1Operations.governanceUnlock (TestEnvRegistries registries registry) governanceLockCid alice.primaryParty (unlockMemo testVestingAmount unlockAt)
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
 
   tsv1Operations.proposeSubstitution (TestEnvRegistries registries registry) bob.primaryParty LockSubstitutionArgs with
@@ -599,7 +599,7 @@ setupVestingLockTransfer = do
 
   unlockAt <- (`addRelTime` hours 1) <$> getTime
   vestingLockCid <- expectSuccess $
-    tsv1Operations.governanceUnlock (TestEnvRegistries registries registry) governanceLockCid alice.primaryParty (unlockMeta testVestingAmount unlockAt)
+    tsv1Operations.governanceUnlock (TestEnvRegistries registries registry) governanceLockCid alice.primaryParty (unlockMemo testVestingAmount unlockAt)
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
 
   now <- getTime

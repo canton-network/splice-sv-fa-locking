@@ -43,7 +43,7 @@ module Splice.GovernanceLock (
   governanceLock_lockForGovernance_impl,
   fetchAndMergeGovernanceLocks,
 
-  -- * Lock metadata
+  -- * Lock memo
   dataFromText,
   GovernanceLockTag(..),
   LockState(..),
@@ -54,31 +54,31 @@ module Splice.GovernanceLock (
   governanceLockKindToTagAndSubject,
   governanceLockKindFromTagAndSubject,
   invalidLockSubjectMessage,
-  encodeCommonLockMetadataEntries,
+  encodeCommonLockMemoEntries,
   encodeLockCompatMemo,
-  encodeControllersSpecificationMetadataEntries,
-  encodeGovernanceLockNewCustomControllersMetadataEntries,
+  encodeControllersSpecificationMemoEntries,
+  encodeGovernanceLockNewCustomControllersMemoEntries,
   encodeGovernanceLockMetadataWithRequest',
   encodeGovernanceLockMetadataWithRequest,
   cipMemoPrefix,
-  requestMetaKey,
-  unlockAmountMetaKey,
-  transferAmountMetaKey,
-  newLockOwnerMetaKey,
-  targetLockOwnerMetaKey,
-  lockKindMetaKey,
-  lockSubjectMetaKey,
-  lockStatusMetaKey,
-  lockVestingDurationMetaKey,
-  lockVestingEndTimeMetaKey,
-  substitutionControllersMetaKey,
-  newSubstitutionControllersMetaKey,
-  unlockControllersMetaKey,
-  newUnlockControllersMetaKey,
-  vestingControllersMetaKey,
-  newVestingControllersMetaKey,
-  vestingStartTimeMetaKey,
-  vestedUntilTimeMetaKey,
+  requestMemoKey,
+  unlockAmountMemoKey,
+  transferAmountMemoKey,
+  newLockOwnerMemoKey,
+  targetLockOwnerMemoKey,
+  lockKindMemoKey,
+  lockSubjectMemoKey,
+  lockStatusMemoKey,
+  lockVestingDurationMemoKey,
+  lockVestingEndTimeMemoKey,
+  substitutionControllersMemoKey,
+  newSubstitutionControllersMemoKey,
+  unlockControllersMemoKey,
+  newUnlockControllersMemoKey,
+  vestingControllersMemoKey,
+  newVestingControllersMemoKey,
+  vestingStartTimeMemoKey,
+  vestedUntilTimeMemoKey,
 
   -- * Utilities
   unfeaturedPaymentContextAndConfigFromChoiceContext,
@@ -876,134 +876,133 @@ lockAmuletFor forOwner@ForOwner {..} receiver specs holdingInputs context reason
     , result.senderChangeAmulet
     )
 
--- Metadata
--- ========
+-- Memo & metadata
+------------------
 
 cipPrefix = "cip-127"
 
 -- | Prefix of the memo tag used to specify lock attributes.
 cipMemoPrefix = cipPrefix <> "/memo:"
 
--- | Metadata key that specifies the requested lock operation.
-requestMetaKey = "request"
+-- | Memo key that specifies the requested lock operation.
+requestMemoKey = "request"
 
--- | Metadata key of a `GovernanceLock` unlock that specifies how much to unlock.
-unlockAmountMetaKey = "unlock-amount"
+-- | Memo key of a `GovernanceLock` unlock that specifies how much to unlock.
+unlockAmountMemoKey = "unlock-amount"
 
--- | Metadata key specifies how much of a lock to transfer.
-transferAmountMetaKey = "transfer-amount"
+-- | Memo key specifies how much of a lock to transfer.
+transferAmountMemoKey = "transfer-amount"
 
--- | Metadata key of a `GovernanceLock` kind.
-lockKindMetaKey = "lock-kind"
+-- | Memo key of a `GovernanceLock` kind.
+lockKindMemoKey = "lock-kind"
 
--- | Metadata key of a `GovernanceLock` subject.
-lockSubjectMetaKey = "lock-subject"
+-- | Memo key of a `GovernanceLock` subject.
+lockSubjectMemoKey = "lock-subject"
 
--- | Metadata key that specifies the status of a lock.
-lockStatusMetaKey = "lock-status"
+-- | Memo key that specifies the status of a lock.
+lockStatusMemoKey = "lock-status"
 
--- | Metadata key that specifies the time at which vesting should start.
-vestingStartTimeMetaKey = "vesting-start-time"
+-- | Memo key that specifies the time at which vesting should start.
+vestingStartTimeMemoKey = "vesting-start-time"
 
--- | Metadata key that specifies the time as of which vested funds should be computed and withdrawn.
-vestedUntilTimeMetaKey = "vested-until-time"
+-- | Memo key that specifies the time as of which vested funds should be computed and withdrawn.
+vestedUntilTimeMemoKey = "vested-until-time"
 
--- | Metadata key that specifies the duration of a vesting `GovernanceLock`.
-lockVestingDurationMetaKey = "lock-vesting-duration-micros"
+-- | Memo key that specifies the duration of a vesting `GovernanceLock`.
+lockVestingDurationMemoKey = "lock-vesting-duration-micros"
 
--- | Metadata key that specifies the end time of a vesting `GovernanceLock`.
-lockVestingEndTimeMetaKey = "lock-vesting-end-time-micros"
+-- | Memo key that specifies the end time of a vesting `GovernanceLock`.
+lockVestingEndTimeMemoKey = "lock-vesting-end-time-micros"
 
--- | Metadata key that encodes a human-readable description of a vesting `GovernanceLock` duration and end time.
-lockVestingInfoMetaKey = "lock-vesting-info"
+-- | Memo key that encodes a human-readable description of a vesting `GovernanceLock` duration and end time.
+lockVestingInfoMemoKey = "lock-vesting-info"
 
--- | Prefix of the metadata keys used to specify attributes of a new lock.
-newLockMetaPrefix = "new-"
+-- | Prefix of the memo keys used to specify attributes of a new lock.
+newLockMemoPrefix = "new-"
 
--- | Metadata key that specifies the new owner of a transferred lock.
-newLockOwnerMetaKey = newLockMetaPrefix <> "lock-owner"
+-- | Memo key that specifies the new owner of a transferred lock.
+newLockOwnerMemoKey = newLockMemoPrefix <> "lock-owner"
 
--- | Prefix of the metadata keys used to specify attributes of a target lock.
-targetLockMetaPrefix = "target-"
+-- | Prefix of the memo keys used to specify attributes of a target lock.
+targetLockMemoPrefix = "target-"
 
--- | Metadata key that specifies the owner of a target lock.
-targetLockOwnerMetaKey = targetLockMetaPrefix <> "lock-owner"
+-- | Memo key that specifies the owner of a target lock.
+targetLockOwnerMemoKey = targetLockMemoPrefix <> "lock-owner"
 
--- | Metadata key that specifies custom vesting controllers.
-vestingControllersMetaKey = "vesting-controllers"
+-- | Memo key that specifies custom vesting controllers.
+vestingControllersMemoKey = "vesting-controllers"
 
--- | Metadata key that specifies custom substitution controllers.
-substitutionControllersMetaKey = "substitution-controllers"
+-- | Memo key that specifies custom substitution controllers.
+substitutionControllersMemoKey = "substitution-controllers"
 
--- | Metadata key that specifies custom unlock controllers.
-unlockControllersMetaKey = "unlock-controllers"
+-- | Memo key that specifies custom unlock controllers.
+unlockControllersMemoKey = "unlock-controllers"
 
--- | Metadata key that specifies custom vesting controllers.
-newVestingControllersMetaKey = newLockMetaPrefix <> "vesting-controllers"
+-- | Memo key that specifies custom vesting controllers.
+newVestingControllersMemoKey = newLockMemoPrefix <> "vesting-controllers"
 
--- | Metadata key that specifies custom substitution controllers.
-newSubstitutionControllersMetaKey = newLockMetaPrefix <> "substitution-controllers"
+-- | Memo key that specifies custom substitution controllers.
+newSubstitutionControllersMemoKey = newLockMemoPrefix <> "substitution-controllers"
 
--- | Metadata key that specifies custom unlock controllers.
-newUnlockControllersMetaKey = newLockMetaPrefix <> "unlock-controllers"
+-- | Memo key that specifies custom unlock controllers.
+newUnlockControllersMemoKey = newLockMemoPrefix <> "unlock-controllers"
 
--- | The metadata entries of the kind, subject and status of a lock, in the order of the CIP.
-encodeCommonLockMetadataEntries : GovernanceLockKind -> LockState -> [(Text, Text)]
-encodeCommonLockMetadataEntries kind state =
+-- | The memo entries of the kind, subject and status of a lock, in the order of the CIP.
+encodeCommonLockMemoEntries : GovernanceLockKind -> LockState -> [(Text, Text)]
+encodeCommonLockMemoEntries kind state =
   let (tag, subject) = governanceLockKindToTagAndSubject kind
-  in [ (lockKindMetaKey, governanceLockTagToText tag)
-     , (lockSubjectMetaKey, subject)
-     , (lockStatusMetaKey, lockStateToText state)
+  in [ (lockKindMemoKey, governanceLockTagToText tag)
+     , (lockSubjectMemoKey, subject)
+     , (lockStatusMemoKey, lockStateToText state)
      ]
 
-encodeControllersSpecificationMetadataEntries : Text -> Optional ControllersSpecification -> [(Text, Text)]
-encodeControllersSpecificationMetadataEntries _ None = []
-encodeControllersSpecificationMetadataEntries key (Some controllers) = [(key, encodeControllersSpecification controllers)]
+encodeControllersSpecificationMemoEntries : Text -> Optional ControllersSpecification -> [(Text, Text)]
+encodeControllersSpecificationMemoEntries _ None = []
+encodeControllersSpecificationMemoEntries key (Some controllers) = [(key, encodeControllersSpecification controllers)]
 
-encodeGovernanceLockControllersMetadataEntries' : Text -> Text -> Text -> Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> [(Text, Text)]
-encodeGovernanceLockControllersMetadataEntries' unlockKey substitutionKey vestingKey unlockControllers substitutionControllers vestingControllers =
-  foldMap (uncurry encodeControllersSpecificationMetadataEntries)
+encodeGovernanceLockControllersMemoEntries' : Text -> Text -> Text -> Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> [(Text, Text)]
+encodeGovernanceLockControllersMemoEntries' unlockKey substitutionKey vestingKey unlockControllers substitutionControllers vestingControllers =
+  foldMap (uncurry encodeControllersSpecificationMemoEntries)
     [ (unlockKey, unlockControllers)
     , (substitutionKey, substitutionControllers)
     , (vestingKey, vestingControllers)
     ]
 
-encodeGovernanceLockControllersMetadataEntries : Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> [(Text, Text)]
-encodeGovernanceLockControllersMetadataEntries =
-  encodeGovernanceLockControllersMetadataEntries' unlockControllersMetaKey substitutionControllersMetaKey vestingControllersMetaKey
+encodeGovernanceLockControllersMemoEntries : Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> [(Text, Text)]
+encodeGovernanceLockControllersMemoEntries =
+  encodeGovernanceLockControllersMemoEntries' unlockControllersMemoKey substitutionControllersMemoKey vestingControllersMemoKey
 
-encodeGovernanceLockNewCustomControllersMetadataEntries : Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> [(Text, Text)]
-encodeGovernanceLockNewCustomControllersMetadataEntries =
-  encodeGovernanceLockControllersMetadataEntries' newUnlockControllersMetaKey newSubstitutionControllersMetaKey newVestingControllersMetaKey
+encodeGovernanceLockNewCustomControllersMemoEntries : Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> [(Text, Text)]
+encodeGovernanceLockNewCustomControllersMemoEntries =
+  encodeGovernanceLockControllersMemoEntries' newUnlockControllersMemoKey newSubstitutionControllersMemoKey newVestingControllersMemoKey
 
--- | The metadata entries of a lock specification, in the order of the CIP.
-encodeGovernanceLockSpecMetadataEntries : GovernanceLockSpecification -> [(Text, Text)]
-encodeGovernanceLockSpecMetadataEntries (GLS_FullLock FullLockSpecification{..}) =
-  encodeCommonLockMetadataEntries kind LS_Locked <> encodeGovernanceLockControllersMetadataEntries unlockControllers substitutionControllers vestingControllers
-encodeGovernanceLockSpecMetadataEntries (GLS_VestingLock VestingLockSpecification{..}) =
-  encodeCommonLockMetadataEntries kind LS_Vesting <>
-    [ (lockVestingDurationMetaKey, encodeRelTime vestingPeriod)
-    , (lockVestingEndTimeMetaKey, encodeTime endTime)
-    , (lockVestingInfoMetaKey, "\"vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime <> "\"")
-    ] <> encodeGovernanceLockControllersMetadataEntries None None vestingControllers
+-- | The memo entries of a lock specification, in the order of the CIP.
+encodeGovernanceLockSpecMemoEntries : GovernanceLockSpecification -> [(Text, Text)]
+encodeGovernanceLockSpecMemoEntries (GLS_FullLock FullLockSpecification{..}) =
+  encodeCommonLockMemoEntries kind LS_Locked <> encodeGovernanceLockControllersMemoEntries unlockControllers substitutionControllers vestingControllers
+encodeGovernanceLockSpecMemoEntries (GLS_VestingLock VestingLockSpecification{..}) =
+  encodeCommonLockMemoEntries kind LS_Vesting <>
+    [ (lockVestingDurationMemoKey, encodeRelTime vestingPeriod)
+    , (lockVestingEndTimeMemoKey, encodeTime endTime)
+    , (lockVestingInfoMemoKey, "\"vesting for " <> show (relTimeToDays vestingPeriod) <> " days until " <> show endTime <> "\"")
+    ] <> encodeGovernanceLockControllersMemoEntries None None vestingControllers
 
 encodeGovernanceLockMetadata : GovernanceLock -> Metadata
 encodeGovernanceLockMetadata GovernanceLock{specification} =
-  encodeLockMetadataEntries $ encodeGovernanceLockSpecMetadataEntries specification
+  encodeLockMemoEntries $ encodeGovernanceLockSpecMemoEntries specification
 
 encodeGovernanceLockMetadataWithRequest' : ([(Text, Text)] -> [(Text, Text)]) -> Text -> GovernanceLockSpecification -> Metadata
 encodeGovernanceLockMetadataWithRequest' mapEntries request spec =
-  encodeLockMetadataEntries $ mapEntries $ (requestMetaKey, request) :: encodeGovernanceLockSpecMetadataEntries spec
+  encodeLockMemoEntries $ mapEntries $ (requestMemoKey, request) :: encodeGovernanceLockSpecMemoEntries spec
 
 encodeGovernanceLockMetadataWithRequest : Text -> GovernanceLockSpecification -> Metadata
 encodeGovernanceLockMetadataWithRequest = encodeGovernanceLockMetadataWithRequest' identity
 
 -- | Metadata whose only entry is the reason, a memo that lists the given entries in the given order.
-encodeLockMetadataEntries : [(Text, Text)] -> Metadata
-encodeLockMetadataEntries entries = reasonToMeta (encodeLockCompatMemo entries) emptyMetadata
+encodeLockMemoEntries : [(Text, Text)] -> Metadata
+encodeLockMemoEntries entries = reasonToMeta (encodeLockCompatMemo entries) emptyMetadata
 
--- | The memo of the given metadata entries. It keeps the order of the entries,
--- so that wallets show the memos as the CIP writes them.
+-- | The memo of the given entries. It keeps the order of the entries, so that wallets show the memos as the CIP writes them.
 encodeLockCompatMemo : [(Text, Text)] -> Text
 encodeLockCompatMemo entries =
   let encodeKeyValue (k, v) = k <> "=" <> v

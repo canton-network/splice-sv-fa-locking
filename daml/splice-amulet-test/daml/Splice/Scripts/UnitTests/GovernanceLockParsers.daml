@@ -89,14 +89,14 @@ test_assertParsed = do
 test_failureMessages : Script ()
 test_failureMessages = do
   -- Keys are named as written in the memo, and values are quoted
-  errorInMemoKeyMessage lockVestingDurationMetaKey "Invalid microseconds: '60d'"
+  errorInMemoKeyMessage lockVestingDurationMemoKey "Invalid microseconds: '60d'"
     === "Error in memo key 'lock-vesting-duration-micros': Invalid microseconds: '60d'"
   invalidLockSubjectMessage "SV name" GLT_SuperValidator "bad$sv"
     === "Invalid SV name for sv-lock: 'bad$sv'"
   invalidMemoEntryMessage "a=b=c" === "Invalid memo entry 'a=b=c': expected 'key=value'"
-  invalidMemoValueMessage "party" targetLockOwnerMetaKey "bad$party"
+  invalidMemoValueMessage "party" targetLockOwnerMemoKey "bad$party"
     === "Invalid party for memo key 'target-lock-owner': 'bad$party'"
-  missingMemoKeyMessage lockKindMetaKey === "Missing memo key 'lock-kind'"
+  missingMemoKeyMessage lockKindMemoKey === "Missing memo key 'lock-kind'"
 
 -- Lock kind parser
 -------------------
@@ -104,7 +104,7 @@ test_failureMessages = do
 test_governanceLockTagParser : Script ()
 test_governanceLockTagParser = do
   -- `GovernanceLockTag` has no `Show` instance, so compare the tags by their text
-  let run t = runParser governanceLockTagParser (mkMeta [(lockKindMetaKey, t)])
+  let run t = runParser governanceLockTagParser (mkMeta [(lockKindMemoKey, t)])
       expectTag tag = expectSuccess (governanceLockTagToText tag) . fmap governanceLockTagToText
 
   expectTag GLT_FeaturedApp $ run "fa-lock"
@@ -112,28 +112,28 @@ test_governanceLockTagParser = do
   expectTag GLT_SuperValidator $ run "sv-lock"
 
   -- The tag must be known, and the TSv1 receiver party format is not accepted
-  expectErrors [invalidMemoValueMessage "value" lockKindMetaKey "unknown-lock"] $ governanceLockTagToText <$> run "unknown-lock"
-  expectErrors [invalidMemoValueMessage "value" lockKindMetaKey "cip-127_sv-lock"] $ governanceLockTagToText <$> run "cip-127_sv-lock"
+  expectErrors [invalidMemoValueMessage "value" lockKindMemoKey "unknown-lock"] $ governanceLockTagToText <$> run "unknown-lock"
+  expectErrors [invalidMemoValueMessage "value" lockKindMemoKey "cip-127_sv-lock"] $ governanceLockTagToText <$> run "cip-127_sv-lock"
 
 test_governanceLockKindParser : Script ()
 test_governanceLockKindParser = do
   let run entries = runParser governanceLockKindParser (mkMeta entries)
-      kind' k = (lockKindMetaKey, k)
+      kind' k = (lockKindMemoKey, k)
       kind k = kind' $ governanceLockTagToText k
-      subject s = (lockSubjectMetaKey, s)
+      subject s = (lockSubjectMemoKey, s)
 
   expectSuccess (GLK_FeaturedApp testProvider) $ run [kind GLT_FeaturedApp, subject "provider"]
   expectSuccess (GLK_ProvisionalFeaturedApp testProvider) $ run [kind GLT_ProvisionalFeaturedApp, subject "provider"]
   expectSuccess (GLK_SuperValidatorRightsOwner "someSv") $ run [kind GLT_SuperValidator, subject "someSv"]
 
   -- Kind and subject are required; a missing kind is reported before the subject is checked
-  expectErrors [missingMemoKeyMessage lockSubjectMetaKey] $ run [kind GLT_FeaturedApp]
-  expectErrors [missingMemoKeyMessage lockSubjectMetaKey] $ run [kind GLT_SuperValidator]
-  expectErrors [missingMemoKeyMessage lockKindMetaKey] $ run [subject "provider"]
-  expectErrors [missingMemoKeyMessage lockKindMetaKey] $ run []
+  expectErrors [missingMemoKeyMessage lockSubjectMemoKey] $ run [kind GLT_FeaturedApp]
+  expectErrors [missingMemoKeyMessage lockSubjectMemoKey] $ run [kind GLT_SuperValidator]
+  expectErrors [missingMemoKeyMessage lockKindMemoKey] $ run [subject "provider"]
+  expectErrors [missingMemoKeyMessage lockKindMemoKey] $ run []
 
   -- The lock kind must be known
-  expectErrors [invalidMemoValueMessage "value" lockKindMetaKey "unknown-lock"] $ run [kind' "unknown-lock", subject "provider"]
+  expectErrors [invalidMemoValueMessage "value" lockKindMemoKey "unknown-lock"] $ run [kind' "unknown-lock", subject "provider"]
 
   -- The subject of a featured app lock must be a party
   expectErrors [invalidLockSubjectMessage "provider" GLT_FeaturedApp invalidParty] $
@@ -156,38 +156,38 @@ test_governanceLockMetadataParser = do
 
   -- Without a reason field, empty metadata is returned
   expectSuccess (mkMeta []) $ run []
-  expectSuccess (mkMeta []) $ run [otherEntry, (lockSubjectMetaKey, "provider")]
+  expectSuccess (mkMeta []) $ run [otherEntry, (lockSubjectMemoKey, "provider")]
 
   -- A reason without the `cipMemoPrefix` prefix is not parsed, and empty metadata is returned
-  expectSuccess (mkMeta []) $ run [(reasonMetaKey, lockSubjectMetaKey <> "=provider")]
+  expectSuccess (mkMeta []) $ run [(reasonMetaKey, lockSubjectMemoKey <> "=provider")]
 
   -- A single pair is added to the metadata, and the reason field is removed
-  expectSuccess (mkMeta [(lockSubjectMetaKey, "provider")]) $
-    run [reason $ lockSubjectMetaKey <> "=provider"]
+  expectSuccess (mkMeta [(lockSubjectMemoKey, "provider")]) $
+    run [reason $ lockSubjectMemoKey <> "=provider"]
 
   -- `&` separates the pairs, and the other metadata fields are ignored
   expectSuccess
-    (mkMeta [(lockSubjectMetaKey, "provider")])
-    $ run [otherEntry, reason $ lockSubjectMetaKey <> "=provider"]
+    (mkMeta [(lockSubjectMemoKey, "provider")])
+    $ run [otherEntry, reason $ lockSubjectMemoKey <> "=provider"]
 
   -- An empty value is allowed
-  expectSuccess (mkMeta [(lockSubjectMetaKey, "")]) $
-    run [reason $ lockSubjectMetaKey <> "="]
+  expectSuccess (mkMeta [(lockSubjectMemoKey, "")]) $
+    run [reason $ lockSubjectMemoKey <> "="]
 
   -- A pair without `=`
-  expectErrors [invalidMemoEntryMessage lockSubjectMetaKey] $ run [reason lockSubjectMetaKey]
+  expectErrors [invalidMemoEntryMessage lockSubjectMemoKey] $ run [reason lockSubjectMemoKey]
 
   -- A pair with more than one `=`
-  expectErrors [invalidMemoEntryMessage $ lockSubjectMetaKey <> "=provider=x"] $
-    run [reason $ lockSubjectMetaKey <> "=provider=x"]
+  expectErrors [invalidMemoEntryMessage $ lockSubjectMemoKey <> "=provider=x"] $
+    run [reason $ lockSubjectMemoKey <> "=provider=x"]
 
   -- An empty reason, and an empty pair after a trailing `&`
   expectErrors [invalidMemoEntryMessage ""] $ run [reason ""]
-  expectErrors [invalidMemoEntryMessage ""] $ run [reason $ lockSubjectMetaKey <> "=provider&"]
+  expectErrors [invalidMemoEntryMessage ""] $ run [reason $ lockSubjectMemoKey <> "=provider&"]
 
   -- All invalid pairs are reported
   expectErrors [invalidMemoEntryMessage "a", invalidMemoEntryMessage "b=c=d"] $
-    run [reason $ "a&" <> lockSubjectMetaKey <> "=provider&b=c=d"]
+    run [reason $ "a&" <> lockSubjectMemoKey <> "=provider&b=c=d"]
 
 -- Lock specification parser
 ----------------------------
@@ -198,20 +198,20 @@ test_fullLockSpecificationParser'
 test_fullLockSpecificationParser' run = do
   let fullSpecification = fullLockSpecification $ GLK_FeaturedApp testProvider
   expectSuccess fullSpecification $
-    run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMetaKey, "provider")]
+    run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMemoKey, "provider")]
 
   expectSuccess (fullLockSpecification $ GLK_SuperValidatorRightsOwner "someSv") $
-    run (governanceLockTagToText GLT_SuperValidator) [(lockSubjectMetaKey, "someSv")]
+    run (governanceLockTagToText GLT_SuperValidator) [(lockSubjectMemoKey, "someSv")]
 
   -- Invalid field
   expectErrors [invalidLockSubjectMessage "provider" GLT_FeaturedApp invalidParty] $
-    run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMetaKey, invalidParty)]
+    run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMemoKey, invalidParty)]
 
--- | The lock kind is read from the `lockKindMetaKey` field.
+-- | The lock kind is read from the `lockKindMemoKey` field.
 test_fullLockSpecificationParser : Script ()
 test_fullLockSpecificationParser =
   test_fullLockSpecificationParser' \kind entries ->
-    runParser fullLockSpecificationParser (mkMeta $ (lockKindMetaKey, kind) :: entries)
+    runParser fullLockSpecificationParser (mkMeta $ (lockKindMemoKey, kind) :: entries)
 
 -- TSv1 request parser
 ----------------------
@@ -230,13 +230,13 @@ expectRequestErrors expected result = case result of
 test_governanceLockRequestTSv1Parser : Script ()
 test_governanceLockRequestTSv1Parser = do
   let run receiver entries = runParser (governanceLockRequestTSv1Parser testAdmin testAdmin receiver None) (mkMeta entries)
-      request r = (requestMetaKey, r)
-      faLock = [(lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp), (lockSubjectMetaKey, "provider")]
+      request r = (requestMemoKey, r)
+      faLock = [(lockKindMemoKey, governanceLockTagToText GLT_FeaturedApp), (lockSubjectMemoKey, "provider")]
       faSpecification = fullLockSpecification $ GLK_FeaturedApp testProvider
       invalidReceiverError p = "Invalid receiver: '" <> show p <> "'"
 
   -- Create a lock: the specification is parsed
-  expectRequest (run lockManagerParty $ request "create-lock" :: (unlockAmountMetaKey, "1.0") :: faLock) \case
+  expectRequest (run lockManagerParty $ request "create-lock" :: (unlockAmountMemoKey, "1.0") :: faLock) \case
     GLR_CreateGovernanceLock{fullSpecification} -> fullSpecification === faSpecification
     _ -> fail "Expected GLR_CreateGovernanceLock"
 
@@ -250,8 +250,8 @@ test_governanceLockRequestTSv1Parser = do
   expectRequest
     (run lockManagerParty $
       request "unlock-and-start-vesting"
-        :: (unlockAmountMetaKey, "10000.0")
-        :: (vestingStartTimeMetaKey, "2026-01-01T00:00:00Z")
+        :: (unlockAmountMemoKey, "10000.0")
+        :: (vestingStartTimeMemoKey, "2026-01-01T00:00:00Z")
         :: faLock)
     \case
       GLR_UnlockGovernanceLock{target, unlockAmount, vestingStartTime} -> do
@@ -261,30 +261,30 @@ test_governanceLockRequestTSv1Parser = do
       _ -> fail "Expected GLR_UnlockGovernanceLock"
 
   -- Unlock without the vesting start time
-  expectRequestErrors [missingMemoKeyMessage vestingStartTimeMetaKey] $
-    run lockManagerParty (request "unlock-and-start-vesting" :: (unlockAmountMetaKey, "10000.0") :: faLock)
+  expectRequestErrors [missingMemoKeyMessage vestingStartTimeMemoKey] $
+    run lockManagerParty (request "unlock-and-start-vesting" :: (unlockAmountMemoKey, "10000.0") :: faLock)
 
   -- Provisional featured app locks do not vest, so their unlock ignores the vesting start time
-  let provisionalFaLock = [(lockKindMetaKey, governanceLockTagToText GLT_ProvisionalFeaturedApp), (lockSubjectMetaKey, "provider")]
+  let provisionalFaLock = [(lockKindMemoKey, governanceLockTagToText GLT_ProvisionalFeaturedApp), (lockSubjectMemoKey, "provider")]
       expectProvisionalUnlock entries = expectRequest (run lockManagerParty entries) \case
         GLR_UnlockGovernanceLock{target, unlockAmount, vestingStartTime} -> do
           target.specification === GLS_FullLock (fullLockSpecification (GLK_ProvisionalFeaturedApp testProvider))
           unlockAmount === 10000.0
           vestingStartTime === None
         _ -> fail "Expected GLR_UnlockGovernanceLock"
-  expectProvisionalUnlock $ request "unlock-and-start-vesting" :: (unlockAmountMetaKey, "10000.0") :: provisionalFaLock
+  expectProvisionalUnlock $ request "unlock-and-start-vesting" :: (unlockAmountMemoKey, "10000.0") :: provisionalFaLock
   expectProvisionalUnlock $
     request "unlock-and-start-vesting"
-      :: (unlockAmountMetaKey, "10000.0")
-      :: (vestingStartTimeMetaKey, "not-a-time")
+      :: (unlockAmountMemoKey, "10000.0")
+      :: (vestingStartTimeMemoKey, "not-a-time")
       :: provisionalFaLock
 
   -- Transfer a lock: the new owner is read from the metadata
   expectRequest
     (run lockManagerParty $
       request "transfer-lock"
-        :: (newLockOwnerMetaKey, "alice")
-        :: (transferAmountMetaKey, "1.0")
+        :: (newLockOwnerMemoKey, "alice")
+        :: (transferAmountMemoKey, "1.0")
         :: faLock)
     \case
       GLR_TransferLock{specification, newOwner, transferAmount} -> do
@@ -297,11 +297,11 @@ test_governanceLockRequestTSv1Parser = do
   expectRequest
     (run lockManagerParty $
       request "withdraw-vested-funds"
-        :: (vestedUntilTimeMetaKey, "2025-12-01T00:00:00Z")
+        :: (vestedUntilTimeMemoKey, "2025-12-01T00:00:00Z")
         -- 60 days in microseconds
-        :: (lockVestingDurationMetaKey, "5184000000000")
+        :: (lockVestingDurationMemoKey, "5184000000000")
         -- 2026-01-01T00:00:00Z in microseconds since the epoch
-        :: (lockVestingEndTimeMetaKey, "1767225600000000")
+        :: (lockVestingEndTimeMemoKey, "1767225600000000")
         :: faLock)
     \case
       GLR_WithdrawVestingLock{target, vestedUntilTime} -> do
@@ -316,9 +316,9 @@ test_governanceLockRequestTSv1Parser = do
   expectRequest
     (run lockManagerParty $
       request "withdraw-vested-funds"
-        :: (vestedUntilTimeMetaKey, "2025-12-01T00:00:00Z")
-        :: (lockVestingDurationMetaKey, "5184000000000")
-        :: (lockVestingEndTimeMetaKey, "1767225600000000")
+        :: (vestedUntilTimeMemoKey, "2025-12-01T00:00:00Z")
+        :: (lockVestingDurationMemoKey, "5184000000000")
+        :: (lockVestingEndTimeMemoKey, "1767225600000000")
         :: faLock)
     \case
       GLR_WithdrawVestingLock{} -> pure ()
@@ -326,44 +326,44 @@ test_governanceLockRequestTSv1Parser = do
 
   -- Withdraw without the vested-until time and the vesting lock key
   expectRequestErrors
-    [ missingMemoKeyMessage lockVestingDurationMetaKey
-    , missingMemoKeyMessage lockVestingEndTimeMetaKey
-    , missingMemoKeyMessage vestedUntilTimeMetaKey
+    [ missingMemoKeyMessage lockVestingDurationMemoKey
+    , missingMemoKeyMessage lockVestingEndTimeMemoKey
+    , missingMemoKeyMessage vestedUntilTimeMemoKey
     ]
     $ run lockManagerParty (request "withdraw-vested-funds" :: faLock)
 
   -- The request is required and must be known
-  expectRequestErrors [missingMemoKeyMessage requestMetaKey] $ run lockManagerParty faLock
+  expectRequestErrors [missingMemoKeyMessage requestMemoKey] $ run lockManagerParty faLock
   expectRequestErrors ["Invalid request: 'unlock'"] $ run lockManagerParty (request "unlock" :: faLock)
 
   -- Creating, unlocking and transferring a lock needs the lock manager as the receiver
   expectRequestErrors [invalidReceiverError alice] $ run alice (request "create-lock" :: faLock)
-  expectRequestErrors [invalidReceiverError alice, missingMemoKeyMessage unlockAmountMetaKey] $
+  expectRequestErrors [invalidReceiverError alice, missingMemoKeyMessage unlockAmountMemoKey] $
     run alice (request "unlock-and-start-vesting" :: faLock)
-  expectRequestErrors [invalidReceiverError alice, missingMemoKeyMessage newLockOwnerMetaKey, missingMemoKeyMessage transferAmountMetaKey] $
+  expectRequestErrors [invalidReceiverError alice, missingMemoKeyMessage newLockOwnerMemoKey, missingMemoKeyMessage transferAmountMemoKey] $
     run alice (request "transfer-lock" :: faLock)
   expectRequestErrors
     [ invalidReceiverError alice
-    , missingMemoKeyMessage lockVestingDurationMetaKey
-    , missingMemoKeyMessage lockVestingEndTimeMetaKey
-    , missingMemoKeyMessage vestedUntilTimeMetaKey
+    , missingMemoKeyMessage lockVestingDurationMemoKey
+    , missingMemoKeyMessage lockVestingEndTimeMemoKey
+    , missingMemoKeyMessage vestedUntilTimeMemoKey
     ]
     $ run alice (request "withdraw-vested-funds" :: faLock)
   -- Substituting a lock also needs the lock manager as the receiver; all errors are reported
-  expectRequestErrors [invalidReceiverError alice, missingMemoKeyMessage targetLockOwnerMetaKey] $
+  expectRequestErrors [invalidReceiverError alice, missingMemoKeyMessage targetLockOwnerMemoKey] $
     run alice (request "substitute-lock" :: faLock)
 
   -- All invalid fields are reported
   expectRequestErrors
     [ invalidReceiverError alice
     , invalidLockSubjectMessage "provider" GLT_FeaturedApp invalidParty
-    , invalidMemoValueMessage "decimal" unlockAmountMetaKey "not-a-decimal"
+    , invalidMemoValueMessage "decimal" unlockAmountMemoKey "not-a-decimal"
     ]
     $ run alice
         [ request "unlock-and-start-vesting"
-        , (lockKindMetaKey, governanceLockTagToText GLT_FeaturedApp)
-        , (lockSubjectMetaKey, invalidParty)
-        , (unlockAmountMetaKey, "not-a-decimal")
+        , (lockKindMemoKey, governanceLockTagToText GLT_FeaturedApp)
+        , (lockSubjectMemoKey, invalidParty)
+        , (unlockAmountMemoKey, "not-a-decimal")
         ]
 
 -- Substitution parser
@@ -382,7 +382,7 @@ substitutionTSv1Parser admin = governanceLockRequestTSv1Parser admin admin lockM
 
 -- | The metadata entry that requests a substitution.
 substitutionRequest : (Text, Text)
-substitutionRequest = (requestMetaKey, governanceLockRequestTagToText GLRT_SubstituteLock)
+substitutionRequest = (requestMemoKey, governanceLockRequestTagToText GLRT_SubstituteLock)
 
 -- | Examples of the memo in the `allocation.meta` of an `AllocationFactory_Allocate` call that proposes a substitution.
 --
@@ -455,45 +455,45 @@ test_substitutionTSv1Parser_examples = do
 test_substitutionTSv1Parser_failures : Script ()
 test_substitutionTSv1Parser_failures = do
   let run' entries = runParser (substitutionTSv1Parser testAdmin) (mkMeta $ substitutionRequest :: entries)
-      run entries = run' $ (lockKindMetaKey, governanceLockTagToText GLT_SuperValidator) :: entries
-      subject = (lockSubjectMetaKey, "someSv")
-      targetOwner = (targetLockOwnerMetaKey, "alice")
+      run entries = run' $ (lockKindMemoKey, governanceLockTagToText GLT_SuperValidator) :: entries
+      subject = (lockSubjectMemoKey, "someSv")
+      targetOwner = (targetLockOwnerMemoKey, "alice")
 
   -- The target owner is required and must be a party
-  expectErrors [missingMemoKeyMessage targetLockOwnerMetaKey] $ run [subject]
-  expectErrors [invalidMemoValueMessage "party" targetLockOwnerMetaKey invalidParty] $
-    run [subject, (targetLockOwnerMetaKey, invalidParty)]
+  expectErrors [missingMemoKeyMessage targetLockOwnerMemoKey] $ run [subject]
+  expectErrors [invalidMemoValueMessage "party" targetLockOwnerMemoKey invalidParty] $
+    run [subject, (targetLockOwnerMemoKey, invalidParty)]
 
   -- The kind must name a known lock kind
-  expectErrors [invalidMemoValueMessage "value" lockKindMetaKey "unknown"] $
-    run' [(lockKindMetaKey, "unknown"), subject, targetOwner]
+  expectErrors [invalidMemoValueMessage "value" lockKindMemoKey "unknown"] $
+    run' [(lockKindMemoKey, "unknown"), subject, targetOwner]
 
   -- The target state must be `locked` or `vesting`; an invalid state and an invalid owner are both reported
   expectErrors
-    [ invalidMemoValueMessage "value" lockStatusMetaKey "unlocking"
-    , invalidMemoValueMessage "party" targetLockOwnerMetaKey invalidParty
+    [ invalidMemoValueMessage "value" lockStatusMemoKey "unlocking"
+    , invalidMemoValueMessage "party" targetLockOwnerMemoKey invalidParty
     ]
-    $ run [subject, (lockStatusMetaKey, "unlocking"), (targetLockOwnerMetaKey, invalidParty)]
+    $ run [subject, (lockStatusMemoKey, "unlocking"), (targetLockOwnerMemoKey, invalidParty)]
 
   -- The new lock needs a lock subject
-  expectErrors [missingMemoKeyMessage lockSubjectMetaKey] $ run [targetOwner]
+  expectErrors [missingMemoKeyMessage lockSubjectMemoKey] $ run [targetOwner]
 
   -- A vesting target needs a vesting period and end time
   expectErrors
-    [ missingMemoKeyMessage lockVestingDurationMetaKey
-    , missingMemoKeyMessage lockVestingEndTimeMetaKey
+    [ missingMemoKeyMessage lockVestingDurationMemoKey
+    , missingMemoKeyMessage lockVestingEndTimeMemoKey
     ]
-    $ run [subject, targetOwner, (lockStatusMetaKey, lockStateToText LS_Vesting)]
+    $ run [subject, targetOwner, (lockStatusMemoKey, lockStateToText LS_Vesting)]
 
   -- The vesting period and end time must be integers; both invalid values are reported
   expectErrors
-    [ errorInMemoKeyMessage lockVestingDurationMetaKey "Invalid microseconds: '60d'"
-    , errorInMemoKeyMessage lockVestingEndTimeMetaKey "Invalid microseconds: '2026-01-01T00:00:00Z'"
+    [ errorInMemoKeyMessage lockVestingDurationMemoKey "Invalid microseconds: '60d'"
+    , errorInMemoKeyMessage lockVestingEndTimeMemoKey "Invalid microseconds: '2026-01-01T00:00:00Z'"
     ]
     $ run
         [ subject
         , targetOwner
-        , (lockStatusMetaKey, lockStateToText LS_Vesting)
-        , (lockVestingDurationMetaKey, "60d")
-        , (lockVestingEndTimeMetaKey, "2026-01-01T00:00:00Z")
+        , (lockStatusMemoKey, lockStateToText LS_Vesting)
+        , (lockVestingDurationMemoKey, "60d")
+        , (lockVestingEndTimeMemoKey, "2026-01-01T00:00:00Z")
         ]
