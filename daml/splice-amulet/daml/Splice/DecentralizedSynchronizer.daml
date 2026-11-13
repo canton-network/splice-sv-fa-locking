@@ -1,17 +1,21 @@
 -- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+{-# LANGUAGE ApplicativeDo #-}
+
 -- | Types and contracts for managing synchronizer fees
 module Splice.DecentralizedSynchronizer where
 
-import DA.Action (foldlA)
+import DA.Optional (fromOptional)
 import qualified DA.Set as Set
 import DA.Text as T
-import qualified DA.TextMap as TextMap
 import DA.Time
+import DA.Validation
 
 import Splice.Types
 import Splice.Util
+import Splice.Util.Parser
+import Splice.Util.Memo
 
 
 -- Decentralized synchronizer configuration
@@ -107,41 +111,29 @@ data TrafficPurchaseMemo = TrafficPurchaseMemo with
 trafficPurchaseMemoPrefix : Text
 trafficPurchaseMemoPrefix = "splice/memo:"
 
+trafficPurchaseMemberIdMemoKey = "member-id"
+trafficPurchaseSynchronizerIdMemoKey = "synchronizer-id"
+trafficPurchaseMigrationIdMemoKey = "migration-id"
+trafficPurchaseForfeitValidatorRewardCouponMemoKey = "forfeit-validator-reward-coupon"
+
+trafficPurchaseMemoParser : Parser Memo TrafficPurchaseMemo
+trafficPurchaseMemoParser = do
+  memberId <- requiredMemoFieldParser trafficPurchaseMemberIdMemoKey
+  synchronizerId <- requiredMemoFieldParser trafficPurchaseSynchronizerIdMemoKey
+  migrationId <- intMemoFieldParser trafficPurchaseMigrationIdMemoKey
+  forfeitValidatorRewardCoupon <- fromOptional False <$> optionalBoolMemoFieldParser trafficPurchaseForfeitValidatorRewardCouponMemoKey
+  pure TrafficPurchaseMemo with ..
+
 -- | Parse the purchase arguments from memo tag using url query param style:
 -- `splice/memo:member-id=...&synchronizer-id=...&migration-id=...[&forfeit-validator-reward-coupon=true|false]`.
-parseTrafficPurchaseMemo : Text -> Either Text TrafficPurchaseMemo
-parseTrafficPurchaseMemo memo = do
-  params <- case T.stripPrefix trafficPurchaseMemoPrefix memo of
-    None -> Left $ "Traffic purchase memo must start with " <> trafficPurchaseMemoPrefix
-    Some params -> Right params
-  fields <- foldlA addField TextMap.empty (T.splitOn "&" params)
-  memberId <- requiredField fields "member-id"
-  synchronizerId <- requiredField fields "synchronizer-id"
-  migrationId <- requiredField fields "migration-id" >>= parseIntField "migration-id"
-  forfeitValidatorRewardCoupon <- case TextMap.lookup "forfeit-validator-reward-coupon" fields of
-    None -> Right False
-    Some value -> parseBoolField "forfeit-validator-reward-coupon" value
-  pure TrafficPurchaseMemo with ..
-  where
-    knownKeys = ["member-id", "synchronizer-id", "migration-id", "forfeit-validator-reward-coupon"]
-    addField fields field = case T.splitOn "=" field of
-      [key, value]
-        | not (key `elem` knownKeys) ->
-            Left $ "Unknown key in traffic purchase memo: " <> key
-        | TextMap.member key fields ->
-            Left $ "Duplicate key in traffic purchase memo: " <> key
-        | otherwise -> Right (TextMap.insert key value fields)
-      _ -> Left $ "Expected key=value in traffic purchase memo, got: " <> field
-    requiredField fields key = case TextMap.lookup key fields of
-      None -> Left $ "Missing key in traffic purchase memo: " <> key
-      Some value -> Right value
-    parseIntField key value = case T.parseInt value of
-      None -> Left $ "Expected an integer for " <> key <> " in traffic purchase memo, got: " <> value
-      Some parsed -> Right parsed
-    parseBoolField key value = case value of
-      "true" -> Right True
-      "false" -> Right False
-      _ -> Left $ "Expected true or false for " <> key <> " in traffic purchase memo, got: " <> value
+parseTrafficPurchaseMemo : Parser Text TrafficPurchaseMemo
+parseTrafficPurchaseMemo = Parser \input ->
+  let textParser = memoParserWithKnownKeys
+        [trafficPurchaseMemberIdMemoKey, trafficPurchaseSynchronizerIdMemoKey, trafficPurchaseMigrationIdMemoKey, trafficPurchaseForfeitValidatorRewardCouponMemoKey]
+        trafficPurchaseMemoPrefix
+  in case runParser textParser input of
+    Success memo -> runParser trafficPurchaseMemoParser memo
+    Errors es -> Errors es
 
 trafficPurchaseReason : MemberTrafficPurchase -> Text
 trafficPurchaseReason purchase =

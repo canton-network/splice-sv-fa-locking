@@ -11,6 +11,7 @@ import Daml.Script
 import Splice.Testing.Utils (trafficPurchaseMemoPrefix)
 
 import Splice.DecentralizedSynchronizer (MemberTrafficPurchase(..), TrafficPurchaseMemo(..), parseTrafficPurchaseMemo, trafficPurchaseReason)
+import Splice.Util.Parser (assertParsed)
 
 sender : Party
 sender =
@@ -30,7 +31,6 @@ expectedMemo = TrafficPurchaseMemo with
   migrationId = 3
   forfeitValidatorRewardCoupon = False
 
-memoParams : Text
 memoParams =
   "member-id=" <> testMemberId <>
   "&synchronizer-id=" <> testSynchronizerId <>
@@ -40,7 +40,7 @@ completeMemo : Text
 completeMemo = trafficPurchaseMemoPrefix <> memoParams
 
 parse : Text -> Either Text TrafficPurchaseMemo
-parse = parseTrafficPurchaseMemo
+parse = assertParsed parseTrafficPurchaseMemo
 
 isRejected : Either Text TrafficPurchaseMemo -> Bool
 isRejected result = case result of
@@ -77,19 +77,19 @@ test_parseMemo_forfeitValidatorRewardCoupon = script do
     Right (expectedMemo with forfeitValidatorRewardCoupon = True)
   parse (completeMemo <> "&forfeit-validator-reward-coupon=false") === Right expectedMemo
   parse (completeMemo <> "&forfeit-validator-reward-coupon=yes") ===
-    Left "Expected true or false for forfeit-validator-reward-coupon in traffic purchase memo, got: yes"
+    Left "Error in memo key 'forfeit-validator-reward-coupon': Expected true or false, got: yes"
   assertMsg "duplicate forfeit key is rejected" $ isRejected $
     parse $ completeMemo <> "&forfeit-validator-reward-coupon=true&forfeit-validator-reward-coupon=true"
 
 test_parseMemo_rejectsMissingPrefix : Script ()
 test_parseMemo_rejectsMissingPrefix = script do
-  parse memoParams === Left ("Traffic purchase memo must start with " <> trafficPurchaseMemoPrefix)
-  parse (" " <> completeMemo) === Left ("Traffic purchase memo must start with " <> trafficPurchaseMemoPrefix)
+  parse memoParams === Left ("Memo must start with " <> trafficPurchaseMemoPrefix)
+  parse (" " <> completeMemo) === Left ("Memo must start with " <> trafficPurchaseMemoPrefix)
 
 test_parseMemo_rejectsMissingKey : Script ()
 test_parseMemo_rejectsMissingKey = script do
   parse (trafficPurchaseMemoPrefix <> "member-id=" <> testMemberId <> "&synchronizer-id=" <> testSynchronizerId) ===
-    Left "Missing key in traffic purchase memo: migration-id"
+    Left "Missing memo key 'migration-id'"
 
 test_parseMemo_rejectsUnknownKey : Script ()
 test_parseMemo_rejectsUnknownKey = script do

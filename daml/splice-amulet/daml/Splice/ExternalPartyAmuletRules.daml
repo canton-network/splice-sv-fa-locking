@@ -35,6 +35,7 @@ import Splice.DecentralizedSynchronizer (MemberTrafficPurchase(..), parseTraffic
 import Splice.Round (OpenMiningRound(..))
 import Splice.Types
 import Splice.Util hiding (require')
+import Splice.Util.Parser
 
 data ExternalPartyAmuletRules_ExpireAmuletAllocationInput = ExternalPartyAmuletRules_ExpireAmuletAllocationInput
   with
@@ -399,9 +400,7 @@ amulet_transferFactoryV1_transferImpl this actors arg = do
 
   if transfer.receiver == trafficPurchaseReceiver then do
     -- TODO(#7561): accept a RegisteredSynchronizer to support dedicated synchronizers.
-    purchaseMemo <- case parseTrafficPurchaseMemo (reasonFromMeta transfer.meta) of
-      Left err -> fail err
-      Right memo -> pure memo
+    purchaseMemo <- assertParsed parseTrafficPurchaseMemo (reasonFromMeta transfer.meta)
     trafficConfig <- case trafficPurchaseConfigFromConfigState configState of
       None -> fail "The referenced ExternalPartyConfigState carries no traffic purchase configuration"
       Some trafficConfig -> pure trafficConfig

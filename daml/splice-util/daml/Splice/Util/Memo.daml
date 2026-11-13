@@ -25,6 +25,7 @@ module Splice.Util.Memo (
   optionalMemoFieldParser,
   requiredMemoFieldParser,
   boolMemoFieldParser,
+  optionalBoolMemoFieldParser,
   intMemoFieldParser,
   relTimeFromMicrosecondsMemoFieldParser,
   timeFromMicrosecondsMemoFieldParser,
@@ -109,6 +110,9 @@ optionalMemoFieldParserFromTextParser parser key = optionalMemoFieldParser key >
 
 boolMemoFieldParser : Text -> Parser Memo Bool
 boolMemoFieldParser = requiredMemoFieldParserFromTextParser boolParser
+
+optionalBoolMemoFieldParser : Text -> Parser Memo (Optional Bool)
+optionalBoolMemoFieldParser = optionalMemoFieldParserFromTextParser boolParser
 
 intMemoFieldParser : Text -> Parser Memo Int
 intMemoFieldParser = requiredMemoFieldParserFromTextParser intParser
