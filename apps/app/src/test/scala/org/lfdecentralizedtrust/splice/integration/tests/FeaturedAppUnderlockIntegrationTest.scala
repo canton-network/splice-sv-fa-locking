@@ -54,11 +54,7 @@ class FeaturedAppUnderlockIntegrationTest
 
       val (_, instructionsSeen) = actAndCheck(
         "alice and bob grant themselves a FeaturedAppRight without locking anything",
-        Seq(aliceWalletClient, bobWalletClient).foreach(client =>
-          eventuallySucceeds() {
-            client.selfGrantFeaturedAppRight()
-          }
-        ),
+        Seq(aliceWalletClient, bobWalletClient).foreach(grantFeaturedAppRight),
       )(
         "the SVs record alice and bob as underlocked",
         _ =>
@@ -88,13 +84,10 @@ class FeaturedAppUnderlockIntegrationTest
 
     actAndCheck(
       "charlie grants himself a FeaturedAppRight without locking anything",
-      eventuallySucceeds() {
-        charlieWalletClient.selfGrantFeaturedAppRight()
-      },
+      grantFeaturedAppRight(charlieWalletClient),
     )(
       "charlie's right is suspended",
       _ => {
-        executeInstructionsFor(charlie)
         isSuspended(charlie) shouldBe true
       },
     )
@@ -112,7 +105,6 @@ class FeaturedAppUnderlockIntegrationTest
     )(
       "charlie's suspension is lifted",
       _ => {
-        executeInstructionsFor(charlie)
         isSuspended(charlie) shouldBe false
       },
     )
@@ -131,14 +123,17 @@ class FeaturedAppUnderlockIntegrationTest
     )(
       "the right is suspended",
       _ => {
-        executeInstructionsFor(provider)
         isSuspended(provider) shouldBe true
       },
     )
 
     clue("the trigger archives the right once its grace period has passed") {
-      eventually()(trigger.runOnce().futureValue shouldBe true)
-      eventually()(featuredAppRightsFor(provider) shouldBe empty)
+      // The trigger also archives the rights suspended in earlier tests, so
+      // one run may not cover this right.
+      eventually() {
+        trigger.runOnce().futureValue
+        featuredAppRightsFor(provider) shouldBe empty
+      }
     }
   }
 }

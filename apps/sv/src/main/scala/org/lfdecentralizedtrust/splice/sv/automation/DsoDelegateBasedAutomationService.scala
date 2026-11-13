@@ -119,6 +119,12 @@ class DsoDelegateBasedAutomationService(
     registerTrigger(
       new ExpireRevokeFeaturedAppRightInstructionTrigger(triggerContext, svTaskContext)
     )
+    registerTrigger(
+      new ExecuteFeaturedAppUnderlockInstructionTrigger(
+        triggerContext,
+        svTaskContext,
+      )
+    )
 
     registerTrigger(new MergeUnclaimedRewardsTrigger(triggerContext, svTaskContext))
     registerTrigger(
@@ -328,5 +334,6 @@ object DsoDelegateBasedAutomationService extends AutomationServiceCompanion {
     aTrigger[ExpireFeaturedAppConfigUpdateInstructionTrigger],
     aTrigger[ExecuteRevokeFeaturedAppRightInstructionTrigger],
     aTrigger[ExpireRevokeFeaturedAppRightInstructionTrigger],
+    aTrigger[ExecuteFeaturedAppUnderlockInstructionTrigger],
   )
 }
