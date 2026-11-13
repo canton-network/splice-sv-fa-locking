@@ -78,11 +78,13 @@ import Prelude hiding (forA)
 import DA.Action (foldrA, unless)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
+import DA.Foldable (foldMap)
 import DA.Functor (($>))
 import DA.List (sortOn)
 import DA.List.Total (head)
 import DA.Map qualified as Map
 import DA.Optional
+import DA.Set qualified as Set
 import DA.Text qualified as Text
 import DA.Time
 import DA.Traversable (forA)
@@ -97,8 +99,9 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.Expiry hiding (maxTime)
-import Splice.Fees (relTimeToDays, relTimeToSeconds)
 import Splice.ExternalPartyConfigState
+import Splice.Fees (relTimeToDays, relTimeToSeconds)
+import Splice.GovernanceLock.Controllers
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
 import Splice.Types
@@ -117,10 +120,18 @@ data VestingLockSpecification = VestingLockSpecification with
     kind : GovernanceLockKind
     vestingPeriod : RelTime -- ^ Duration over which the amount vests in a linear fashion.
     endTime : Time -- ^ Time at which vesting completes.
+    vestingControllers : Optional ControllersSpecification
+      -- ^ Controllers that can control the disbursal of vesting funds via withdrawals, substitutions, or transfers.
   deriving (Eq, Show, Serializable)
 
 data FullLockSpecification = FullLockSpecification with
     kind : GovernanceLockKind
+    unlockControllers : Optional ControllersSpecification
+      -- ^ Controllers that can unlock the lock.
+    substitutionControllers : Optional ControllersSpecification
+      -- ^ Controllers that can authorize a substitution.
+    vestingControllers : Optional ControllersSpecification
+      -- ^ Controllers that can control the disbursal of vesting funds via withdrawals, substitutions, or transfers.
   deriving (Eq, Show, Serializable)
 
 data GovernanceLockSpecification
@@ -128,9 +139,18 @@ data GovernanceLockSpecification
   | GLS_VestingLock VestingLockSpecification
   deriving (Eq, Show, Serializable)
 
-validateGovernanceLockSpecification : GovernanceLockSpecification -> Bool
-validateGovernanceLockSpecification (GLS_FullLock _) = True
-validateGovernanceLockSpecification (GLS_VestingLock v) = v.vestingPeriod >= aunit
+validateGovernanceLockSpecification : CanAssert m => GovernanceLockSpecification -> m ()
+validateGovernanceLockSpecification (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) = do
+  validateControllersSpecification "unlock" unlockControllers
+  validateControllersSpecification "substitution" substitutionControllers
+  validateControllersSpecification "vesting" vestingControllers
+validateGovernanceLockSpecification (GLS_VestingLock (VestingLockSpecification _ vestingPeriod _ vestingControllers)) = do
+  assertMsg "vestingPeriod is positive" $ vestingPeriod > aunit
+  validateControllersSpecification "vesting" vestingControllers
+
+validationSucceeds : Either Text a -> Bool
+validationSucceeds (Left e) = error e
+validationSucceeds (Right _) = True
 
 requireFullLock : CanAssert m => GovernanceLockSpecification -> m FullLockSpecification
 requireFullLock (GLS_FullLock spec) = pure spec
@@ -165,8 +185,8 @@ template GovernanceLock
     requestedAt : Time  -- ^ Time of the request to create this lock.
   where
     signatory dso, owner
-    observer governanceLockObservers specification
-    ensure amount > 0.0 && validateGovernanceLockSpecification specification
+    observer governanceLockObservers specification, governanceLockControllers specification
+    ensure amount > 0.0 && validationSucceeds (validateGovernanceLockSpecification specification)
     key ( GovernanceLockKey with dso; owner; specification ) : GovernanceLockKey
     maintainer key.dso
 
@@ -413,6 +433,7 @@ governanceLock_unlockImpl self this@GovernanceLock{..} unlockAmount optVestingSt
               kind = fullSpec.kind
               vestingPeriod
               endTime
+              vestingControllers = fullSpec.vestingControllers
         let forOwner = ForOwner with dso; owner
 
         (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if hasNoVestingPeriod
@@ -564,6 +585,12 @@ governanceLockObservers spec = case governanceLockKind spec of
   GLK_FeaturedApp party -> [party]
   GLK_ProvisionalFeaturedApp party -> [party]
   GLK_SuperValidatorRightsOwner _ -> []
+
+governanceLockControllers : GovernanceLockSpecification -> Set.Set Party
+governanceLockControllers (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) =
+  foldMap allControllers $ catOptionals [unlockControllers, substitutionControllers, vestingControllers]
+governanceLockControllers (GLS_VestingLock (VestingLockSpecification _ _ _ vestingControllers)) =
+  optional Set.empty allControllers vestingControllers
 
 -- Lock properties for LockSubject types
 

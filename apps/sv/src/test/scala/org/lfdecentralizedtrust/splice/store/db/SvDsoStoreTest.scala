@@ -3025,9 +3025,8 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
         new splice.governancelock.GovernanceLockKey(
           dso.toProtoPrimitive,
           lockOwner.toProtoPrimitive,
-          new splice.governancelock.governancelockspecification.GLS_FullLock(
-            new splice.governancelock.FullLockSpecification(kind)
-          ),
+          // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
+          fullLockSpecification(kind),
         ),
         proposer.toProtoPrimitive,
         BigDecimal(10).bigDecimal,

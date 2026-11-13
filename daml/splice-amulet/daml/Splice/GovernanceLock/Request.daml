@@ -432,7 +432,13 @@ parseGovernanceLockMetadata : CanAssert m => Metadata -> m Metadata
 parseGovernanceLockMetadata = assertParsed governanceLockMetadataParser
 
 fullLockSpecificationParser : Parser Metadata FullLockSpecification
-fullLockSpecificationParser = FullLockSpecification <$> governanceLockKindParser
+fullLockSpecificationParser =
+  FullLockSpecification <$>
+    governanceLockKindParser <*>
+    -- TODO(canton-network/splice-sv-fa-locking#76): specify these
+    pure None <*>
+    pure None <*>
+    pure None
 
 vestingLockSpecificationParser : Parser Metadata VestingLockSpecification
 vestingLockSpecificationParser = do
@@ -443,6 +449,8 @@ vestingLockSpecificationParser = do
     kind
     vestingPeriod
     endTime
+    -- TODO(canton-network/splice-sv-fa-locking#76): specify this
+    vestingControllers = None
 
 governanceLockSpecificationParser : LockState -> Parser Metadata GovernanceLockSpecification
 governanceLockSpecificationParser LS_Locked = GLS_FullLock <$> fullLockSpecificationParser

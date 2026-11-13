@@ -1,0 +1,43 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Specifications for custom controllers of governance locks.
+module Splice.GovernanceLock.Controllers (
+  ControllersSpecification,
+  makeControllersSpecification,
+  validateControllersSpecification,
+  allControllers,
+) where
+
+import DA.Set qualified as Set
+
+import Splice.TokenStandard.Utils
+
+-- | Specification of controllers that can jointly authorize an action.
+-- Serializable so it can be encoded on templates, but should not be constructed directly; use ControllerSets.
+data ControllersSpecification = ControllersSpecification with
+    controllers : [[Party]]
+      -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
+  deriving (Eq, Show, Serializable)
+
+-- | Sets of controllers that can jointly authorize an action.
+-- This is the form of ControllersSpecification that all callers must go through to ensure deduplication.
+data ControllerSets = ControllerSets (Set.Set (Set.Set Party))
+
+makeControllerSets : [[Party]] -> ControllerSets
+makeControllerSets controllers = ControllerSets $ Set.fromList $ fmap Set.fromList controllers
+
+getControllersSpecification : ControllerSets -> ControllersSpecification
+getControllersSpecification (ControllerSets controllers) = ControllersSpecification $ fmap Set.toList $ Set.toList controllers
+
+makeControllersSpecification : [[Party]] -> ControllersSpecification
+makeControllersSpecification = getControllersSpecification . makeControllerSets
+
+validateControllersSpecification : CanAssert m => Text -> Optional ControllersSpecification -> m ()
+validateControllersSpecification _ None = pure ()
+validateControllersSpecification controllerType (Some ControllersSpecification{controllers}) = do
+  require (controllerType <> "Controllers must not be empty") (not $ null controllers)
+  require (controllerType <> "Controllers must not contain an empty controller set") (all (not . null) controllers)
+
+allControllers : ControllersSpecification -> Set.Set Party
+allControllers spec = Set.fromList $ concat spec.controllers

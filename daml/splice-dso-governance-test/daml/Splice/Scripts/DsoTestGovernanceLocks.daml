@@ -46,7 +46,7 @@ setupSharedLock kind = do
   WalletClientV2.createBatchingUtility alice.primaryParty
 
   governanceLockCid <- expectSuccess $
-    tsv1Operations.governanceLock (TestEnvRegistries registries registry) alice.primaryParty testVestingAmount (kind alice)
+    tsv1Operations.governanceLock (TestEnvRegistries registries registry) alice.primaryParty testVestingAmount (fullLockSpecification (kind alice))
 
   pure SharedLockEnv with ..
 
@@ -99,6 +99,7 @@ setupVestingLock = do
           kind = testLockKind
           vestingPeriod = testVestingPeriod
           endTime
+          vestingControllers = None
         originalLockCid = Some (coerceContractId governanceLockCid)
         requestedAt = unlockAt
 
