@@ -123,15 +123,23 @@ governanceLockSubstitution_acceptImpl self GovernanceLockSubstitution{..} actors
   (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext target.dso extraArgs.context
   -- The legs report the memo of the accepted proposal
   let reason = reasonFromMeta $ substitutionGovernanceLockMetadata target.specification
-  FetchAndMergeLocksResult{lockCid} <- fetchAndMergeGovernanceLocks target context state reason
-  let forOwner = ForOwner with dso = target.dso; owner = target.owner
+  GovernanceLock_DsoMergeResult{lockCid} <- fetchAndMergeGovernanceLocks target context state reason
   (newLockedAmulet, remainingLockCid, unlockedAmulet) <- case lockedAmulet of
     Some proposalLockedAmulet -> do
-      substituteResult <- governanceLock_dsoSubstituteImpl forOwner lockCid amount reason extraArgs
+      substituteResult <- exercise lockCid GovernanceLock_DsoSubstitute with
+        substitutedAmount = amount
+        reason
+        context
+        state
       pure (proposalLockedAmulet, substituteResult.remainingLockCid, Some substituteResult.unlockedAmulet)
     None -> do
       -- The proposer is the owner of the target lock, so the target lock funds the new lock
-      splitResult <- governanceLock_dsoSplitForSubstitutionImpl forOwner lockCid amount target.specification reason extraArgs
+      splitResult <- exercise lockCid GovernanceLock_DsoSplitForSubstitution with
+        splitAmount = amount
+        newSpecification = target.specification
+        reason
+        context
+        state
       pure (splitResult.splitAmulet, splitResult.remainingLockCid, None)
   newLockCid <- create GovernanceLock with
     dso = target.dso
