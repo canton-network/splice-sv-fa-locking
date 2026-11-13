@@ -322,8 +322,9 @@ registryApi_getTransferInstruction_AcceptContext registry instrCid = do
     -- need to disclose the amulet contract, as the receiver has no visibility into it
     lockedAmuletD <- queryDisclosure' @LockedAmulet registry.dso amuletInstr.lockedAmulet
     pure $ withExtraDisclosures lockedAmuletD mempty
+  governanceLockSubstitutionC <- registryApi_getTransferInstruction_governanceLockSubstitution registry (coerceContractId instrCid)
   governanceLockTransferC <- registryApi_getTransferInstruction_governanceLockTransfer registry (coerceContractId instrCid)
-  pure $ transferC <> fold amuletTransferInstrC <> fold governanceLockTransferC
+  pure $ transferC <> fold amuletTransferInstrC <> fold governanceLockSubstitutionC <> fold governanceLockTransferC
 
 registryApi_getTransferInstruction_abortTwoStepTransferContext
   : AmuletRegistry -> ContractId TransferInstruction -> Script OpenApiChoiceContext
@@ -365,30 +366,36 @@ registryApi_getTransferFactory_optGetContext registry cid f = do
 registryApi_getTransferInstruction_governanceLockSubstitution
   : AmuletRegistry -> ContractId GovernanceLockSubstitution -> Script (Optional OpenApiChoiceContext)
 registryApi_getTransferInstruction_governanceLockSubstitution registry substitutionCid = do
-  registryApi_getTransferFactory_optGetContext registry substitutionCid \substitution ->
+  registryApi_getTransferFactory_optGetContext registry substitutionCid \substitution -> do
+    lockC <- registryApi_governanceLockDisclosures registry substitution.target
     case substitution.lockedAmulet of
-      None -> pure mempty
+      None -> pure lockC
       Some lockedAmulet -> do
         lockedAmuletD <- queryDisclosure' @LockedAmulet registry.dso lockedAmulet
-        pure $ withExtraDisclosures lockedAmuletD mempty
+        pure $ withExtraDisclosures lockedAmuletD lockC
 
 registryApi_getTransferInstruction_governanceLockTransfer
   : AmuletRegistry -> ContractId GovernanceLockTransfer -> Script (Optional OpenApiChoiceContext)
 registryApi_getTransferInstruction_governanceLockTransfer registry lockTransferCid =
-  registryApi_getTransferFactory_optGetContext registry lockTransferCid \lockTransfer -> do
-    -- unlocking the source lock needs the external party config state
-    transferC <- getExternalPartyConfigStateContext registry
-    -- the accept resolves the source locks by key, and the receiver has no visibility into them,
-    -- so disclose the locks and their locked amulets
-    let source = lockTransfer.source
-    locks <- queryAllByKey @GovernanceLock registry.dso source
-    lockD <- case locks of
-      [] -> assertFail $ "Failed to find lock with key " <> show source <> " originating from lock transfer " <> show lockTransferCid
-      _ -> fmap fold $ forA locks \(lockCid, lock) -> do
-        lockD <- queryDisclosure' registry.dso lockCid
-        lockedAmuletD <- queryDisclosure' @LockedAmulet registry.dso lock.lockedAmulet
-        pure $ lockD <> lockedAmuletD
-    pure $ withExtraDisclosures lockD transferC
+  registryApi_getTransferFactory_optGetContext registry lockTransferCid \lockTransfer ->
+    registryApi_governanceLockDisclosures registry lockTransfer.source
+
+-- | Disclose the governance locks with the given key and their locked amulets.
+-- The party whose vote completes a lock proposal executes it, and that party may have no visibility into
+-- the locks or their locked amulets, e.g. the receiver of a transfer or a custom controller of the lock.
+-- Fails if no lock has the given key.
+registryApi_governanceLockDisclosures : AmuletRegistry -> GovernanceLockKey -> Script OpenApiChoiceContext
+registryApi_governanceLockDisclosures registry lockKey = do
+  -- unlocking the source lock needs the external party config state
+  transferC <- getExternalPartyConfigStateContext registry
+  locks <- queryAllByKey @GovernanceLock registry.dso lockKey
+  lockD <- case locks of
+    [] -> assertFail $ "Failed to find lock with key " <> show lockKey
+    _ -> fmap fold $ forA locks \(lockCid, lock) -> do
+      lockD <- queryDisclosure' registry.dso lockCid
+      lockedAmuletD <- queryDisclosure' @LockedAmulet registry.dso lock.lockedAmulet
+      pure $ lockD <> lockedAmuletD
+  pure $ withExtraDisclosures lockD transferC
 
 registryApi_getAllocation_abortTwoStepTransferContext
   : AmuletRegistry -> ContractId Allocation -> Script OpenApiChoiceContext

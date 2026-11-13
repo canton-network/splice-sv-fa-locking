@@ -3033,6 +3033,11 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
         Optional.empty(),
         Instant.EPOCH,
         expiresAt,
+        // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
+        Optional.empty(),
+        Optional.empty(),
+        Optional.empty(),
+        Optional.empty(),
         Optional.empty(),
       ),
     )

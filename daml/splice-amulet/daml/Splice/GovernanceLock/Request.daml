@@ -38,6 +38,7 @@ import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal (proposalUpdateResultToTransferInstructionResult)
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
@@ -61,6 +62,9 @@ data GovernanceLockRequest
       vestedUntilTime : Time
   | GLR_SubstituteLock with
       target : GovernanceLockKey
+      newUnlockControllers : Optional ControllersSpecification
+      newSubstitutionControllers : Optional ControllersSpecification
+      newVestingControllers : Optional ControllersSpecification
   deriving (Show)
 
 data GovernanceLockRequestTag
@@ -117,8 +121,9 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
         transferAmount
     GLR_WithdrawVestingLock{vestingSpecification, vestedUntilTime} ->
       governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso arg vestingSpecification vestedUntilTime context state
-    GLR_SubstituteLock{target} ->
-      governanceLock_transferFactoryV1_substituteImpl dso arg target context state
+    GLR_SubstituteLock{target, newUnlockControllers, newSubstitutionControllers, newVestingControllers} -> do
+      checkActors actors [[transfer.sender]]
+      governanceLock_transferFactoryV1_substituteImpl dso arg target newUnlockControllers newSubstitutionControllers newVestingControllers context state
 
 governanceLock_transferFactoryV1_lockImpl
   :  Party
@@ -226,37 +231,41 @@ governanceLock_transferFactoryV1_substituteImpl
   :  Party
   -> V1.TransferFactory_Transfer
   -> GovernanceLockKey
+  -> Optional ControllersSpecification
+  -> Optional ControllersSpecification
+  -> Optional ControllersSpecification
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{..} target context state = do
-  (substitutionCid, substitution, changeCid) <- createSubstitution
-    CreateSubstitutionArgs with
-      dso
-      target
-      owner = transfer.sender
-      amount = transfer.amount
-      inputHoldingCids = transfer.inputHoldingCids
-      extraArgs
-      requestedAt = transfer.requestedAt
-      reason = reasonFromMeta transfer.meta
-      context
-      state
+governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{..} target newUnlockControllers newSubstitutionControllers newVestingControllers context state = do
+  (result, changeCid) <- governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs with
+    dso
+    target
+    owner = transfer.sender
+    newUnlockControllers
+    newSubstitutionControllers
+    newVestingControllers
+    amount = transfer.amount
+    inputHoldingCids = transfer.inputHoldingCids
+    extraArgs
+    requestedAt = transfer.requestedAt
+    reason = reasonFromMeta transfer.meta
+    context
+    state
 
-  -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
-  let substitutionTransfer = (view substitution).transfer
-  requireMatchExpected ("substitution transfer", substitutionTransfer) transfer with
-    -- The receiver of the substitution is the owner of the target lock, not `lockManagerParty`
-    receiver = substitutionTransfer.receiver
-    executeBefore = substitutionTransfer.executeBefore
-    inputHoldingCids = substitutionTransfer.inputHoldingCids
-    meta = substitutionTransfer.meta
+  case result of
+    Right _ -> pure ()
+    Left (_, substitution) -> do
+      -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
+      let substitutionTransfer = (view $ toInterface @V1.TransferInstruction substitution).transfer
+      requireMatchExpected ("substitution transfer", substitutionTransfer) transfer with
+        -- The receiver of the substitution is the owner of the target lock, not `lockManagerParty`
+        receiver = substitutionTransfer.receiver
+        executeBefore = substitutionTransfer.executeBefore
+        inputHoldingCids = substitutionTransfer.inputHoldingCids
+        meta = substitutionTransfer.meta
 
-  pure V1.TransferInstructionResult with
-    output = V1.TransferInstructionResult_Pending with
-      transferInstructionCid = substitutionCid
-    senderChangeCids = optionalToList $ toInterfaceContractId <$> changeCid
-    meta = emptyMetadata
+  pure $ downcast $ proposalUpdateResultToTransferInstructionResult (toInterfaceContractId <$> changeCid) result
 
 -- Parsers
 ----------
@@ -303,6 +312,15 @@ substitutionControllersParser = controllersParser substitutionControllersMemoKey
 
 unlockControllersParser : ControllersSpecificationParser
 unlockControllersParser = controllersParser unlockControllersMemoKey
+
+newControllersParser : GovernanceLockSpecification -> Parser Memo (Optional ControllersSpecification, Optional ControllersSpecification, Optional ControllersSpecification)
+newControllersParser (GLS_FullLock _) = do
+  (,,) <$>
+    controllersParser newUnlockControllersMemoKey <*>
+    controllersParser newSubstitutionControllersMemoKey <*>
+    controllersParser newVestingControllersMemoKey
+newControllersParser (GLS_VestingLock _) = do
+  (None, None,) <$> controllersParser newVestingControllersMemoKey
 
 fullLockSpecificationParser : Parser Memo FullLockSpecification
 fullLockSpecificationParser =
@@ -359,12 +377,17 @@ glr_transferLock_parser = do
 glr_substituteLock_parser : Party -> Parser Memo GovernanceLockRequest
 glr_substituteLock_parser dso = do
   targetState <- lockStateParser
-  targetOwner <- partyMemoFieldParser targetLockOwnerMemoKey
+  targetOwner <- targetLockOwnerParser
   specification <- governanceLockSpecificationParser targetState
-  pure $ GLR_SubstituteLock GovernanceLockKey with
-    dso
-    owner = targetOwner
-    specification
+  (newUnlockControllers, newSubstitutionControllers, newVestingControllers) <- newControllersParser specification
+  pure GLR_SubstituteLock with
+    target = GovernanceLockKey with
+      dso
+      owner = targetOwner
+      specification
+    newUnlockControllers
+    newSubstitutionControllers
+    newVestingControllers
 
 governanceLockRequestTagParser : Parser Memo GovernanceLockRequestTag
 governanceLockRequestTagParser = do
@@ -389,6 +412,9 @@ parseGovernanceLockRequestTSv1 : CanAssert m => Party -> Party -> Optional Gover
 parseGovernanceLockRequestTSv1 dso receiver config meta = do
   memo <- parseGovernanceLockMemo meta
   assertParsed (governanceLockRequestTSv1Parser dso receiver config) memo
+
+targetLockOwnerParser : Parser Memo Party
+targetLockOwnerParser = partyMemoFieldParser targetLockOwnerMemoKey
 
 amountParser : Text -> Parser Memo Decimal
 amountParser key = requiredMemoFieldParser key >>= \t ->

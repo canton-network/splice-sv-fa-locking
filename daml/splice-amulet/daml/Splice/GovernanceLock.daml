@@ -28,6 +28,9 @@ module Splice.GovernanceLock (
   FullLockSpecification(..),
   VestingLockSpecification(..),
   GovernanceLockKey(..),
+  validateNewGovernanceLockControllers,
+  setNewGovernanceLockControllers,
+  validationSucceeds,
   requireVestingLock,
   governanceLockKind,
   governanceLockObservers,
@@ -59,6 +62,8 @@ module Splice.GovernanceLock (
   encodeCommonLockMemoEntries,
   encodeLockCompatMemo,
   encodeControllersSpecificationMemoEntries,
+  encodeGovernanceLockNewCustomControllersMemoEntries,
+  encodeGovernanceLockMetadataWithRequest',
   encodeGovernanceLockMetadataWithRequest,
   cipMemoPrefix,
   requestMemoKey,
@@ -72,8 +77,11 @@ module Splice.GovernanceLock (
   lockVestingDurationMemoKey,
   lockVestingEndTimeMemoKey,
   substitutionControllersMemoKey,
+  newSubstitutionControllersMemoKey,
   unlockControllersMemoKey,
+  newUnlockControllersMemoKey,
   vestingControllersMemoKey,
+  newVestingControllersMemoKey,
   vestingStartTimeMemoKey,
   vestedUntilTimeMemoKey,
 
@@ -159,6 +167,18 @@ validateGovernanceLockSpecification (GLS_FullLock (FullLockSpecification _ unloc
 validateGovernanceLockSpecification (GLS_VestingLock (VestingLockSpecification _ vestingPeriod _ vestingControllers)) = do
   assertMsg "vestingPeriod is positive" $ vestingPeriod > aunit
   validateControllersSpecification "vesting" vestingControllers
+
+validateNewGovernanceLockControllers : CanAssert m => GovernanceLockSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> m ()
+validateNewGovernanceLockControllers (GLS_FullLock _) _ _ _ = pure ()
+validateNewGovernanceLockControllers (GLS_VestingLock _) unlockControllers substitutionControllers _vestingControllers = do
+  require "no unlock controllers for a vesting lock" (isNone unlockControllers)
+  require "no substitution controllers for a vesting lock" (isNone substitutionControllers)
+
+setNewGovernanceLockControllers : GovernanceLockSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> GovernanceLockSpecification
+setNewGovernanceLockControllers (GLS_FullLock spec) unlockControllers substitutionControllers vestingControllers =
+  GLS_FullLock spec with unlockControllers; substitutionControllers; vestingControllers
+setNewGovernanceLockControllers (GLS_VestingLock spec) _unlockControllers _substitutionControllers vestingControllers =
+  GLS_VestingLock spec with vestingControllers
 
 validationSucceeds : Either Text a -> Bool
 validationSucceeds (Left e) = error e
@@ -949,6 +969,15 @@ substitutionControllersMemoKey = "substitution-controllers"
 -- | Memo key that specifies custom unlock controllers.
 unlockControllersMemoKey = "unlock-controllers"
 
+-- | Memo key that specifies new custom vesting controllers.
+newVestingControllersMemoKey = "new-vesting-controllers"
+
+-- | Memo key that specifies new custom substitution controllers.
+newSubstitutionControllersMemoKey = "new-substitution-controllers"
+
+-- | Memo key that specifies new custom unlock controllers.
+newUnlockControllersMemoKey = "new-unlock-controllers"
+
 -- | The memo entries of the kind, subject and status of a lock, in the order of the CIP.
 encodeCommonLockMemoEntries : GovernanceLockKind -> LockState -> [(Text, Text)]
 encodeCommonLockMemoEntries kind state =
@@ -962,13 +991,21 @@ encodeControllersSpecificationMemoEntries : Text -> Optional ControllersSpecific
 encodeControllersSpecificationMemoEntries _ None = []
 encodeControllersSpecificationMemoEntries key (Some controllers) = [(key, encodeControllersSpecification controllers)]
 
-encodeGovernanceLockControllersMemoEntries : Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> [(Text, Text)]
-encodeGovernanceLockControllersMemoEntries unlockControllers substitutionControllers vestingControllers =
+encodeGovernanceLockControllersMemoEntries' : Text -> Text -> Text -> Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> [(Text, Text)]
+encodeGovernanceLockControllersMemoEntries' unlockKey substitutionKey vestingKey unlockControllers substitutionControllers vestingControllers =
   foldMap (uncurry encodeControllersSpecificationMemoEntries)
-    [ (unlockControllersMemoKey, unlockControllers)
-    , (substitutionControllersMemoKey, substitutionControllers)
-    , (vestingControllersMemoKey, vestingControllers)
+    [ (unlockKey, unlockControllers)
+    , (substitutionKey, substitutionControllers)
+    , (vestingKey, vestingControllers)
     ]
+
+encodeGovernanceLockControllersMemoEntries : Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> [(Text, Text)]
+encodeGovernanceLockControllersMemoEntries =
+  encodeGovernanceLockControllersMemoEntries' unlockControllersMemoKey substitutionControllersMemoKey vestingControllersMemoKey
+
+encodeGovernanceLockNewCustomControllersMemoEntries : Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> [(Text, Text)]
+encodeGovernanceLockNewCustomControllersMemoEntries =
+  encodeGovernanceLockControllersMemoEntries' newUnlockControllersMemoKey newSubstitutionControllersMemoKey newVestingControllersMemoKey
 
 -- | The memo entries of a lock specification, in the order of the CIP.
 encodeGovernanceLockSpecMemoEntries : GovernanceLockSpecification -> [(Text, Text)]
@@ -985,9 +1022,12 @@ encodeGovernanceLockMetadata : GovernanceLock -> Metadata
 encodeGovernanceLockMetadata GovernanceLock{specification} =
   encodeLockMemoEntries $ encodeGovernanceLockSpecMemoEntries specification
 
+encodeGovernanceLockMetadataWithRequest' : ([(Text, Text)] -> [(Text, Text)]) -> Text -> GovernanceLockSpecification -> Metadata
+encodeGovernanceLockMetadataWithRequest' mapEntries request spec =
+  encodeLockMemoEntries $ mapEntries $ (requestMemoKey, request) :: encodeGovernanceLockSpecMemoEntries spec
+
 encodeGovernanceLockMetadataWithRequest : Text -> GovernanceLockSpecification -> Metadata
-encodeGovernanceLockMetadataWithRequest request spec =
-  encodeLockMemoEntries $ (requestMemoKey, request) :: encodeGovernanceLockSpecMemoEntries spec
+encodeGovernanceLockMetadataWithRequest = encodeGovernanceLockMetadataWithRequest' identity
 
 -- | Metadata whose only entry is the reason, a memo that lists the given entries in the given order.
 encodeLockMemoEntries : [(Text, Text)] -> Metadata
