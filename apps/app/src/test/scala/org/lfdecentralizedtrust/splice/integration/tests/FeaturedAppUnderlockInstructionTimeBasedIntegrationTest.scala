@@ -27,6 +27,7 @@ import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.{
   IntegrationTestWithIsolatedEnvironment,
   SpliceTestConsoleEnvironment,
 }
+import org.lfdecentralizedtrust.splice.store.PageLimit
 import org.lfdecentralizedtrust.splice.sv.automation.confirmation.FeaturedAppUnderlockStatusUpdateTrigger
 import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.ExecuteFeaturedAppUnderlockInstructionTrigger
 import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, WalletTestUtil}
@@ -76,8 +77,9 @@ class FeaturedAppUnderlockInstructionTimeBasedIntegrationTest
     advanceTimeWithinRound(Duration.ofMinutes(1))
     voteToCreateUnderlockInstruction(alice, underlocked = true)
     runTriggerAndCheck(
+      alice,
       "the instruction is archived, and the right keeps its contract id " +
-        "and its deadline"
+        "and its deadline",
     ) {
       underlockInstructionsFor(alice) shouldBe empty
       val right = featuredAppRightOf(alice)
@@ -93,7 +95,8 @@ class FeaturedAppUnderlockInstructionTimeBasedIntegrationTest
 
     voteToCreateUnderlockInstruction(alice, underlocked = false)
     runTriggerAndCheck(
-      "the instruction is archived and the right has no deadline"
+      alice,
+      "the instruction is archived and the right has no deadline",
     ) {
       underlockInstructionsFor(alice) shouldBe empty
       isSuspended(alice) shouldBe false
@@ -102,8 +105,9 @@ class FeaturedAppUnderlockInstructionTimeBasedIntegrationTest
 
     voteToCreateUnderlockInstruction(alice, underlocked = false)
     runTriggerAndCheck(
+      alice,
       "a recovery of a right without a deadline archives the instruction " +
-        "and keeps the right's contract id"
+        "and keeps the right's contract id",
     ) {
       underlockInstructionsFor(alice) shouldBe empty
       featuredAppRightOf(alice).id shouldBe recoveredRight.id
@@ -126,12 +130,21 @@ class FeaturedAppUnderlockInstructionTimeBasedIntegrationTest
   }
 
   "leave an instruction without a right" in { implicit env =>
+    val alice = grantRight(aliceWalletClient, aliceValidatorBackend)
     val bob = onboardWalletUser(bobWalletClient, bobValidatorBackend)
     voteToCreateUnderlockInstruction(bob, underlocked = true)
+    voteToCreateUnderlockInstruction(alice, underlocked = true)
 
-    clue("the instruction is not sampled while bob has no right") {
-      runTrigger() shouldBe false
+    clue("the trigger applies alice's instruction and leaves bob's") {
+      // The SV store ingests in ledger order, and bob's instruction comes
+      // first. 'executeUnderlockAndExpectPermanentAt(alice)' waits for the
+      // store to sync alice's instruction and right. The store also holds bob's
+      // instruction once alice's instruction is in. So the trigger doesn't
+      // process the bob's instruction because it has no right. Not because
+      // bob's wasn't ingested.
+      executeUnderlockAndExpectPermanentAt(alice)
       underlockInstructionsFor(bob) should have size 1
+      runTrigger() shouldBe false
     }
 
     clue("the instruction applies to a right granted later") {
@@ -228,7 +241,8 @@ class FeaturedAppUnderlockInstructionTimeBasedIntegrationTest
     // Sim time stands still until advanced, so this is the execution time.
     val deadline = getLedgerTime.toInstant.plus(gracePeriod)
     runTriggerAndCheck(
-      "the instruction is archived and the right is suspended"
+      provider,
+      "the instruction is archived and the right is suspended",
     ) {
       underlockInstructionsFor(provider) shouldBe empty
       isSuspended(provider) shouldBe true
@@ -236,12 +250,28 @@ class FeaturedAppUnderlockInstructionTimeBasedIntegrationTest
     deadline
   }
 
-  /** Runs the trigger once, expecting it to process a task, and waits until
-    * `check` holds.
+  /** Waits until the SV store samples the provider's only instruction
+    * paired with its right, runs the trigger once, expecting it to process
+    * a task, and waits until `check` holds.
     */
-  private def runTriggerAndCheck(description: String)(check: => Unit)(implicit
-      env: SpliceTestConsoleEnvironment
-  ): Unit = {
+  private def runTriggerAndCheck(provider: PartyId, description: String)(
+      check: => Unit
+  )(implicit env: SpliceTestConsoleEnvironment): Unit = {
+    clue("the SV store samples the instruction paired with the right") {
+      // The trigger reads the SV store, which ingests after the participant
+      // with a lag. Hence, we wait for the instruction and the right to appear
+      // when we sample the store.
+      eventually() {
+        val expected =
+          underlockInstructionsFor(provider).loneElement.id ->
+            featuredAppRightOf(provider).id
+        val sampled = sv1Backend.appState.dsoStore
+          .listFeaturedAppUnderlockInstructionSample(PageLimit.tryCreate(10))
+          .futureValue
+          .map(task => task.instruction.contractId -> task.featuredAppRightCid)
+        sampled should contain(expected)
+      }
+    }
     actAndCheck("the execute trigger runs", runTrigger() shouldBe true)(
       description,
       _ => check,
