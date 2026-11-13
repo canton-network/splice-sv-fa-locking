@@ -413,11 +413,18 @@ tsv1RequestMemo request spec = tsv1RequestMemo' request spec []
 tsv1RequestMemo' : GovernanceLockRequestTag -> GovernanceLockSpecification -> [(Text, Text)] -> Text
 tsv1RequestMemo' request spec extraEntries =
   let (tag, subject) = governanceLockKindToTagAndSubject (governanceLockKind spec)
+      (unlockControllers, substitutionControllers, vestingControllers) = case spec of
+        GLS_FullLock FullLockSpecification{..} -> (unlockControllers, substitutionControllers, vestingControllers)
+        GLS_VestingLock VestingLockSpecification{..} -> (None, None, vestingControllers)
   in encodeLockCompatMemo $
        [ (requestMemoKey, governanceLockRequestTagToText request)
        , (lockKindMemoKey, governanceLockTagToText tag)
        , (lockSubjectMemoKey, subject)
-       ] <> extraEntries
+       ] <>
+        encodeControllersSpecificationMemoEntries unlockControllersMemoKey unlockControllers <>
+        encodeControllersSpecificationMemoEntries substitutionControllersMemoKey substitutionControllers <>
+        encodeControllersSpecificationMemoEntries vestingControllersMemoKey vestingControllers <>
+        extraEntries
 
 data TestEnvRegistries = TestEnvRegistries with
   registries : MultiRegistry.MultiRegistry

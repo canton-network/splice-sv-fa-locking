@@ -17,6 +17,7 @@ import Daml.Script
 import Splice.Amulet.TokenApiUtils (reasonMetaKey)
 import Splice.Api.Token.MetadataV1
 import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers (makeControllersSpecification)
 import Splice.GovernanceLock.Request
 import Splice.Scripts.UnitTests.GovernanceLock (fullLockSpecification)
 import Splice.Scripts.UnitTests.Memo
@@ -145,9 +146,18 @@ test_fullLockSpecificationParser'
   :  (Text -> [(Text, Text)] -> Validation Text FullLockSpecification)
   -> Script ()
 test_fullLockSpecificationParser' run = do
-  let fullSpecification = fullLockSpecification $ GLK_FeaturedApp testProvider
+  -- Each controllers key is parsed into its own field
+  let fullSpecification = (fullLockSpecification $ GLK_FeaturedApp testProvider) with
+        unlockControllers = Some $ makeControllersSpecification [[alice]]
+        substitutionControllers = Some $ makeControllersSpecification [[bob]]
+        vestingControllers = Some $ makeControllersSpecification [[charlie]]
   expectSuccess fullSpecification $
-    run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMemoKey, "provider")]
+    run (governanceLockTagToText GLT_FeaturedApp)
+      [ (lockSubjectMemoKey, "provider")
+      , (unlockControllersMemoKey, "[[\"alice\"]]")
+      , (substitutionControllersMemoKey, "[[\"bob\"]]")
+      , (vestingControllersMemoKey, "[[\"charlie\"]]")
+      ]
 
   expectSuccess (fullLockSpecification $ GLK_SuperValidatorRightsOwner "someSv") $
     run (governanceLockTagToText GLT_SuperValidator) [(lockSubjectMemoKey, "someSv")]
@@ -155,6 +165,10 @@ test_fullLockSpecificationParser' run = do
   -- Invalid field
   expectErrors [invalidLockSubjectMessage "provider" GLT_FeaturedApp invalidParty] $
     run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMemoKey, invalidParty)]
+
+  -- Controllers must be a JSON list of lists of parties
+  expectErrors [errorInMemoKeyMessage unlockControllersMemoKey "Invalid JSON list: 'alice'"] $
+    run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMemoKey, "provider"), (unlockControllersMemoKey, "alice")]
 
 -- | The lock kind is read from the `lockKindMemoKey` field.
 test_fullLockSpecificationParser : Script ()
