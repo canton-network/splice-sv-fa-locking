@@ -259,6 +259,66 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
 
     }
 
+    "listFeaturedAppRightsPastUnderlockDeadline" should {
+
+      "return suspended rights past their underlockPermanentAt" in {
+        val suspended =
+          featuredAppRight(userParty(1), underlockPermanentAt = Some(time(2).toInstant))
+        val laterSuspended =
+          featuredAppRight(userParty(2), underlockPermanentAt = Some(time(4).toInstant))
+        val notSuspended = featuredAppRight(userParty(3))
+        for {
+          store <- mkStore()
+          _ <- MonadUtil.sequentialTraverse(Seq(suspended, laterSuspended, notSuspended))(
+            dummyDomain.create(_)(store.multiDomainAcsStore)
+          )
+        } yield {
+          def cidsAt(t: CantonTimestamp) = store
+            .listFeaturedAppRightsPastUnderlockDeadline(None)(t, PageLimit.tryCreate(10))(
+              TraceContext.empty
+            )
+            .futureValue
+            .map(_.contract.contractId)
+
+          cidsAt(time(1)) should be(empty)
+          cidsAt(time(2)) should be(empty)
+          cidsAt(time(3)) should contain theSameElementsAs Seq(suspended.contractId)
+          cidsAt(time(5)) should contain theSameElementsAs Seq(
+            suspended.contractId,
+            laterSuspended.contractId,
+          )
+        }
+      }
+
+      "respect ignored parties" in {
+        val party1 = userParty(1)
+        val party2 = userParty(2)
+        val party1Right = featuredAppRight(party1, underlockPermanentAt = Some(time(2).toInstant))
+        val party2Right = featuredAppRight(party2, underlockPermanentAt = Some(time(2).toInstant))
+        for {
+          store <- mkStore()
+          _ <- MonadUtil.sequentialTraverse(Seq(party1Right, party2Right))(
+            dummyDomain.create(_)(store.multiDomainAcsStore)
+          )
+        } yield {
+          def cidsIgnoring(ignored: Set[PartyId]) = store
+            .listFeaturedAppRightsPastUnderlockDeadline(
+              Some(new InMemoryUnavailablePartiesStore(ignored))
+            )(time(3), PageLimit.tryCreate(10))(TraceContext.empty)
+            .futureValue
+            .map(_.contract.contractId)
+
+          cidsIgnoring(Set.empty) should contain theSameElementsAs
+            Seq(party1Right.contractId, party2Right.contractId)
+          cidsIgnoring(Set(party1)) should contain theSameElementsAs Seq(party2Right.contractId)
+          // The DSO party is a stakeholder of every right but is not the `provider`
+          cidsIgnoring(Set(dsoParty)) should contain theSameElementsAs
+            Seq(party1Right.contractId, party2Right.contractId)
+        }
+      }
+
+    }
+
     "listExpiredGovernanceLockTransfers" should {
 
       "return proposals past their expiresAt, and never those of another DSO" in {

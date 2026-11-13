@@ -780,6 +780,19 @@ trait SvDsoStore
       ignoredPartyFields = Seq("owner"),
     )
 
+  /** List suspended featured app rights that are past their `underlockPermanentAt` deadline. */
+  def listFeaturedAppRightsPastUnderlockDeadline(
+      unavailablePartiesStore: Option[UnavailablePartiesStore]
+  ): ListExpiredContracts[
+    splice.amulet.FeaturedAppRight.ContractId,
+    splice.amulet.FeaturedAppRight,
+  ] =
+    multiDomainAcsStore.listExpiredFromPayloadExpiry(
+      splice.amulet.FeaturedAppRight.COMPANION,
+      unavailablePartiesStore,
+      ignoredPartyFields = Seq("provider"),
+    )
+
   /** List lock transfer proposals that are past their `expiresAt`.
     *
     * Implemented in `DbSvDsoStore` rather than through
@@ -1466,6 +1479,9 @@ object SvDsoStore {
       mkFilter(splice.amulet.FeaturedAppRight.COMPANION)(co => co.payload.dso == dso) { contract =>
         DsoAcsStoreRowData(
           contract,
+          // A suspended right is archived once its underlock deadline passes
+          contractExpiresAt =
+            contract.payload.underlockPermanentAt.toScala.map(Timestamp.assertFromInstant),
           featuredAppRightProvider = Some(PartyId.tryFromProtoPrimitive(contract.payload.provider)),
         )
       },

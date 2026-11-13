@@ -533,6 +533,8 @@ case class SvAppBackendConfig(
     delegatelessAutomationUnhideRewardCouponV2BatchSize: Int = 220,
     // How many provisional featured app locks to convert per batch
     delegatelessAutomationProvisionalFeaturedAppLockConversionBatchSize: Int = 50,
+    // How many featured app rights past their underlock deadline to archive per batch
+    delegatelessAutomationFeaturedAppPermanentUnderlockBatchSize: Int = 100,
     // configuration to periodically take topology snapshots
     topologySnapshotConfig: Option[PeriodicBackupDumpConfig] = None,
     bftSequencerConnection: Boolean = true,
