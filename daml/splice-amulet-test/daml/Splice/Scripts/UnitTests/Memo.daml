@@ -1,0 +1,128 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.Scripts.UnitTests.Memo where
+
+import DA.Assert
+import DA.Date (Month(..), date)
+import DA.NonEmpty qualified as NonEmpty
+import DA.Optional (fromSomeNote)
+import DA.TextMap qualified as TextMap
+import DA.Time (days, time)
+import DA.Validation
+
+import Daml.Script
+
+import Splice.Util.Memo
+
+-- Helpers
+----------
+
+mkMemo : [(Text, Text)] -> Memo
+mkMemo = Memo . TextMap.fromList
+
+memoPrefix : Text
+memoPrefix = "test/memo:"
+
+expectSuccess : (Eq o, Show o) => o -> Validation Text o -> Script ()
+expectSuccess expected result = case result of
+  Success actual -> actual === expected
+  Errors errors -> fail $ "Expected success, but got errors: " <> show errors
+
+expectErrors : Show o => [Text] -> Validation Text o -> Script ()
+expectErrors expected result = case result of
+  Errors errors -> NonEmpty.toList errors === expected
+  Success actual -> fail $ "Expected errors, but got success: " <> show actual
+
+-- Error messages
+-----------------
+
+test_failureMessages : Script ()
+test_failureMessages = do
+  errorInMemoKeyMessage "test" "Invalid microseconds: '60d'" === "Error in memo key 'test': Invalid microseconds: '60d'"
+  invalidMemoFieldMessage "a=b=c" === "Invalid memo field 'a=b=c': expected 'key=value'"
+  invalidMemoValueMessage "party" "test" "bad$party" === "Invalid party for memo key 'test': 'bad$party'"
+  missingMemoKeyMessage "test" === "Missing memo key 'test'"
+
+-- Memo parsers
+---------------
+
+-- | Failures shared by `memoParserWithKnownKeys` and `memoParserWithAnyKeys`, for a parser that accepts the key `a`.
+testCommonMemoParserFailures : (Text -> Parser Text Memo) -> Script ()
+testCommonMemoParserFailures mkParser = do
+  let run = runParser $ mkParser memoPrefix
+
+  expectErrors ["Memo must start with " <> memoPrefix] $ run "a=1"
+  expectErrors [invalidMemoFieldMessage "a"] $ run $ memoPrefix <> "a"
+  expectErrors ["Duplicate key in memo: a"] $ run $ memoPrefix <> "a=1&a=2"
+
+test_memoParserWithKnownKeys : Script ()
+test_memoParserWithKnownKeys = do
+  let mkParser = memoParserWithKnownKeys ["a", "b"]
+      run = runParser $ mkParser memoPrefix
+
+  expectSuccess (mkMemo [("a", "1"), ("b", "2")]) $ run $ memoPrefix <> "a=1&b=2"
+
+  testCommonMemoParserFailures mkParser
+  expectErrors ["Unknown key in memo: c"] $ run $ memoPrefix <> "c=3"
+
+test_memoParserWithAnyKeys : Script ()
+test_memoParserWithAnyKeys = do
+  let run = runParser $ memoParserWithAnyKeys memoPrefix
+
+  expectSuccess (mkMemo [("a", "1"), ("c", "3")]) $ run $ memoPrefix <> "a=1&c=3"
+
+  testCommonMemoParserFailures memoParserWithAnyKeys
+
+-- Field parsers
+----------------
+
+test_optionalMemoFieldParser : Script ()
+test_optionalMemoFieldParser = do
+  let run = runParser (optionalMemoFieldParser "key") . mkMemo
+
+  expectSuccess (Some "value") $ run [("key", "value")]
+  expectSuccess None $ run []
+
+test_requiredMemoFieldParser : Script ()
+test_requiredMemoFieldParser = do
+  let run = runParser (requiredMemoFieldParser "key") . mkMemo
+
+  expectSuccess "value" $ run [("key", "value")]
+  expectErrors [missingMemoKeyMessage "key"] $ run []
+
+-- | Tests a parser built on `requiredMemoFieldParser` with a valid value, a missing key, and an invalid value.
+-- Takes the parser, a valid value and its parsed result, and an invalid value and the error of the value parser.
+testTypedMemoFieldParser : (Eq o, Show o) => (Text -> Parser Memo o) -> (Text, o) -> (Text, Text) -> Script ()
+testTypedMemoFieldParser mkParser (validValue, expected) (invalidValue, valueError) = do
+  let run = runParser (mkParser "key") . mkMemo
+
+  expectSuccess expected $ run [("key", validValue)]
+  expectErrors [missingMemoKeyMessage "key"] $ run []
+  expectErrors [errorInMemoKeyMessage "key" valueError] $ run [("key", invalidValue)]
+
+test_boolMemoFieldParser : Script ()
+test_boolMemoFieldParser =
+  testTypedMemoFieldParser boolMemoFieldParser ("true", True) ("yes", "Expected true or false, got: yes")
+
+test_intMemoFieldParser : Script ()
+test_intMemoFieldParser =
+  testTypedMemoFieldParser intMemoFieldParser ("42", 42) ("4.2", "Invalid Int: '4.2'")
+
+test_relTimeFromMicrosecondsMemoFieldParser : Script ()
+test_relTimeFromMicrosecondsMemoFieldParser =
+  testTypedMemoFieldParser relTimeFromMicrosecondsMemoFieldParser
+    ("5184000000000", days 60)
+    ("60d", "Invalid microseconds: '60d'")
+
+test_timeFromMicrosecondsMemoFieldParser : Script ()
+test_timeFromMicrosecondsMemoFieldParser =
+  testTypedMemoFieldParser timeFromMicrosecondsMemoFieldParser
+    ("1767225600000000", time (date 2026 Jan 1) 0 0 0)
+    ("2026-01-01T00:00:00Z", "Invalid microseconds: '2026-01-01T00:00:00Z'")
+
+test_partyMemoFieldParser : Script ()
+test_partyMemoFieldParser =
+  testTypedMemoFieldParser partyMemoFieldParser
+    ("alice", fromSomeNote "invalid test party" $ partyFromText "alice")
+    ("bad$party", "Invalid party: 'bad$party'")

@@ -31,6 +31,7 @@ import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 import Splice.TokenStandard.Utils
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
+import Splice.Util.Memo (errorInMemoKeyMessage, invalidMemoValueMessage)
 
 testGovernanceLockHappyPathTSv1 : Script ()
 testGovernanceLockHappyPathTSv1 = testGovernanceLockHappyPathScenario tsv1Operations

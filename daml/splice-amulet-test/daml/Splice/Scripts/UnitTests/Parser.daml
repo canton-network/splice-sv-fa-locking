@@ -1,0 +1,38 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.Scripts.UnitTests.Parser where
+
+import DA.Assert
+import DA.NonEmpty qualified as NonEmpty
+import DA.Optional
+import DA.Text qualified as Text
+import DA.Validation
+
+import Daml.Script
+
+import Splice.Util.Parser
+
+mkTestErrors' : Int -> [Text]
+mkTestErrors' 0 = []
+mkTestErrors' numErrors = ("e" <> show numErrors) :: mkTestErrors' (numErrors - 1)
+
+mkTestErrors : Int -> [Text]
+mkTestErrors numErrors = reverse $ mkTestErrors' numErrors
+
+testParserWithErrors : Int -> Parser () ()
+testParserWithErrors numErrors =
+  Parser \_ -> Errors $ fromSome $ NonEmpty.nonEmpty $ mkTestErrors numErrors
+
+test_assertParsed : Script ()
+test_assertParsed = do
+    run (testParserWithErrors 1) === Left (errorsText 1)
+    run (testParserWithErrors 2) === Left ("Found 2 parsing errors:\n\n" <> errorsText 2)
+    run (testParserWithErrors 5) === Left ("Found 5 parsing errors:\n\n" <> errorsText 5)
+    run (testParserWithErrors 6) === Left ("Found 6 parsing errors. First five errors:\n\n" <> errorsText 5)
+  where
+    run : Parser () () -> Either Text ()
+    run parser = assertParsed parser ()
+
+    errorsText : Int -> Text
+    errorsText numErrors = Text.intercalate "\n" (mkTestErrors numErrors)

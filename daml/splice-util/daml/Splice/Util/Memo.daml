@@ -1,0 +1,125 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+{-# LANGUAGE ApplicativeDo #-}
+
+module Splice.Util.Memo (
+  Memo(..),
+
+  -- * Parsers
+  Parser(..),
+  runParser,
+  assertParsed,
+  memoParserWithKnownKeys,
+  memoParserWithAnyKeys,
+  optionalMemoFieldParser,
+  requiredMemoFieldParser,
+  boolMemoFieldParser,
+  intMemoFieldParser,
+  relTimeFromMicrosecondsMemoFieldParser,
+  timeFromMicrosecondsMemoFieldParser,
+  partyMemoFieldParser,
+
+  -- * Error messages
+  errorInMemoKeyMessage,
+  missingMemoKeyMessage,
+  invalidMemoFieldMessage,
+  invalidMemoValueMessage,
+) where
+
+import DA.Action (foldlA)
+import DA.Text qualified as Text
+import DA.TextMap qualified as TextMap
+import DA.Time
+import DA.Validation
+
+import Splice.Util.Parser
+
+data Memo = Memo with
+    fields : TextMap.TextMap Text
+  deriving (Eq, Show)
+
+-- Parsers
+----------
+
+memoParser : Optional [Text] -> Text -> Parser Text Memo
+memoParser optKnownKeys prefix = do
+  memo <- inputParser
+  params <- case Text.stripPrefix prefix memo of
+    Some params -> pure params
+    None -> assertFail $ "Memo must start with " <> prefix
+  fields <- mapA parseField (Text.splitOn "&" params) >>= foldlA dedupeField TextMap.empty
+  pure Memo with fields
+  where
+    parseField : Text -> Parser Text (Text, Text)
+    parseField field = case Text.splitOn "=" field of
+      [key, value]
+        | Some knownKeys <- optKnownKeys, not (key `elem` knownKeys) -> assertFail $ "Unknown key in memo: " <> key
+        | otherwise -> pure (key, value)
+      _ -> assertFail $ invalidMemoFieldMessage field
+
+    dedupeField : TextMap.TextMap Text -> (Text, Text) -> Parser Text (TextMap.TextMap Text)
+    dedupeField fields (key, value)
+      | TextMap.member key fields = assertFail $ "Duplicate key in memo: " <> key
+      | otherwise = pure $ TextMap.insert key value fields
+
+memoParserWithKnownKeys : [Text] -> Text -> Parser Text Memo
+memoParserWithKnownKeys knownKeys = memoParser $ Some knownKeys
+
+memoParserWithAnyKeys : Text -> Parser Text Memo
+memoParserWithAnyKeys = memoParser None
+
+optionalMemoFieldParser : Text -> Parser Memo (Optional Text)
+optionalMemoFieldParser key = do
+  memo <- inputParser
+  pure $ TextMap.lookup key memo.fields
+
+requiredMemoFieldParser : Text -> Parser Memo Text
+requiredMemoFieldParser key = optionalMemoFieldParser key >>= \case
+  Some value -> pure value
+  None -> assertFail $ missingMemoKeyMessage key
+
+requiredMemoFieldParserFromTextParser : Text -> Parser Text a -> Parser Memo a
+requiredMemoFieldParserFromTextParser key parser = requiredMemoFieldParser key >>= convertToErrorInMemoKey key parser
+
+boolMemoFieldParser : Text -> Parser Memo Bool
+boolMemoFieldParser key = requiredMemoFieldParserFromTextParser key boolParser
+
+intMemoFieldParser : Text -> Parser Memo Int
+intMemoFieldParser key = requiredMemoFieldParserFromTextParser key intParser
+
+relTimeFromMicrosecondsMemoFieldParser : Text -> Parser Memo RelTime
+relTimeFromMicrosecondsMemoFieldParser key = requiredMemoFieldParserFromTextParser key relTimeFromMicrosecondsParser
+
+timeFromMicrosecondsMemoFieldParser : Text -> Parser Memo Time
+timeFromMicrosecondsMemoFieldParser key = requiredMemoFieldParserFromTextParser key timeFromMicrosecondsParser
+
+partyMemoFieldParser : Text -> Parser Memo Party
+partyMemoFieldParser key = requiredMemoFieldParserFromTextParser key partyParser
+
+-- Error messages
+-----------------
+
+memoKeyText : Text -> Text
+memoKeyText key = "memo key '" <> key <> "'"
+
+-- | Names the key in an error reported by a decoder that only sees the value.
+errorInMemoKeyMessage : Text -> Text -> Text
+errorInMemoKeyMessage key error = "Error in " <> memoKeyText key <> ": " <> error
+
+convertToErrorInMemoKey : Text -> Parser i1 o -> i1 -> Parser i2 o
+convertToErrorInMemoKey key parser input =
+  Parser \_ -> case runParser parser input of
+    Success o -> Success o
+    Errors es -> Errors $ fmap (errorInMemoKeyMessage key) es
+
+missingMemoKeyMessage : Text -> Text
+missingMemoKeyMessage key = "Missing " <> memoKeyText key
+
+-- | For a field of the `key1=value1&key2=value2` memo that is not a single `key=value` pair.
+invalidMemoFieldMessage : Text -> Text
+invalidMemoFieldMessage field = "Invalid memo field '" <> field <> "': expected 'key=value'"
+
+-- | Takes what the value should be (e.g. "decimal"), the key, and the value.
+invalidMemoValueMessage : Text -> Text -> Text -> Text
+invalidMemoValueMessage kind key value = "Invalid " <> kind <> " for " <> memoKeyText key <> ": '" <> value <> "'"
