@@ -1,0 +1,88 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Basic JSON decoding and encoding.
+--
+-- This is not a general JSON parser. It only supports lists of lists of parties, and relies on
+-- party ids not containing `"`, `\`, `,`, `[`, or `]`. In particular:
+--
+-- * Whitespace in lists is not supported.
+-- * Lists are split on `,` and nesting is tracked by counting `[` and `]`, without
+--   recognizing strings, so these characters are not supported inside strings.
+-- * Strings are decoded by stripping the surrounding `"`. Escape sequences are not decoded,
+--   and unescaped `"` or control characters inside a string are not rejected.
+-- * Strings are encoded by escaping `"` only. `\` and control characters are not escaped.
+-- * Objects, numbers, booleans, and `null` are not supported.
+module Splice.Util.Json (
+  -- * Decoding
+  jsonDecodePartiesLists,
+
+  -- * Encoding
+  jsonEncodePartiesLists,
+) where
+
+import DA.Either (optionalToEither)
+import DA.Text qualified as Text
+
+-- Decoding
+-----------
+
+-- | Decode a JSON string.
+jsonDecodeString : (Text -> Either Text a) -> Text -> Either Text a
+jsonDecodeString decode input =
+  decode =<< optionalToEither ("Invalid JSON string: '" <> input <> "'") (Text.stripPrefix "\"" input >>= Text.stripSuffix "\"")
+
+-- | Split on the `,` characters that are not inside a nested list.
+splitTopLevel : Text -> [Text]
+splitTopLevel input =
+  let
+    depthChange : Text -> Int
+    depthChange c = if c == "[" then 1 else if c == "]" then -1 else 0
+
+    step : (Int, [Text], [Text]) -> Text -> (Int, [Text], [Text])
+    step (0, current, acc) "," = (0, [], Text.implode (reverse current) :: acc)
+    step (depth, current, acc) c = (depth + depthChange c, c :: current, acc)
+
+    (_, current, acc) = foldl step (0, [], []) (Text.explode input)
+  in reverse (Text.implode (reverse current) :: acc)
+
+-- | Decode a JSON list, using `split` to split the text between the brackets into its elements.
+jsonDecodeList' : (Text -> [Text]) -> (Text -> Either Text a) -> Text -> Either Text [a]
+jsonDecodeList' split parseElement input = do
+  inner <- optionalToEither ("Invalid JSON list: '" <> input <> "'") $
+    Text.stripPrefix "[" input >>= Text.stripSuffix "]"
+  case inner of
+    "" -> pure []
+    elements -> forA (split elements) parseElement
+
+-- | Decode a JSON list.
+jsonDecodeList : (Text -> Either Text a) -> Text -> Either Text [a]
+jsonDecodeList = jsonDecodeList' (Text.splitOn ",")
+
+-- | Decode a JSON list of lists.
+jsonDecodeLists : (Text -> Either Text a) -> Text -> Either Text [[a]]
+jsonDecodeLists decode = jsonDecodeList' splitTopLevel (jsonDecodeList decode)
+
+jsonDecodeParty : Text -> Either Text Party
+jsonDecodeParty = jsonDecodeString \p -> optionalToEither ("Invalid party: '" <> p <> "'") (partyFromText p)
+
+jsonDecodePartiesLists : Text -> Either Text [[Party]]
+jsonDecodePartiesLists = jsonDecodeLists jsonDecodeParty
+
+-- Encoding
+-----------
+
+jsonEncodeString : (a -> Text) -> a -> Text
+jsonEncodeString encode a = "\"" <> Text.replace "\"" "\\\"" (encode a) <> "\""
+
+jsonEncodeList : (a -> Text) -> [a] -> Text
+jsonEncodeList encode l = "[" <> Text.intercalate "," (fmap encode l) <> "]"
+
+jsonEncodeLists : (a -> Text) -> [[a]] -> Text
+jsonEncodeLists encode = jsonEncodeList (jsonEncodeList encode)
+
+jsonEncodeParty : Party -> Text
+jsonEncodeParty = jsonEncodeString partyToText
+
+jsonEncodePartiesLists : [[Party]] -> Text
+jsonEncodePartiesLists = jsonEncodeLists jsonEncodeParty

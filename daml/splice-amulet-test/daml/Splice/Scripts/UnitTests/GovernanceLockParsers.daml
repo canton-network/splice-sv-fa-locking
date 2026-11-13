@@ -8,7 +8,6 @@ import DA.Assert
 import DA.Date (Month(..), date)
 import DA.NonEmpty qualified as NonEmpty
 import DA.Optional
-import DA.Text qualified as Text
 import DA.TextMap qualified as TextMap
 import DA.Time (days, time)
 import DA.Validation
@@ -18,8 +17,11 @@ import Daml.Script
 import Splice.Amulet.TokenApiUtils (reasonMetaKey)
 import Splice.Api.Token.MetadataV1
 import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers (makeControllersSpecification)
 import Splice.GovernanceLock.Request
 import Splice.Scripts.UnitTests.GovernanceLock (fullLockSpecification)
+import Splice.Scripts.UnitTests.Memo
+import Splice.Util.Memo
 
 -- Test parties and helpers
 ---------------------------
@@ -46,65 +48,13 @@ invalidParty = "bad$party"
 invalidSVName : Text
 invalidSVName = "bad$SV"
 
-mkMeta : [(Text, Text)] -> Metadata
-mkMeta = Metadata . TextMap.fromList
-
-expectSuccess : (Eq o, Show o) => o -> Validation Text o -> Script ()
-expectSuccess expected result = case result of
-  Success actual -> actual === expected
-  Errors errors -> fail $ "Expected success, but got errors: " <> show errors
-
-expectErrors : Show o => [Text] -> Validation Text o -> Script ()
-expectErrors expected result = case result of
-  Errors errors -> NonEmpty.toList errors === expected
-  Success actual -> fail $ "Expected errors, but got success: " <> show actual
-
-mkTestErrors' : Int -> [Text]
-mkTestErrors' 0 = []
-mkTestErrors' numErrors = ("e" <> show numErrors) :: mkTestErrors' (numErrors - 1)
-
-mkTestErrors : Int -> [Text]
-mkTestErrors numErrors = reverse $ mkTestErrors' numErrors
-
-testParserWithErrors : Int -> Parser () ()
-testParserWithErrors numErrors =
-  Parser \_ -> Errors $ fromSome $ NonEmpty.nonEmpty $ mkTestErrors numErrors
-
-test_assertParsed : Script ()
-test_assertParsed = do
-    run (testParserWithErrors 1) === Left (errorsText 1)
-    run (testParserWithErrors 2) === Left ("Found 2 parsing errors:\n\n" <> errorsText 2)
-    run (testParserWithErrors 5) === Left ("Found 5 parsing errors:\n\n" <> errorsText 5)
-    run (testParserWithErrors 6) === Left ("Found 6 parsing errors. First five errors:\n\n" <> errorsText 5)
-  where
-    run : Parser () () -> Either Text ()
-    run parser = assertParsed parser ()
-
-    errorsText : Int -> Text
-    errorsText numErrors = Text.intercalate "\n" (mkTestErrors numErrors)
-
--- Error message helpers
-------------------------
-
-test_failureMessages : Script ()
-test_failureMessages = do
-  -- Keys are named as written in the memo, and values are quoted
-  errorInMemoKeyMessage lockVestingDurationMemoKey "Invalid microseconds: '60d'"
-    === "Error in memo key 'lock-vesting-duration-micros': Invalid microseconds: '60d'"
-  invalidLockSubjectMessage "SV name" GLT_SuperValidator "bad$sv"
-    === "Invalid SV name for sv-lock: 'bad$sv'"
-  invalidMemoEntryMessage "a=b=c" === "Invalid memo entry 'a=b=c': expected 'key=value'"
-  invalidMemoValueMessage "party" targetLockOwnerMemoKey "bad$party"
-    === "Invalid party for memo key 'target-lock-owner': 'bad$party'"
-  missingMemoKeyMessage lockKindMemoKey === "Missing memo key 'lock-kind'"
-
 -- Lock kind parser
 -------------------
 
 test_governanceLockTagParser : Script ()
 test_governanceLockTagParser = do
   -- `GovernanceLockTag` has no `Show` instance, so compare the tags by their text
-  let run t = runParser governanceLockTagParser (mkMeta [(lockKindMemoKey, t)])
+  let run t = runParser governanceLockTagParser (mkMemo [(lockKindMemoKey, t)])
       expectTag tag = expectSuccess (governanceLockTagToText tag) . fmap governanceLockTagToText
 
   expectTag GLT_FeaturedApp $ run "fa-lock"
@@ -117,7 +67,7 @@ test_governanceLockTagParser = do
 
 test_governanceLockKindParser : Script ()
 test_governanceLockKindParser = do
-  let run entries = runParser governanceLockKindParser (mkMeta entries)
+  let run entries = runParser governanceLockKindParser (mkMemo entries)
       kind' k = (lockKindMemoKey, k)
       kind k = kind' $ governanceLockTagToText k
       subject s = (lockSubjectMemoKey, s)
@@ -145,48 +95,48 @@ test_governanceLockKindParser = do
   expectErrors [invalidLockSubjectMessage "SV name" GLT_SuperValidator invalidSVName] $
     run [kind GLT_SuperValidator, subject invalidSVName]
 
--- Metadata parser
+-- Memo parser
 ------------------
 
-test_governanceLockMetadataParser : Script ()
-test_governanceLockMetadataParser = do
-  let run entries = runParser governanceLockMetadataParser (mkMeta entries)
+test_governanceLockMemoParser : Script ()
+test_governanceLockMemoParser = do
+  let run entries = runParser governanceLockMemoParser $ Metadata $ TextMap.fromList entries
       reason r = (reasonMetaKey, cipMemoPrefix <> r)
       otherEntry = ("other-key", "other-value")
 
-  -- Without a reason field, empty metadata is returned
-  expectSuccess (mkMeta []) $ run []
-  expectSuccess (mkMeta []) $ run [otherEntry, (lockSubjectMemoKey, "provider")]
+  -- Without a reason field, an error is returned
+  expectErrors ["Memo must start with " <> cipMemoPrefix] $ run []
+  expectErrors ["Memo must start with " <> cipMemoPrefix] $ run [otherEntry, (lockSubjectMemoKey, "provider")]
 
-  -- A reason without the `cipMemoPrefix` prefix is not parsed, and empty metadata is returned
-  expectSuccess (mkMeta []) $ run [(reasonMetaKey, lockSubjectMemoKey <> "=provider")]
+  -- A reason without the `cipMemoPrefix` prefix fails
+  expectErrors ["Memo must start with " <> cipMemoPrefix] $ run [(reasonMetaKey, lockSubjectMemoKey <> "=provider")]
 
-  -- A single pair is added to the metadata, and the reason field is removed
-  expectSuccess (mkMeta [(lockSubjectMemoKey, "provider")]) $
+  -- A single pair is parsed
+  expectSuccess (mkMemo [(lockSubjectMemoKey, "provider")]) $
     run [reason $ lockSubjectMemoKey <> "=provider"]
 
-  -- `&` separates the pairs, and the other metadata fields are ignored
+  -- `&` separates the pairs, and the other fields are ignored
   expectSuccess
-    (mkMeta [(lockSubjectMemoKey, "provider")])
+    (mkMemo [(lockSubjectMemoKey, "provider")])
     $ run [otherEntry, reason $ lockSubjectMemoKey <> "=provider"]
 
   -- An empty value is allowed
-  expectSuccess (mkMeta [(lockSubjectMemoKey, "")]) $
+  expectSuccess (mkMemo [(lockSubjectMemoKey, "")]) $
     run [reason $ lockSubjectMemoKey <> "="]
 
   -- A pair without `=`
-  expectErrors [invalidMemoEntryMessage lockSubjectMemoKey] $ run [reason lockSubjectMemoKey]
+  expectErrors [invalidMemoFieldMessage lockSubjectMemoKey] $ run [reason lockSubjectMemoKey]
 
   -- A pair with more than one `=`
-  expectErrors [invalidMemoEntryMessage $ lockSubjectMemoKey <> "=provider=x"] $
+  expectErrors [invalidMemoFieldMessage $ lockSubjectMemoKey <> "=provider=x"] $
     run [reason $ lockSubjectMemoKey <> "=provider=x"]
 
   -- An empty reason, and an empty pair after a trailing `&`
-  expectErrors [invalidMemoEntryMessage ""] $ run [reason ""]
-  expectErrors [invalidMemoEntryMessage ""] $ run [reason $ lockSubjectMemoKey <> "=provider&"]
+  expectErrors [invalidMemoFieldMessage ""] $ run [reason ""]
+  expectErrors [invalidMemoFieldMessage ""] $ run [reason $ lockSubjectMemoKey <> "=provider&"]
 
   -- All invalid pairs are reported
-  expectErrors [invalidMemoEntryMessage "a", invalidMemoEntryMessage "b=c=d"] $
+  expectErrors [invalidMemoFieldMessage "a", invalidMemoFieldMessage "b=c=d"] $
     run [reason $ "a&" <> lockSubjectMemoKey <> "=provider&b=c=d"]
 
 -- Lock specification parser
@@ -196,9 +146,18 @@ test_fullLockSpecificationParser'
   :  (Text -> [(Text, Text)] -> Validation Text FullLockSpecification)
   -> Script ()
 test_fullLockSpecificationParser' run = do
-  let fullSpecification = fullLockSpecification $ GLK_FeaturedApp testProvider
+  -- Each controllers key is parsed into its own field
+  let fullSpecification = (fullLockSpecification $ GLK_FeaturedApp testProvider) with
+        unlockControllers = Some $ makeControllersSpecification [[alice]]
+        substitutionControllers = Some $ makeControllersSpecification [[bob]]
+        vestingControllers = Some $ makeControllersSpecification [[charlie]]
   expectSuccess fullSpecification $
-    run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMemoKey, "provider")]
+    run (governanceLockTagToText GLT_FeaturedApp)
+      [ (lockSubjectMemoKey, "provider")
+      , (unlockControllersMemoKey, "[[\"alice\"]]")
+      , (substitutionControllersMemoKey, "[[\"bob\"]]")
+      , (vestingControllersMemoKey, "[[\"charlie\"]]")
+      ]
 
   expectSuccess (fullLockSpecification $ GLK_SuperValidatorRightsOwner "someSv") $
     run (governanceLockTagToText GLT_SuperValidator) [(lockSubjectMemoKey, "someSv")]
@@ -207,11 +166,15 @@ test_fullLockSpecificationParser' run = do
   expectErrors [invalidLockSubjectMessage "provider" GLT_FeaturedApp invalidParty] $
     run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMemoKey, invalidParty)]
 
+  -- Controllers must be a JSON list of lists of parties
+  expectErrors [errorInMemoKeyMessage unlockControllersMemoKey "Invalid JSON list: 'alice'"] $
+    run (governanceLockTagToText GLT_FeaturedApp) [(lockSubjectMemoKey, "provider"), (unlockControllersMemoKey, "alice")]
+
 -- | The lock kind is read from the `lockKindMemoKey` field.
 test_fullLockSpecificationParser : Script ()
 test_fullLockSpecificationParser =
   test_fullLockSpecificationParser' \kind entries ->
-    runParser fullLockSpecificationParser (mkMeta $ (lockKindMemoKey, kind) :: entries)
+    runParser fullLockSpecificationParser (mkMemo $ (lockKindMemoKey, kind) :: entries)
 
 -- TSv1 request parser
 ----------------------
@@ -229,7 +192,7 @@ expectRequestErrors expected result = case result of
 
 test_governanceLockRequestTSv1Parser : Script ()
 test_governanceLockRequestTSv1Parser = do
-  let run receiver entries = runParser (governanceLockRequestTSv1Parser testAdmin receiver None) (mkMeta entries)
+  let run receiver entries = runParser (governanceLockRequestTSv1Parser testAdmin receiver None) (mkMemo entries)
       request r = (requestMemoKey, r)
       faLock = [(lockKindMemoKey, governanceLockTagToText GLT_FeaturedApp), (lockSubjectMemoKey, "provider")]
       faSpecification = fullLockSpecification $ GLK_FeaturedApp testProvider
@@ -375,7 +338,7 @@ testAdmin = testParty "registry-admin"
 
 -- | Parses a substitution request and returns its substitution.
 -- Arguments: registry admin. Input: metadata to be converted to a compat mode memo.
-substitutionTSv1Parser : Party -> Parser Metadata GovernanceLockKey
+substitutionTSv1Parser : Party -> Parser Memo GovernanceLockKey
 substitutionTSv1Parser admin = governanceLockRequestTSv1Parser admin lockManagerParty None >>= \case
   GLR_SubstituteLock{target} -> pure target
   result -> assertFail $ "Expected GLR_SubstituteLock but got: " <> show result
@@ -391,7 +354,7 @@ substitutionRequest = (requestMemoKey, governanceLockRequestTagToText GLRT_Subst
 -- `target-lock-owner`, `lock-kind`, and `lock-status` specify the owner, kind, and state of the target lock.
 test_substitutionTSv1Parser_examples : Script ()
 test_substitutionTSv1Parser_examples = do
-  let run entries = runParser (substitutionTSv1Parser testAdmin) (mkMeta entries)
+  let run entries = runParser (substitutionTSv1Parser testAdmin) (mkMemo entries)
 
   -- Minimal example: bob substitutes funds of the SV lock of alice for "someSv", for example a lock that alice
   -- created in compatibility mode.
@@ -454,14 +417,14 @@ test_substitutionTSv1Parser_examples = do
 
 test_substitutionTSv1Parser_failures : Script ()
 test_substitutionTSv1Parser_failures = do
-  let run' entries = runParser (substitutionTSv1Parser testAdmin) (mkMeta $ substitutionRequest :: entries)
+  let run' entries = runParser (substitutionTSv1Parser testAdmin) (mkMemo $ substitutionRequest :: entries)
       run entries = run' $ (lockKindMemoKey, governanceLockTagToText GLT_SuperValidator) :: entries
       subject = (lockSubjectMemoKey, "someSv")
       targetOwner = (targetLockOwnerMemoKey, "alice")
 
   -- The target owner is required and must be a party
   expectErrors [missingMemoKeyMessage targetLockOwnerMemoKey] $ run [subject]
-  expectErrors [invalidMemoValueMessage "party" targetLockOwnerMemoKey invalidParty] $
+  expectErrors [errorInMemoKeyMessage targetLockOwnerMemoKey ("Invalid party: '" <> invalidParty <> "'")] $
     run [subject, (targetLockOwnerMemoKey, invalidParty)]
 
   -- The kind must name a known lock kind
@@ -471,7 +434,7 @@ test_substitutionTSv1Parser_failures = do
   -- The target state must be `locked` or `vesting`; an invalid state and an invalid owner are both reported
   expectErrors
     [ invalidMemoValueMessage "value" lockStatusMemoKey "unlocking"
-    , invalidMemoValueMessage "party" targetLockOwnerMemoKey invalidParty
+    , errorInMemoKeyMessage targetLockOwnerMemoKey ("Invalid party: '" <> invalidParty <> "'")
     ]
     $ run [subject, (lockStatusMemoKey, "unlocking"), (targetLockOwnerMemoKey, invalidParty)]
 

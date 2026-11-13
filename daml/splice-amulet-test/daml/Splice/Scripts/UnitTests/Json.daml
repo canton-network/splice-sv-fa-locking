@@ -1,0 +1,53 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.Scripts.UnitTests.Json where
+
+import DA.Assert
+import DA.Optional (fromSome)
+
+import Daml.Script
+
+import Splice.Util.Json
+
+alice = fromSome $ partyFromText "alice::1220ab"
+bob = fromSome $ partyFromText "bob::1220cd"
+carol = fromSome $ partyFromText "carol::1220ef"
+
+expectParsed : (Show a, Eq a) => (Text -> Either Text a) -> Text -> a -> Script ()
+expectParsed parse input expected = case parse input of
+  Right result -> result === expected
+  Left err -> fail $ "Expected '" <> input <> "' to parse, got error: " <> err
+
+expectError : Show a => (Text -> Either Text a) -> Text -> Text -> Script ()
+expectError parse input expected = case parse input of
+  Left err -> err === expected
+  Right result -> fail $ "Expected '" <> input <> "' to fail, got: " <> show result
+
+test_jsonDecodePartiesLists_valid : Script ()
+test_jsonDecodePartiesLists_valid = do
+  expectParsed jsonDecodePartiesLists "[]" []
+  expectParsed jsonDecodePartiesLists "[[]]" [[]]
+  expectParsed jsonDecodePartiesLists "[[],[\"alice::1220ab\"]]" [[], [alice]]
+  expectParsed jsonDecodePartiesLists "[[\"alice::1220ab\"]]" [[alice]]
+  expectParsed jsonDecodePartiesLists "[[\"alice::1220ab\",\"bob::1220cd\"],[\"carol::1220ef\"]]" [[alice, bob], [carol]]
+
+test_jsonDecodePartiesLists_invalid : Script ()
+test_jsonDecodePartiesLists_invalid = do
+  expectError jsonDecodePartiesLists "" "Invalid JSON list: ''"
+  expectError jsonDecodePartiesLists "[ [] ]" "Invalid JSON list: ' [] '" -- whitespace is not supported
+  expectError jsonDecodePartiesLists "[\"alice::1220ab\"]" "Invalid JSON list: '\"alice::1220ab\"'"
+  expectError jsonDecodePartiesLists "[[\"alice::1220ab\"],]" "Invalid JSON list: ''"
+  expectError jsonDecodePartiesLists "[[\"alice::1220ab\"] [\"bob::1220cd\"]]" "Invalid party: 'alice::1220ab\"] [\"bob::1220cd'"
+  expectError jsonDecodePartiesLists "[[\"alice::1220ab\"]]]" "Invalid JSON string: '\"alice::1220ab\"]'"
+  expectError jsonDecodePartiesLists "[[\"alice::1220ab\", \"bob::1220cd\"]" "Invalid JSON list: '[\"alice::1220ab\", \"bob::1220cd\"'"
+  expectError jsonDecodePartiesLists "[[\"alice!::1220ab\"]]" "Invalid party: 'alice!::1220ab'"
+
+test_jsonEncodePartiesLists : Script ()
+test_jsonEncodePartiesLists = do
+  jsonEncodePartiesLists [] === "[]"
+  jsonEncodePartiesLists [[]] === "[[]]"
+  jsonEncodePartiesLists [[], [alice]] === "[[],[\"alice::1220ab\"]]"
+  jsonEncodePartiesLists [[alice]] === "[[\"alice::1220ab\"]]"
+  jsonEncodePartiesLists [[alice, bob], [carol]] === "[[\"alice::1220ab\",\"bob::1220cd\"],[\"carol::1220ef\"]]"
+  jsonEncodePartiesLists [[alice, bob], [carol]] === "[[\"alice::1220ab\",\"bob::1220cd\"],[\"carol::1220ef\"]]"

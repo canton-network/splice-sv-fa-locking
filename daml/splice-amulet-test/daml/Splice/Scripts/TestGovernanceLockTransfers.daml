@@ -23,6 +23,7 @@ import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
 import Splice.TokenStandard.Utils (ForwardCompatible(..), basicAccount, reasonToMeta, toAnyContractId)
+import Splice.Util.Memo
 
 -- | How long a lock transfer proposal lasts: the `tokenStandardMaxTTL` config,
 -- which the test config leaves unset, so its default of 90 days applies.
