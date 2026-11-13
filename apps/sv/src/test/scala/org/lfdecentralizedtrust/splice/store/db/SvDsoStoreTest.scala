@@ -3331,20 +3331,17 @@ class DbSvDsoStoreTest
 
   }
 
-  "listFeaturedAppUnderlockInstructionsWithFeaturedAppRight" should {
+  "listFeaturedAppUnderlockInstructionSample" should {
 
-    def listCids(
-        store: SvDsoStore,
-        ignored: Option[Set[PartyId]] = None,
-    ) = store
-      .listFeaturedAppUnderlockInstructionsWithFeaturedAppRight(
-        ignored.map(new InMemoryUnavailablePartiesStore(_)),
-        PageLimit.tryCreate(100),
-      )(traceContext)
-      .map(_.map(_.contract.contractId))
+    def listPairs(store: SvDsoStore, limit: Int = 100) = store
+      .listFeaturedAppUnderlockInstructionSample(PageLimit.tryCreate(limit))(
+        traceContext
+      )
+      .map(_.map(r => r.instruction.contractId -> r.featuredAppRightCid))
 
-    "return only instructions whose provider has a live FeaturedAppRight" in {
+    "return only instructions whose provider has a live FeaturedAppRight, paired with that right" in {
       val featuredProvider = userParty(1)
+      val featuredRight = featuredAppRight(featuredProvider)
       val underlocked =
         featuredAppUnderlockInstruction(featuredProvider, underlocked = true)
       // An instruction reporting a recovery is listed just like one
@@ -3366,9 +3363,7 @@ class DbSvDsoStoreTest
       for {
         store <- mkStore()
         _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(featuredAppRight(featuredProvider))(
-          store.multiDomainAcsStore
-        )
+        _ <- dummyDomain.create(featuredRight)(store.multiDomainAcsStore)
         _ <- MonadUtil.sequentialTraverse(
           Seq(
             underlocked,
@@ -3378,55 +3373,71 @@ class DbSvDsoStoreTest
             otherDsoInstruction,
           )
         )(dummyDomain.create(_)(store.multiDomainAcsStore))
-        result <- listCids(store)
+        result <- listPairs(store)
       } yield {
         result should contain theSameElementsAs Seq(
-          underlocked.contractId,
-          recovered.contractId,
-          expired.contractId,
+          underlocked.contractId -> featuredRight.contractId,
+          recovered.contractId -> featuredRight.contractId,
+          expired.contractId -> featuredRight.contractId,
         )
       }
     }
 
-    "not return duplicate rows when a provider has more than one live FeaturedAppRight" in {
+    "return a single (instruction, right) pair right when its provider has more than one live Featuredright" in {
       val provider = userParty(1)
       val instruction = featuredAppUnderlockInstruction(provider)
+      val rights = Seq(featuredAppRight(provider), featuredAppRight(provider))
 
       for {
         store <- mkStore()
         _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
         _ <- dummyDomain.create(instruction)(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(featuredAppRight(provider))(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(featuredAppRight(provider))(store.multiDomainAcsStore)
-        result <- listCids(store)
+        _ <- MonadUtil.sequentialTraverse(rights)(
+          dummyDomain.create(_)(store.multiDomainAcsStore)
+        )
+        result <- listPairs(store)
       } yield {
-        result should contain theSameElementsAs Seq(instruction.contractId)
+        result.map(_._1) shouldBe Seq(instruction.contractId)
+        rights.map(_.contractId) should contain(result.head._2)
       }
     }
 
-    "respects ignored parties" in {
-      val providerA = userParty(1)
-      val providerB = userParty(2)
-      val instructionA = featuredAppUnderlockInstruction(providerA)
-      val instructionB = featuredAppUnderlockInstruction(providerB)
+    def createFiveInstructions(store: SvDsoStore) = {
+      val provider = userParty(1)
+      val instructions =
+        (1 to 5).map(_ => featuredAppUnderlockInstruction(provider))
+      for {
+        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(featuredAppRight(provider))(
+          store.multiDomainAcsStore
+        )
+        _ <- MonadUtil.sequentialTraverse(instructions)(
+          dummyDomain.create(_)(store.multiDomainAcsStore)
+        )
+      } yield instructions.map(_.contractId)
+    }
 
+    "return at most limit instructions" in {
       for {
         store <- mkStore()
-        _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(instructionA)(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(instructionB)(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(featuredAppRight(providerA))(store.multiDomainAcsStore)
-        _ <- dummyDomain.create(featuredAppRight(providerB))(store.multiDomainAcsStore)
-        result <- listCids(store)
-        resultNoneIgnored <- listCids(store, Some(Set.empty))
-        resultNoProviderA <- listCids(store, Some(Set(providerA)))
-        resultNoProviders <- listCids(store, Some(Set(providerA, providerB)))
+        all <- createFiveInstructions(store)
+        result <- listPairs(store, limit = 2)
       } yield {
-        val all = Seq(instructionA.contractId, instructionB.contractId)
-        result should contain theSameElementsAs all
-        resultNoneIgnored should contain theSameElementsAs all
-        resultNoProviderA should contain theSameElementsAs Seq(instructionB.contractId)
-        resultNoProviders shouldBe empty
+        result should have size 2
+        all should contain allElementsOf result.map(_._1)
+      }
+    }
+
+    "sample different instructions across calls" in {
+      for {
+        store <- mkStore()
+        _ <- createFiveInstructions(store)
+        // An ordered query returns the same instruction every time; a
+        // random one does so 20 times in a row with probability 5 * 5^-20.
+        results <- MonadUtil.sequentialTraverse(1 to 20)(_ => listPairs(store, limit = 1))
+      } yield {
+        results.foreach(_ should have size 1)
+        results.flatten.map(_._1).distinct.size should be > 1
       }
     }
   }
