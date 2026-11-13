@@ -1,0 +1,105 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Tests for governance locks with custom controllers.
+--
+-- A custom controller can only vote through Token Standard v2. The scenarios use the given
+-- `GovernanceLockOperations` to create the locks and the proposal, and `tsv2Operations` for the votes
+-- of the custom controllers.
+module Splice.Scripts.TestGovernanceLockCustomControllers where
+
+import DA.Action (unless, void)
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import Daml.Script
+
+import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers
+import Splice.Scripts.TestGovernanceLocks
+import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
+import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
+import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
+import Splice.TokenStandard.Utils (toAnyContractId)
+
+testCustomControllers_substitution_fullLock_tsv1 : Script ()
+testCustomControllers_substitution_fullLock_tsv1 = testCustomControllers_substitution tsv1Operations False False
+
+testCustomControllers_substitution_fullLock_tsv2 : Script ()
+testCustomControllers_substitution_fullLock_tsv2 = testCustomControllers_substitution tsv2Operations False False
+
+testCustomControllers_substitution_vestingLock_tsv1 : Script ()
+testCustomControllers_substitution_vestingLock_tsv1 = testCustomControllers_substitution tsv1Operations False True
+
+testCustomControllers_substitution_vestingLock_tsv2 : Script ()
+testCustomControllers_substitution_vestingLock_tsv2 = testCustomControllers_substitution tsv2Operations False True
+
+testCustomControllers_selfSubstitution_fullLock_tsv1 : Script ()
+testCustomControllers_selfSubstitution_fullLock_tsv1 = testCustomControllers_substitution tsv1Operations True False
+
+testCustomControllers_selfSubstitution_fullLock_tsv2 : Script ()
+testCustomControllers_selfSubstitution_fullLock_tsv2 = testCustomControllers_substitution tsv2Operations True False
+
+testCustomControllers_selfSubstitution_vestingLock_tsv1 : Script ()
+testCustomControllers_selfSubstitution_vestingLock_tsv1 = testCustomControllers_substitution tsv1Operations True True
+
+testCustomControllers_selfSubstitution_vestingLock_tsv2 : Script ()
+testCustomControllers_selfSubstitution_vestingLock_tsv2 = testCustomControllers_substitution tsv2Operations True True
+
+-- | alice proposes to substitute 20000.0 of a lock that needs bob and charlie for substitutions, so the
+-- controllers of the proposal are {alice, bob, charlie}. The target lock is alice's own for a self-substitution,
+-- and provider1's otherwise. The proposal stays pending with bob's vote, and charlie's vote executes it.
+testCustomControllers_substitution : GovernanceLockOperations i r t -> Bool -> Bool -> Script ()
+testCustomControllers_substitution ops selfSubstitution vestingLock = do
+  env@TestEnv{..} <- setupTest
+  forA_ [charlie, provider1, instrId.admin] WalletClientV2.createBatchingUtility
+
+  let targetOwner = if selfSubstitution then alice else provider1
+      controllers = Some $ makeControllersSpecification [[bob, charlie]]
+      kind = GLK_SuperValidatorRightsOwner "TestSV"
+  (fullLockCid, fullLock) <- lockWithSpec ops env targetOwner 50000.0 $ GLS_FullLock FullLockSpecification with
+    kind
+    unlockControllers = None
+    substitutionControllers = if vestingLock then None else controllers
+    vestingControllers = if vestingLock then controllers else None
+  (_, target) <- if vestingLock
+    then vestingLockFor ops env targetOwner fullLockCid 50000.0
+    else pure (fullLockCid, fullLock)
+  unless selfSubstitution $ void $ AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 20000.0
+
+  let newControllers = Some GovernanceLockControllers with
+        unlockControllers = None
+        substitutionControllers = None
+        vestingControllers = Some $ makeControllersSpecification [[charlie]]
+  requestedAt <- getTime
+  substitutionCid <- ops.expectPendingTransfer =<<
+    expectSuccess (ops.proposeSubstitution (testEnvRegistries env) alice LockSubstitutionArgs with
+      target = key target
+      amount = 20000.0
+      requestedAt = Some requestedAt
+      extraMemoEntries = encodeGovernanceLockNewCustomControllersMemoEntries newControllers)
+
+  pendingCid <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId substitutionCid) bob)
+  _ <- tsv2Operations.expectCompletedTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
+
+  let expectedSpecification = setNewGovernanceLockControllers target.specification newControllers
+  [(_, newLock)] <- queryFilter @GovernanceLock alice \l -> l.owner == alice && l.specification == expectedSpecification
+  newLock === GovernanceLock with
+    dso = target.dso
+    owner = alice
+    amount = 20000.0
+    lockedAmulet = newLock.lockedAmulet
+    specification = expectedSpecification
+    originalLockCid = Some (toAnyContractId substitutionCid)
+    requestedAt
+
+  [(_, remainingLock)] <- queryFilter @GovernanceLock targetOwner \l -> l.owner == targetOwner && l.specification == target.specification
+  remainingLock === GovernanceLock with
+    dso = target.dso
+    owner = targetOwner
+    amount = 30000.0
+    lockedAmulet = remainingLock.lockedAmulet
+    specification = target.specification
+    originalLockCid = Some (toAnyContractId fullLockCid)
+    requestedAt = target.requestedAt
