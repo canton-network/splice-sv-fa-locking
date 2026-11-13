@@ -35,6 +35,7 @@ import com.digitalasset.canton.topology.PartyId
 import monocle.macros.syntax.lens.*
 import org.apache.pekko.http.scaladsl.model.Uri
 import org.lfdecentralizedtrust.splice.sv.automation.singlesv.SvBftSequencerPeerOffboardingTrigger
+import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.FeaturedAppPermanentUnderlockTrigger
 
 import scala.collection.mutable
 import scala.collection.parallel.CollectionConverters.ImmutableMapIsParallelizable
@@ -196,6 +197,7 @@ object ConfigTransforms {
       useSelfSignedTokensForAuth,
       reducePollingInterval,
       withPausedSvDomainComponentsOffboardingTriggers(),
+      withPausedFeaturedAppPermanentUnderlockTrigger(),
       disableOnboardingParticipantPromotionDelay(),
       setDefaultGrpcDeadlineForBuyExtraTraffic(),
       setDefaultGrpcDeadlineForTreasuryService(),
@@ -223,6 +225,12 @@ object ConfigTransforms {
       _.withPausedTrigger[SvOffboardingMediatorTrigger]
         .withPausedTrigger[SvOffboardingSequencerTrigger]
         .withPausedTrigger[SvBftSequencerPeerOffboardingTrigger]
+    )
+
+  // Featured app rights in tests are rarely backed by enough locks, so SVs must not archive them
+  def withPausedFeaturedAppPermanentUnderlockTrigger(): ConfigTransform =
+    updateAutomationConfig(ConfigurableApp.Sv)(
+      _.withPausedTrigger[FeaturedAppPermanentUnderlockTrigger]
     )
 
   def withPausedSvOffboardingMediatorAndPartyToParticipantTriggers(): ConfigTransform =
