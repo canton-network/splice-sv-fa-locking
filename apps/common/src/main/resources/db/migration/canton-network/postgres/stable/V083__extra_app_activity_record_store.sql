@@ -12,8 +12,8 @@ create table extra_app_activity_record_store
     -- Activity weights of the app providers, in one-to-one correspondence with app_provider_parties.
     app_activity_weights        bigint[] not null,
     -- Asset providers for which activity should be recorded
-    asset_provider_parties      text[] not null,
-    -- Activity weights of the asset providers, in one-to-one correspondence with asset_provider_parties.
+    asset_activity_provider_parties text[] not null,
+    -- Activity weights of the asset providers, in one-to-one correspondence with asset_activity_provider_parties.
     asset_activity_weights      bigint[] not null
 );
 
