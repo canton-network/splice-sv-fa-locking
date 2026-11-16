@@ -25,28 +25,21 @@ create index extra_app_activity_record_store_sid_rt_idx on
   extra_app_activity_record_store (store_id, record_time);
 
 -- Metadata for extra activity record ingestion runs, analogous to app_activity_record_meta.
--- One row per (store_id, version) pair. A new row is inserted on each
--- version bump; previous rows are retained as an audit trail.
+-- The store_id should never be modified as that could result in loss of activity data.
 create table extra_app_activity_record_meta
 (
     store_id                          int not null,
-    -- Code version of the ingestion logic.
-    activity_ingestion_code_version   int not null,
-    -- User-configured version, allowing operators to force a re-ingestion.
-    activity_ingestion_user_version   int not null,
     -- Record time (microseconds since epoch) at which ingestion started.
     -- Rounds before this time may be partial.
     started_ingesting_at              bigint not null,
-    -- The earliest round number in the first batch ingested with this code and user version
+    -- The earliest round number in the first batch ingested
     earliest_ingested_round           bigint not null,
     -- The highest OpenMiningRound round number which has been archived
     -- as of the max record_time of the ingested data.
     last_archived_round               bigint,
     last_updated_at                   timestamptz default now(),
 
-    constraint extra_app_activity_record_meta_pkey primary key (
-        store_id, activity_ingestion_code_version, activity_ingestion_user_version
-    )
+    constraint extra_app_activity_record_meta_pkey primary key (store_id)
 );
 
 -- Extra app / asset activity totals per party and round.
