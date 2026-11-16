@@ -415,8 +415,9 @@ tsv1RequestMemo' : GovernanceLockRequestTag -> GovernanceLockSpecification -> [(
 tsv1RequestMemo' request spec extraEntries =
   let (tag, subject) = governanceLockKindToTagAndSubject (governanceLockKind spec)
       controllers = case spec of
-        GLS_FullLock FullLockSpecification{..} -> controllers
-        GLS_VestingLock VestingLockSpecification{..} -> Some $ GovernanceLockControllers None None vestingControllers
+        GLS_FullLock (FullLockSpecification _kind controllers) -> controllers
+        GLS_VestingLock (VestingLockSpecification _kind _vestingPeriod _endTime vestingControllers) ->
+          Some $ GovernanceLockControllers None None vestingControllers
   in encodeLockCompatMemo $
        [ (requestMemoKey, governanceLockRequestTagToText request)
        , (lockKindMemoKey, governanceLockTagToText tag)
@@ -535,7 +536,7 @@ tsv1Operations = GovernanceLockOperations with
     vestingWithdraw env cid actor memoEntries = do
       Some lock <- queryContractId env.registriesEnv.amuletV2.instrumentId.admin cid
       times <- requireVestingLock lock.specification
-      request <- lockRequestV1 env.registriesEnv.amuletV2 lock.owner 0.0
+      request <- lockRequestV1 env.registriesEnv.amuletV2 actor 0.0
         (tsv1RequestMemo' GLRT_WithdrawVestedFunds lock.specification
           (vestingLockMemoEntries times.vestingPeriod times.endTime <> memoEntries))
       fmap extractPendingGovernanceLock <$> submitLockRequestV1' env.registries actor request
@@ -608,7 +609,7 @@ tsv2Operations = GovernanceLockOperations with
     vestingWithdraw env cid actor memoEntries = do
       Some lock <- queryContractId env.registriesEnv.amuletV2.instrumentId.admin cid
       times <- requireVestingLock lock.specification
-      request <- lockRequestV2 env.registriesEnv.amuletV2 lock.owner 0.0
+      request <- lockRequestV2 env.registriesEnv.amuletV2 actor 0.0
         (tsv1RequestMemo' GLRT_WithdrawVestedFunds lock.specification
           (vestingLockMemoEntries times.vestingPeriod times.endTime <> memoEntries))
       fmap extractPendingGovernanceLock <$> submitLockRequestV2' env.registries actor request

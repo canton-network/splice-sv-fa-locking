@@ -66,6 +66,7 @@ import Splice.GovernanceLock
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock (UnlockProposal(..))
+import Splice.GovernanceLock.Withdraw (WithdrawVestedFundsProposal(..))
 import Splice.Issuance
 import Splice.Schedule
 import Splice.Round
@@ -327,8 +328,10 @@ registryApi_getTransferInstruction_AcceptContext registry instrCid = do
   governanceLockTransferC <- registryApi_getTransferInstruction_governanceLockTransfer registry (coerceContractId instrCid)
   unlockProposalC <- registryApi_getTransferFactory_optGetContext @UnlockProposal registry (coerceContractId instrCid) \proposal ->
     registryApi_governanceLockDisclosures registry proposal.specification.target
+  withdrawVestedFundsC <- registryApi_getTransferFactory_optGetContext @WithdrawVestedFundsProposal registry (coerceContractId instrCid) \proposal ->
+    registryApi_governanceLockDisclosures registry proposal.specification.target
   pure $ transferC <> fold amuletTransferInstrC <> fold governanceLockSubstitutionC <> fold governanceLockTransferC <>
-    fold unlockProposalC
+    fold unlockProposalC <> fold withdrawVestedFundsC
 
 registryApi_getTransferInstruction_abortTwoStepTransferContext
   : AmuletRegistry -> ContractId TransferInstruction -> Script OpenApiChoiceContext
