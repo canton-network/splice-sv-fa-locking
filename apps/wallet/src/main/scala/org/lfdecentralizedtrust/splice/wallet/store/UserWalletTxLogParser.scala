@@ -97,6 +97,10 @@ import org.lfdecentralizedtrust.splice.history.{
   TransferPreapproval_Renew,
   TransferPreapproval_Send,
   TransferPreapproval_SendV2,
+  UnlockProposalAcceptV2,
+  UnlockProposalRejectV2,
+  UnlockProposalWithdraw,
+  UnlockProposalWithdrawV2,
 }
 import org.lfdecentralizedtrust.splice.store.TxLogStore
 import org.lfdecentralizedtrust.splice.util.{
@@ -979,6 +983,35 @@ class UserWalletTxLogParser(
               )
             }
 
+          // Executing an unlock or a withdrawal unlocks the funds of the lock owner and locks again
+          // the part that stays locked, so the owner's balance changes by the part that becomes available
+          case UnlockProposalAcceptV2(_) =>
+            defer {
+              parseTrees(
+                tree,
+                tree.getChildNodeIds(exercised).asScala.toList,
+                synchronizerId,
+                ignoreUnexpectedAmuletCreateArchive = true,
+              )
+            }.map { childState =>
+              val owner = childState.entries
+                .collectFirst { case b: BalanceChangeTxLogEntry => b.receiver }
+                .orElse(createdGovernanceLockOwners(tree, exercised).headOption)
+              owner match {
+                case Some(owner) =>
+                  governanceLockAcceptState(
+                    tree,
+                    exercised,
+                    childState,
+                    PartyAndAmount(owner, -lockedAmountOwnedBy(tree, exercised, owner)),
+                    Seq.empty,
+                  )
+                // Withdrawing the fully vested funds of a single vesting lock unlocks and locks
+                // no amulets, so no balance changes
+                case None => childState
+              }
+            }
+
           case TransferInstruction_Accept(node) =>
             defer {
               parseTrees(
@@ -1045,7 +1078,8 @@ class UserWalletTxLogParser(
             }
 
           case TransferInstruction_Withdraw(_) | GovernanceLockSubstitutionWithdraw(_) |
-              GovernanceLockSubstitutionWithdrawV2(_) | GovernanceLockTransferWithdraw(_) =>
+              GovernanceLockSubstitutionWithdrawV2(_) | GovernanceLockTransferWithdraw(_) |
+              UnlockProposalWithdraw(_) | UnlockProposalWithdrawV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -1065,7 +1099,8 @@ class UserWalletTxLogParser(
             }
 
           case TransferInstruction_Reject(_) | GovernanceLockSubstitutionReject(_) |
-              GovernanceLockSubstitutionRejectV2(_) | GovernanceLockTransferReject(_) =>
+              GovernanceLockSubstitutionRejectV2(_) | GovernanceLockTransferReject(_) |
+              UnlockProposalRejectV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -1648,7 +1683,8 @@ class UserWalletTxLogParser(
   private val governanceLockProposalTemplates: Set[QualifiedName] = Set(
     QualifiedName(
       splice.governancelock.substitution.GovernanceLockSubstitution.COMPANION.getTemplateIdWithPackageId
-    )
+    ),
+    QualifiedName(splice.governancelock.unlock.UnlockProposal.COMPANION.getTemplateIdWithPackageId),
   )
 
   // The V1 and V2 choices have the same names
