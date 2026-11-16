@@ -20,7 +20,7 @@ import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers (makeControllersSpecification)
 import Splice.GovernanceLock.Request
 import Splice.Scripts.UnitTests.GovernanceLock (fullLockSpecification)
-import Splice.Scripts.UnitTests.Memo
+import Splice.Tests.UnitTest_Memo (expectErrors, expectSuccess, mkMemo)
 import Splice.Util.Memo
 
 -- Test parties and helpers
@@ -80,7 +80,7 @@ test_governanceLockKindParser = do
   expectErrors [missingMemoKeyMessage lockSubjectMemoKey] $ run [kind GLT_FeaturedApp]
   expectErrors [missingMemoKeyMessage lockSubjectMemoKey] $ run [kind GLT_SuperValidator]
   expectErrors [missingMemoKeyMessage lockKindMemoKey] $ run [subject "provider"]
-  expectErrors [missingMemoKeyMessage lockKindMemoKey] $ run []
+  expectErrors [missingMemoKeyMessage lockKindMemoKey, missingMemoKeyMessage lockSubjectMemoKey] $ run []
 
   -- The lock kind must be known
   expectErrors [invalidMemoValueMessage "value" lockKindMemoKey "unknown-lock"] $ run [kind' "unknown-lock", subject "provider"]

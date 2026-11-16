@@ -1,12 +1,12 @@
 -- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
-module Splice.Scripts.UnitTests.Memo where
+module Splice.Tests.UnitTest_Memo where
 
 import DA.Assert
 import DA.Date (Month(..), date)
 import DA.NonEmpty qualified as NonEmpty
-import DA.Optional (fromSomeNote)
+import DA.Optional (fromSome, fromSomeNote)
 import DA.TextMap qualified as TextMap
 import DA.Time (days, time)
 import DA.Validation
@@ -17,6 +17,10 @@ import Splice.Util.Memo
 
 -- Helpers
 ----------
+
+alice = fromSome $ partyFromText "alice::1220ab"
+bob = fromSome $ partyFromText "bob::1220cd"
+carol = fromSome $ partyFromText "carol::1220ef"
 
 mkMemo : [(Text, Text)] -> Memo
 mkMemo = Memo . TextMap.fromList
@@ -126,3 +130,66 @@ test_partyMemoFieldParser =
   testTypedMemoFieldParser partyMemoFieldParser
     ("alice", fromSomeNote "invalid test party" $ partyFromText "alice")
     ("bad$party", "Invalid party: 'bad$party'")
+
+test_optionalPartiesListsMemoFieldParser : Script ()
+test_optionalPartiesListsMemoFieldParser = do
+  let run input = fromSome <$> runParser (optionalPartiesListsMemoFieldParser "key") (mkMemo [("key", input)])
+      expectError err input = expectErrors [errorInMemoKeyMessage "key" err] (run input)
+
+  expectSuccess [] $ run "[]"
+  expectSuccess [[]] $ run "[[]]"
+  expectSuccess [[], [alice]] $ run "[[],[\"alice::1220ab\"]]"
+  expectSuccess [[alice]] $ run "[[\"alice::1220ab\"]]"
+  expectSuccess [[alice, bob], [carol]] $ run "[[\"alice::1220ab\",\"bob::1220cd\"],[\"carol::1220ef\"]]"
+
+  expectError "Invalid JSON list: ''" ""
+  expectError "Invalid JSON list: ' [] '" "[ [] ]" -- whitespace is not supported
+  expectError "Invalid JSON list: '\"alice::1220ab\"'" "[\"alice::1220ab\"]"
+  expectError "Invalid JSON list: ''" "[[\"alice::1220ab\"],]"
+  expectError "Invalid or unsupported JSON string: '\"alice::1220ab\"] [\"bob::1220cd\"'" "[[\"alice::1220ab\"] [\"bob::1220cd\"]]"
+  expectError "Invalid or unsupported JSON string: '\"alice::1220ab\"]'" "[[\"alice::1220ab\"]]]"
+  expectError "Invalid JSON list: '[\"alice::1220ab\", \"bob::1220cd\"'" "[[\"alice::1220ab\", \"bob::1220cd\"]"
+  expectError "Invalid or unsupported JSON string: '\"alice!::1220ab\"'" "[[\"alice!::1220ab\"]]"
+
+-- Encoders
+-----------
+
+test_encodeMemoFields : Script ()
+test_encodeMemoFields = do
+  encodeMemoFields memoPrefix [] === memoPrefix
+  encodeMemoFields memoPrefix [("a", "1")] === memoPrefix <> "a=1"
+  encodeMemoFields memoPrefix [("b", "2"), ("a", "1")] === memoPrefix <> "b=2&a=1"
+
+  -- The memo parser accepts what the encoder produces.
+  let fields = [("a", "1"), ("b", "2")]
+  expectSuccess (mkMemo fields) $ runParser (memoParserWithAnyKeys memoPrefix) $ encodeMemoFields memoPrefix fields
+
+
+test_encodeMemoPartiesLists : Script ()
+test_encodeMemoPartiesLists = do
+  encodeMemoPartiesLists [] === "[]"
+  encodeMemoPartiesLists [[]] === "[[]]"
+  encodeMemoPartiesLists [[], [alice]] === "[[],[\"alice::1220ab\"]]"
+  encodeMemoPartiesLists [[alice]] === "[[\"alice::1220ab\"]]"
+  encodeMemoPartiesLists [[alice, bob], [carol]] === "[[\"alice::1220ab\",\"bob::1220cd\"],[\"carol::1220ef\"]]"
+  encodeMemoPartiesLists [[alice, bob], [carol]] === "[[\"alice::1220ab\",\"bob::1220cd\"],[\"carol::1220ef\"]]"
+
+-- JSON encoding
+----------------
+
+test_jsonEncodeString' : Script ()
+test_jsonEncodeString' = do
+  let run = jsonEncodeString' @(Either Text)
+      expectInvalid invalid input = run identity input === Left ("Invalid character in JSON string: '" <> invalid <> "'")
+
+  run identity "" === Right "\"\""
+  run identity "alice::1220ab" === Right "\"alice::1220ab\""
+  run identity "a-b_c d:9" === Right "\"a-b_c d:9\""
+  run partyToText alice === Right "\"alice::1220ab\""
+
+  expectInvalid "\"" "a\"b"
+  expectInvalid "\\" "a\\b"
+  expectInvalid "," "a,b["
+  expectInvalid "[" "a[b,"
+  expectInvalid "!" "alice!::1220ab"
+  expectInvalid "é" "é"

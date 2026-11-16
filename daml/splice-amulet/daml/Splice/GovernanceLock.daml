@@ -110,6 +110,7 @@ import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
 import Splice.Types
 import Splice.Util
+import Splice.Util.Memo (encodeMemoFields)
 
 data GovernanceLockKind
   = GLK_FeaturedApp with
@@ -827,9 +828,7 @@ encodeLockMemoEntries entries = reasonToMeta (encodeLockCompatMemo entries) empt
 
 -- | The memo of the given entries. It keeps the order of the entries, so that wallets show the memos as the CIP writes them.
 encodeLockCompatMemo : [(Text, Text)] -> Text
-encodeLockCompatMemo entries =
-  let encodeKeyValue (k, v) = k <> "=" <> v
-  in cipMemoPrefix <> Text.intercalate "&" (fmap encodeKeyValue entries)
+encodeLockCompatMemo = encodeMemoFields cipMemoPrefix
 
 -- TSv1 support
 -- ============

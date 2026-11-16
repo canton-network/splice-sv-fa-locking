@@ -8,13 +8,13 @@ module Splice.GovernanceLock.Controllers (
   validateControllersSpecification,
   allControllers,
   encodeControllersSpecification,
-  parseControllersSpecification,
+  controllersSpecificationParser,
 ) where
 
 import DA.Set qualified as Set
 
 import Splice.TokenStandard.Utils
-import Splice.Util.Json
+import Splice.Util.Memo
 
 -- | Specification of controllers that can jointly authorize an action.
 -- Serializable so it can be encoded on templates, but should not be constructed directly; use ControllerSets.
@@ -46,10 +46,10 @@ allControllers : ControllersSpecification -> Set.Set Party
 allControllers spec = Set.fromList $ concat spec.controllers
 
 encodeControllerSets : ControllerSets -> Text
-encodeControllerSets controllers = jsonEncodePartiesLists (getControllersSpecification controllers).controllers
+encodeControllerSets controllers = encodeMemoPartiesLists (getControllersSpecification controllers).controllers
 
 encodeControllersSpecification : ControllersSpecification -> Text
 encodeControllersSpecification = encodeControllerSets . makeControllerSets . (.controllers)
 
-parseControllersSpecification : Text -> Either Text ControllersSpecification
-parseControllersSpecification = fmap makeControllersSpecification . jsonDecodePartiesLists
+controllersSpecificationParser : Text -> Parser Memo (Optional ControllersSpecification)
+controllersSpecificationParser key = fmap makeControllersSpecification <$> optionalPartiesListsMemoFieldParser key

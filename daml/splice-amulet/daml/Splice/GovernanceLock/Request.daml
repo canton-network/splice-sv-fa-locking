@@ -21,13 +21,11 @@ module Splice.GovernanceLock.Request (
   governanceLockRequestTSv1Parser,
 ) where
 
-import Prelude hiding (mapA)
 import DA.Action (unless)
 import DA.Assert
 import DA.Optional
 import DA.Text qualified as Text
 import DA.Time
-import DA.Traversable (mapA)
 import DA.Validation
 
 import Splice.Amulet.TokenApiUtils
@@ -264,8 +262,6 @@ governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{
 -- Parsers
 ----------
 
-type ControllersSpecificationParser = Parser Memo (Optional ControllersSpecification)
-
 iso8601TimeFromTextParser : Text -> Text -> Parser i Time
 iso8601TimeFromTextParser key input = validationParser $ validate $ case parseIso8601UtcTime input of
   Left e -> Left (errorInMemoKeyMessage key e)
@@ -282,8 +278,10 @@ governanceLockSubjectParser : Parser Memo Text
 governanceLockSubjectParser = requiredMemoFieldParser lockSubjectMemoKey
 
 governanceLockKindParser : Parser Memo GovernanceLockKind
-governanceLockKindParser = governanceLockTagParser >>= \tag ->
-  governanceLockSubjectParser >>= governanceLockKindFromTagAndSubject tag
+governanceLockKindParser = do
+  tag <- governanceLockTagParser
+  subject <- governanceLockSubjectParser
+  governanceLockKindFromTagAndSubject tag subject
 
 governanceLockMemoParser : Parser Metadata Memo
 governanceLockMemoParser = Parser \meta -> runParser (memoParserWithAnyKeys cipMemoPrefix) (reasonFromMeta meta)
@@ -291,21 +289,14 @@ governanceLockMemoParser = Parser \meta -> runParser (memoParserWithAnyKeys cipM
 parseGovernanceLockMemo : CanAssert m => Metadata -> m Memo
 parseGovernanceLockMemo = assertParsed governanceLockMemoParser
 
-controllersParser : Text -> ControllersSpecificationParser
-controllersParser key =
-    optionalMemoFieldParser key >>= mapA parser
-  where
-    parser : Text -> Parser Memo ControllersSpecification
-    parser t = validationParser $ either (invalid . errorInMemoKeyMessage key) ok (parseControllersSpecification t)
+vestingControllersParser : Parser Memo (Optional ControllersSpecification)
+vestingControllersParser = controllersSpecificationParser vestingControllersMemoKey
 
-vestingControllersParser : ControllersSpecificationParser
-vestingControllersParser = controllersParser vestingControllersMemoKey
+substitutionControllersParser : Parser Memo (Optional ControllersSpecification)
+substitutionControllersParser = controllersSpecificationParser substitutionControllersMemoKey
 
-substitutionControllersParser : ControllersSpecificationParser
-substitutionControllersParser = controllersParser substitutionControllersMemoKey
-
-unlockControllersParser : ControllersSpecificationParser
-unlockControllersParser = controllersParser unlockControllersMemoKey
+unlockControllersParser : Parser Memo (Optional ControllersSpecification)
+unlockControllersParser = controllersSpecificationParser unlockControllersMemoKey
 
 fullLockSpecificationParser : Parser Memo FullLockSpecification
 fullLockSpecificationParser =
