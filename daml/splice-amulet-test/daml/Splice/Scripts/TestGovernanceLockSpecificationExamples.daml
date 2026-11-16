@@ -133,6 +133,7 @@ test_example_lockDisplay = do
           kind = GLK_FeaturedApp x
           vestingPeriod
           endTime
+          vestingControllers = None
         originalLockCid = None
         requestedAt = epoch
 
@@ -154,7 +155,7 @@ test_example_createLock = do
 
   Some lock <- queryContractId a (fromInterfaceContractId @GovernanceLock lockCid)
   lock.owner === a
-  lock.specification === GLS_FullLock FullLockSpecification with kind = GLK_FeaturedApp x
+  lock.specification === fullLockSpecification (GLK_FeaturedApp x)
   lock.amount === 5000000.0
   checkDisplayedAs a lockCid $ displayedFaLock "A" 5000000.0
   -- The lock subject `X` observes the lock
