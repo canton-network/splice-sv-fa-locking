@@ -75,7 +75,7 @@ class ExecuteFeaturedAppUnderlockInstructionTrigger(
         .withSynchronizerId(dsoRules.domain)
         .yieldUnit()
     } yield TaskSuccess(
-      s"Applied underlock instruction " +
+      "Applied underlock instruction " +
         s"(underlocked = ${instruction.underlocked}) " +
         s"to the FeaturedAppRight of ${instruction.provider}"
     )
