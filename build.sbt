@@ -77,6 +77,7 @@ lazy val root: Project = (project in file("."))
     `apps-wallet`,
     `apps-frontends`,
     `splice-util-daml`,
+    `splice-util-test-daml`,
     `splice-amulet-daml`,
     `splice-amulet-test-daml`,
     `splice-amulet-name-service-daml`,
@@ -856,6 +857,16 @@ lazy val `splice-util-daml` =
       BuildCommon.damlSettings
     )
 
+lazy val `splice-util-test-daml` =
+  project
+    .in(file("daml/splice-util-test"))
+    .enablePlugins(DamlPlugin)
+    .settings(
+      BuildCommon.damlSettings,
+      Compile / damlDependencies := (`splice-util-daml` / Compile / damlBuild).value,
+      Compile / damlEnableJavaCodegen := false,
+    )
+
 lazy val `splice-featured-app-api-v1-daml` =
   project
     .in(file("daml/splice-api-featured-app-v1"))
@@ -949,6 +960,7 @@ lazy val `splice-amulet-test-daml` =
       BuildCommon.damlSettings,
       Compile / damlDependencies :=
         (`splice-amulet-daml` / Compile / damlBuild).value ++
+          (`splice-util-test-daml` / Compile / damlBuild).value ++
           (`splice-token-standard-v1-test-daml` / Compile / damlBuild).value ++
           (`splice-token-standard-v2-test-daml` / Compile / damlBuild).value,
       Compile / damlEnableJavaCodegen := false,

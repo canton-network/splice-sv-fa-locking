@@ -253,6 +253,7 @@ object BuildCommon {
             "splice-dso-governance-daml/clean",
             "splice-dso-governance-test-daml/clean",
             "splice-util-daml/clean",
+            "splice-util-test-daml/clean",
             "splice-validator-lifecycle-daml/clean",
             "splice-validator-lifecycle-test-daml/clean",
             "splice-wallet-daml/clean",
