@@ -312,3 +312,104 @@ testCustomControllers_withdraw ops = do
   tsv2Operations.expectPendingTransfer =<< expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId newWithdrawCid) charlie)
   expectFailureContaining "Failed to find lock with key" =<<
     tryFailureStatus (tsv2Operations.acceptInstruction env (coerceContractId oldWithdrawCid) charlie)
+
+-- Transfer
+-----------
+
+testCustomControllers_transfer_fullLock_tsv1 : Script ()
+testCustomControllers_transfer_fullLock_tsv1 = testCustomControllers_transfer tsv1Operations False
+
+testCustomControllers_transfer_fullLock_tsv2 : Script ()
+testCustomControllers_transfer_fullLock_tsv2 = testCustomControllers_transfer tsv2Operations False
+
+testCustomControllers_transfer_vestingLock_tsv1 : Script ()
+testCustomControllers_transfer_vestingLock_tsv1 = testCustomControllers_transfer tsv1Operations True
+
+testCustomControllers_transfer_vestingLock_tsv2 : Script ()
+testCustomControllers_transfer_vestingLock_tsv2 = testCustomControllers_transfer tsv2Operations True
+
+testCustomControllers_transfer : GovernanceLockOperations i r t -> Bool -> Script ()
+testCustomControllers_transfer ops vestingLock = do
+  env@TestEnv{..} <- setupCustomControllersTest
+
+  requestedAt <- getTime
+  let controllers = Some $ makeControllersSpecification [[bob, charlie]]
+      fullSpec = GLS_FullLock FullLockSpecification with
+        kind = GLK_SuperValidatorRightsOwner "TestSV"
+        controllers = makeGovernanceLockControllers
+          None
+          (if vestingLock then None else controllers)
+          (if vestingLock then controllers else None)
+      newControllers' = GovernanceLockControllers with
+        unlockControllers = None
+        substitutionControllers = None
+        vestingControllers = Some $ makeControllersSpecification [[charlie]]
+      newControllers = Some newControllers'
+      setupLock = do
+        (fullLockCid, fullLock) <- lockWithSpec ops env alice 50000.0 fullSpec
+        (_, source) <- if vestingLock
+          then vestingLockFor ops env alice fullLockCid 50000.0
+          else pure (fullLockCid, fullLock)
+        pure (fullLockCid, source)
+      proposeTransfer source receiver amount newControllers =
+        ops.proposeTransfer (testEnvRegistries env) alice LockTransferArgs with
+          source = key source
+          receiver
+          amount
+          requestedAt
+          extraMemoEntries = encodeGovernanceLockNewCustomControllersMemoEntries newControllers
+
+  -- Happy path
+  -------------
+
+  (fullLockCid, source) <- setupLock
+  transferCid <- expectSuccess $ proposeTransfer source bob 20000.0 newControllers
+
+  pendingCid <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId transferCid) bob)
+  _ <- tsv2Operations.expectCompletedTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
+
+  [(_, newLock)] <- queryFilter @GovernanceLock bob \l -> l.owner == bob
+  newLock === GovernanceLock with
+    dso = source.dso
+    owner = bob
+    amount = 20000.0
+    lockedAmulet = newLock.lockedAmulet
+    specification = setNewGovernanceLockControllers source.specification newControllers
+    originalLockCid = Some (toAnyContractId transferCid)
+    requestedAt
+  [(_, remainingLock)] <- queryFilter @GovernanceLock alice \l -> l.owner == alice
+  remainingLock === GovernanceLock with
+    dso = source.dso
+    owner = alice
+    amount = 30000.0
+    lockedAmulet = remainingLock.lockedAmulet
+    specification = source.specification
+    originalLockCid = Some (toAnyContractId fullLockCid)
+    requestedAt = source.requestedAt
+
+  -- Failures
+  -----------
+
+  -- now <- getTime
+  (_, source) <- setupLock
+
+  -- receiver can't be source lock owner
+  expectFailureContaining "'receiver' is equal to 'sender'" =<< proposeTransfer source alice 20000.0 newControllers
+
+  -- amount can't be 0
+  expectFailureContaining "'amount' is not greater than 'zero'" =<< proposeTransfer source bob 0.0 newControllers
+
+  -- new controllers can't be empty
+  let testEmptyNewControllers' kind set errorSuffix controllers = do
+        expectFailureContaining (kind <> "Controllers must not " <> errorSuffix) =<<
+          proposeTransfer source bob 20000.0 (Some (set $ Some $ makeControllersSpecification controllers))
+      testEmptyNewControllers kind set = do
+        testEmptyNewControllers' kind set "be empty" []
+        testEmptyNewControllers' kind set "contain an empty controller set" [[]]
+
+  unless vestingLock do
+    testEmptyNewControllers "unlock" \unlockControllers -> newControllers' with unlockControllers
+    testEmptyNewControllers "substitution" \substitutionControllers -> newControllers' with substitutionControllers
+  testEmptyNewControllers "vesting" \vestingControllers -> newControllers' with vestingControllers
