@@ -1481,7 +1481,7 @@ object SvDsoStore {
           contract,
           // A suspended right is archived once its underlock deadline passes
           contractExpiresAt =
-            contract.payload.underlockPermanentAt.toScala.map(Timestamp.assertFromInstant),
+            contract.payload.underlockPermanentAt.toScala.map(Timestamp.assertFromInstant(_)),
           featuredAppRightProvider = Some(PartyId.tryFromProtoPrimitive(contract.payload.provider)),
         )
       },

@@ -52,11 +52,7 @@ class FeaturedAppPermanentUnderlockTrigger(
   override def completeTaskAsDsoDelegate(task: Task, controller: String)(implicit
       tc: TraceContext
   ): Future[TaskOutcome] =
-    completeUnlessAmuletVersionIgnored(
-      task.work.vettedVersion.toString,
-      task.work.stakeholders,
-      ignoreUnresponsiveParties = true,
-    )(archiveRights(task, controller))
+    completeExpiryBatchWithSplitting(task, getStakeholders)(archiveRights(_, controller))
 
   /** `DsoRules_EnforceFeaturedAppPermanentUnderlock` fails while enforcement is disabled, so we skip
     * the batch then. `FeaturedAppUnderlockStatusUpdateTrigger` lifts the suspensions in that case.
