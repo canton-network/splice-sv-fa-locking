@@ -78,8 +78,11 @@ import org.lfdecentralizedtrust.splice.history.{
   GovernanceLockSubstitutionWithdraw,
   GovernanceLockSubstitutionWithdrawV2,
   GovernanceLockTransferAccept,
+  GovernanceLockTransferAcceptV2,
   GovernanceLockTransferReject,
+  GovernanceLockTransferRejectV2,
   GovernanceLockTransferWithdraw,
+  GovernanceLockTransferWithdrawV2,
   LockedAmuletExpireAmulet,
   LockedAmuletExpireAmuletV2,
   LockedAmuletOwnerExpireLock,
@@ -962,7 +965,7 @@ class UserWalletTxLogParser(
 
           // The sender's unlocked funds are locked again for the receiver, so neither unlocked
           // balance changes
-          case GovernanceLockTransferAccept(_) =>
+          case GovernanceLockTransferAccept(_) | GovernanceLockTransferAcceptV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -1083,9 +1086,9 @@ class UserWalletTxLogParser(
 
           case TransferInstruction_Withdraw(_) | GovernanceLockSubstitutionWithdraw(_) |
               GovernanceLockSubstitutionWithdrawV2(_) | GovernanceLockTransferWithdraw(_) |
-              UnlockProposalWithdraw(_) | UnlockProposalWithdrawV2(_) | WithdrawVestedFundsWithdraw(
-                _
-              ) | WithdrawVestedFundsWithdrawV2(_) =>
+              GovernanceLockTransferWithdrawV2(_) | UnlockProposalWithdraw(_) |
+              UnlockProposalWithdrawV2(_) | WithdrawVestedFundsWithdraw(_) |
+              WithdrawVestedFundsWithdrawV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -1106,7 +1109,8 @@ class UserWalletTxLogParser(
 
           case TransferInstruction_Reject(_) | GovernanceLockSubstitutionReject(_) |
               GovernanceLockSubstitutionRejectV2(_) | GovernanceLockTransferReject(_) |
-              UnlockProposalRejectV2(_) | WithdrawVestedFundsRejectV2(_) =>
+              GovernanceLockTransferRejectV2(_) | UnlockProposalRejectV2(_) |
+              WithdrawVestedFundsRejectV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -1689,6 +1693,9 @@ class UserWalletTxLogParser(
   private val governanceLockProposalTemplates: Set[QualifiedName] = Set(
     QualifiedName(
       splice.governancelock.substitution.GovernanceLockSubstitution.COMPANION.getTemplateIdWithPackageId
+    ),
+    QualifiedName(
+      splice.governancelock.transfer.GovernanceLockTransfer.COMPANION.getTemplateIdWithPackageId
     ),
     QualifiedName(splice.governancelock.unlock.UnlockProposal.COMPANION.getTemplateIdWithPackageId),
     QualifiedName(
