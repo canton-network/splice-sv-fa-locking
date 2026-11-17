@@ -34,7 +34,6 @@ class FeaturedAppPermanentUnderlockIntegrationTest
 
   "archive a suspended featured app right once its grace period has passed" in { implicit env =>
     val alice = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
-    // Paused by default in tests, so it only runs when we call `runOnce`
     val trigger =
       sv1Backend.dsoDelegateBasedAutomation.trigger[FeaturedAppPermanentUnderlockTrigger]
 

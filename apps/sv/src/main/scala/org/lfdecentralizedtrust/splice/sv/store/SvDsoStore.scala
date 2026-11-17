@@ -780,7 +780,6 @@ trait SvDsoStore
       ignoredPartyFields = Seq("owner"),
     )
 
-  /** List suspended featured app rights that are past their `underlockPermanentAt` deadline. */
   def listFeaturedAppRightsPastUnderlockDeadline(
       unavailablePartiesStore: Option[UnavailablePartiesStore]
   ): ListExpiredContracts[

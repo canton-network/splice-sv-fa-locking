@@ -227,7 +227,6 @@ object ConfigTransforms {
         .withPausedTrigger[SvBftSequencerPeerOffboardingTrigger]
     )
 
-  // Featured app rights in tests are rarely backed by enough locks, so SVs must not archive them
   def withPausedFeaturedAppPermanentUnderlockTrigger(): ConfigTransform =
     updateAutomationConfig(ConfigurableApp.Sv)(
       _.withPausedTrigger[FeaturedAppPermanentUnderlockTrigger]
