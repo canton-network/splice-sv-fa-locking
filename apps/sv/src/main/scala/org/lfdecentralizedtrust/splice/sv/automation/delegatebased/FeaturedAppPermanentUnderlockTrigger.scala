@@ -62,16 +62,12 @@ class FeaturedAppPermanentUnderlockTrigger(
   ): Future[TaskOutcome] = {
     val rights = task.work.expiredContracts
     for {
-      featuredAppUnderlocking <- svTaskContext.packageVersionSupport.supportsFeaturedAppUnderlock(
-        Seq(store.key.svParty, store.key.dsoParty),
-        context.clock.now,
-      )
       dsoRules <- store.getDsoRules()
       enforcementEnabled = FeaturedAppUnderlockConfig
         .fromDsoRulesConfig(dsoRules.payload.config)
         .enforcementEnabled
       outcome <-
-        if (!featuredAppUnderlocking.supported || !enforcementEnabled) Future.successful(TaskNoop)
+        if (!enforcementEnabled) Future.successful(TaskNoop)
         else
           svTaskContext
             .connection(SpliceLedgerConnectionPriority.Low)
