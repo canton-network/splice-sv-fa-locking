@@ -1,0 +1,273 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+{-# LANGUAGE ApplicativeDo #-}
+
+-- | Parsing and encoding of memos: structured data carried in free-form text,
+-- such as the reason in the metadata of a token standard transfer.
+--
+-- A memo has the format `<prefix>key1=value1&key2=value2`. The prefix identifies
+-- the memo format, keys must be unique, and neither keys nor values may contain
+-- `&` or `=`. Field parsers read typed values from individual keys, and report
+-- errors that name the offending key.
+--
+-- Lists of lists of parties are encoded as a restricted subset of JSON, see the
+-- JSON parsing section below for its limitations.
+module Splice.Util.Memo (
+  Memo(..),
+
+  -- * Parsers
+  Parser(..),
+  runParser,
+  assertParsed,
+  memoParserWithKnownKeys,
+  memoParserWithAnyKeys,
+  optionalMemoFieldParser,
+  requiredMemoFieldParser,
+  boolMemoFieldParser,
+  intMemoFieldParser,
+  relTimeFromMicrosecondsMemoFieldParser,
+  timeFromMicrosecondsMemoFieldParser,
+  partyMemoFieldParser,
+  optionalPartiesListsMemoFieldParser,
+
+  -- * Encoding
+  encodeMemoFields,
+  encodeMemoPartiesLists,
+
+  -- * Error messages
+  errorInMemoKeyMessage,
+  missingMemoKeyMessage,
+  invalidMemoFieldMessage,
+  invalidMemoValueMessage,
+
+  -- * JSON encoding (exposed for testing only)
+  jsonEncodeString',
+) where
+
+import Prelude hiding (mapA)
+import DA.Action (foldlA)
+import DA.Either (optionalToEither)
+import DA.Text qualified as Text
+import DA.TextMap qualified as TextMap
+import DA.Time
+import DA.Traversable (mapA)
+import DA.Validation
+
+import Splice.Util.Parser
+
+data Memo = Memo with
+    fields : TextMap.TextMap Text
+  deriving (Eq, Show)
+
+-- Parsers
+----------
+
+memoParser : Optional [Text] -> Text -> Parser Text Memo
+memoParser optKnownKeys prefix = do
+  memo <- inputParser
+  params <- case Text.stripPrefix prefix memo of
+    Some params -> pure params
+    None -> assertFail $ "Memo must start with " <> prefix
+  fields <- mapA parseField (Text.splitOn "&" params) >>= foldlA dedupeField TextMap.empty
+  pure Memo with fields
+  where
+    parseField : Text -> Parser Text (Text, Text)
+    parseField field = case Text.splitOn "=" field of
+      [key, value]
+        | Some knownKeys <- optKnownKeys, not (key `elem` knownKeys) -> assertFail $ "Unknown key in memo: " <> key
+        | otherwise -> pure (key, value)
+      _ -> assertFail $ invalidMemoFieldMessage field
+
+    dedupeField : TextMap.TextMap Text -> (Text, Text) -> Parser Text (TextMap.TextMap Text)
+    dedupeField fields (key, value)
+      | TextMap.member key fields = assertFail $ "Duplicate key in memo: " <> key
+      | otherwise = pure $ TextMap.insert key value fields
+
+memoParserWithKnownKeys : [Text] -> Text -> Parser Text Memo
+memoParserWithKnownKeys knownKeys = memoParser $ Some knownKeys
+
+memoParserWithAnyKeys : Text -> Parser Text Memo
+memoParserWithAnyKeys = memoParser None
+
+optionalMemoFieldParser : Text -> Parser Memo (Optional Text)
+optionalMemoFieldParser key = do
+  memo <- inputParser
+  pure $ TextMap.lookup key memo.fields
+
+requiredMemoFieldParser : Text -> Parser Memo Text
+requiredMemoFieldParser key = optionalMemoFieldParser key >>= \case
+  Some value -> pure value
+  None -> assertFail $ missingMemoKeyMessage key
+
+requiredMemoFieldParserFromTextParser : Parser Text a -> Text -> Parser Memo a
+requiredMemoFieldParserFromTextParser parser key = requiredMemoFieldParser key >>= convertToErrorInMemoKey key parser
+
+optionalMemoFieldParserFromTextParser : Parser Text a -> Text -> Parser Memo (Optional a)
+optionalMemoFieldParserFromTextParser parser key = optionalMemoFieldParser key >>= mapA (convertToErrorInMemoKey key parser)
+
+boolMemoFieldParser : Text -> Parser Memo Bool
+boolMemoFieldParser = requiredMemoFieldParserFromTextParser boolParser
+
+intMemoFieldParser : Text -> Parser Memo Int
+intMemoFieldParser = requiredMemoFieldParserFromTextParser intParser
+
+relTimeFromMicrosecondsMemoFieldParser : Text -> Parser Memo RelTime
+relTimeFromMicrosecondsMemoFieldParser = requiredMemoFieldParserFromTextParser relTimeFromMicrosecondsParser
+
+timeFromMicrosecondsMemoFieldParser : Text -> Parser Memo Time
+timeFromMicrosecondsMemoFieldParser = requiredMemoFieldParserFromTextParser timeFromMicrosecondsParser
+
+partyMemoFieldParser : Text -> Parser Memo Party
+partyMemoFieldParser = requiredMemoFieldParserFromTextParser partyParser
+
+optionalPartiesListsMemoFieldParser : Text -> Parser Memo (Optional [[Party]])
+optionalPartiesListsMemoFieldParser = optionalMemoFieldParserFromTextParser jsonPartiesListsParser
+
+-- Encoding
+-----------
+
+-- | Prefix and encode the given memo fields.
+encodeMemoFields : Text -> [(Text, Text)] -> Text
+encodeMemoFields prefix fields =
+  let encodeKeyValue (k, v) = k <> "=" <> v
+  in prefix <> Text.intercalate "&" (fmap encodeKeyValue fields)
+
+-- | Encode a list of lists of parties for use in a memo.
+encodeMemoPartiesLists : [[Party]] -> Text
+encodeMemoPartiesLists = jsonEncodePartiesLists
+
+-- Error messages
+-----------------
+
+memoKeyText : Text -> Text
+memoKeyText key = "memo key '" <> key <> "'"
+
+-- | Names the key in an error reported by a parser that only sees the value.
+errorInMemoKeyMessage : Text -> Text -> Text
+errorInMemoKeyMessage key error = "Error in " <> memoKeyText key <> ": " <> error
+
+convertToErrorInMemoKey : Text -> Parser i1 o -> i1 -> Parser i2 o
+convertToErrorInMemoKey key parser input =
+  Parser \_ -> case runParser parser input of
+    Success o -> Success o
+    Errors es -> Errors $ fmap (errorInMemoKeyMessage key) es
+
+missingMemoKeyMessage : Text -> Text
+missingMemoKeyMessage key = "Missing " <> memoKeyText key
+
+-- | For a field of the `key1=value1&key2=value2` memo that is not a single `key=value` pair.
+invalidMemoFieldMessage : Text -> Text
+invalidMemoFieldMessage field = "Invalid memo field '" <> field <> "': expected 'key=value'"
+
+-- | Takes what the value should be (e.g. "decimal"), the key, and the value.
+invalidMemoValueMessage : Text -> Text -> Text -> Text
+invalidMemoValueMessage kind key value = "Invalid " <> kind <> " for " <> memoKeyText key <> ": '" <> value <> "'"
+
+-- Party ids
+------------
+
+-- | Find the first character not allowed in a Daml-LF party id: ASCII letters and digits, `:`, `-`, `_`, and space.
+invalidPartyIdChar : Text -> Optional Text
+invalidPartyIdChar = find (not . isPartyIdChar) . Text.explode
+  where
+    isPartyIdChar c =
+      (c >= "a" && c <= "z")
+        || (c >= "A" && c <= "Z")
+        || (c >= "0" && c <= "9")
+        || c `elem` [":", "-", "_", " "]
+
+-- JSON parsing
+----------------
+-- This is intentionally not a general JSON parser. Its purpose is to
+-- enable using JSON-compatible strings for parsing parties.
+
+-- It only supports lists of lists of parties, and relies on
+-- party ids not containing `"`, `\`, `,`, `[`, or `]`. In particular:
+--
+-- * Whitespace in lists is not supported.
+-- * Lists are split on `,` and nesting is tracked by counting `[` and `]`, without
+--   recognizing strings, so these characters are not supported inside strings.
+-- * Strings are parsed by stripping the surrounding `"`, and may only contain the characters
+--   allowed in party ids. In particular, `"`, `\`, and control characters are rejected,
+--   so that escape sequences can be supported later without changing the meaning of
+--   any string accepted today.
+-- * Strings are encoded without escaping, and encoding fails on the characters rejected above.
+-- * Objects, numbers, booleans, and `null` are not supported.
+
+-- | Decode a JSON string.
+jsonStringParser : Parser Text a -> Parser Text a
+jsonStringParser parser = do
+  rawInput <- inputParser
+  input <- validationParser $ validate $ optionalToEither ("Invalid or unsupported JSON string: '" <> rawInput <> "'") do
+    unquoted <- Text.stripPrefix "\"" rawInput >>= Text.stripSuffix "\""
+    case invalidPartyIdChar unquoted of
+      None -> Some unquoted
+      Some _ -> None
+  validationParser $ runParser parser input
+
+-- | Split on the `,` characters that are not inside a nested list.
+splitTopLevel : Text -> [Text]
+splitTopLevel input =
+  let
+    depthChange : Text -> Int
+    depthChange c = if c == "[" then 1 else if c == "]" then -1 else 0
+
+    step : (Int, [Text], [Text]) -> Text -> (Int, [Text], [Text])
+    step (0, current, acc) "," = (0, [], Text.implode (reverse current) :: acc)
+    step (depth, current, acc) c = (depth + depthChange c, c :: current, acc)
+
+    (_, current, acc) = foldl step (0, [], []) (Text.explode input)
+  in reverse (Text.implode (reverse current) :: acc)
+
+-- | Decode a JSON list, using `split` to split the text between the brackets into its elements.
+jsonListParser' : (Text -> [Text]) -> Parser Text a -> Parser Text [a]
+jsonListParser' split elementParser = do
+  input <- inputParser
+  inner <- validationParser $ validate $
+    optionalToEither ("Invalid JSON list: '" <> input <> "'") $ Text.stripPrefix "[" input >>= Text.stripSuffix "]"
+  case inner of
+    "" -> pure []
+    elements -> validationParser $ forA (split elements) (runParser elementParser)
+
+-- | Decode a JSON list.
+jsonListParser : Parser Text a -> Parser Text [a]
+jsonListParser = jsonListParser' (Text.splitOn ",")
+
+-- | Decode a JSON list of lists.
+jsonListsParser : Parser Text a -> Parser Text [[a]]
+jsonListsParser parser = jsonListParser' splitTopLevel (jsonListParser parser)
+
+jsonPartyParser : Parser Text Party
+jsonPartyParser = jsonStringParser do
+  input <- inputParser
+  validationParser $ validate $ optionalToEither ("Invalid party: '" <> input <> "'") (partyFromText input)
+
+jsonPartiesListsParser : Parser Text [[Party]]
+jsonPartiesListsParser = jsonListsParser jsonPartyParser
+
+-- JSON encoding
+----------------
+
+-- Parameterized and exposed for testing
+jsonEncodeString' : CanAssert m => (a -> Text) -> a -> m Text
+jsonEncodeString' encode a =
+  let encoded = encode a
+  in case invalidPartyIdChar encoded of
+    Some invalid -> assertFail $ "Invalid character in JSON string: '" <> invalid <> "'"
+    None -> pure $ "\"" <> encoded <> "\""
+
+jsonEncodeString : (a -> Text) -> a -> Text
+jsonEncodeString encode a = either error identity $ jsonEncodeString' encode a
+
+jsonEncodeList : (a -> Text) -> [a] -> Text
+jsonEncodeList encode l = "[" <> Text.intercalate "," (fmap encode l) <> "]"
+
+jsonEncodeLists : (a -> Text) -> [[a]] -> Text
+jsonEncodeLists encode = jsonEncodeList (jsonEncodeList encode)
+
+jsonEncodeParty : Party -> Text
+jsonEncodeParty = jsonEncodeString partyToText
+
+jsonEncodePartiesLists : [[Party]] -> Text
+jsonEncodePartiesLists = jsonEncodeLists jsonEncodeParty
