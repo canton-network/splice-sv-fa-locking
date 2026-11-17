@@ -14,7 +14,7 @@ import org.lfdecentralizedtrust.splice.util.*
 class FeaturedAppPermanentUnderlockIntegrationTest
     extends IntegrationTest
     with WalletTestUtil
-    with FeaturedAppUnderlockTest {
+    with FeaturedAppUnderlockTestUtil {
 
   override def environmentDefinition: SpliceEnvironmentDefinition =
     EnvironmentDefinition

@@ -14,7 +14,7 @@ class FeaturedAppUnderlockStatusUpdateIntegrationTest
     extends IntegrationTest
     with WalletTestUtil
     with GovernanceLockTest
-    with FeaturedAppUnderlockTest {
+    with FeaturedAppUnderlockTestUtil {
 
   // The smallest amount a lock can have, so a single lock is enough to meet the threshold
   private val basicLockThreshold = minimumLockAmount
@@ -50,7 +50,7 @@ class FeaturedAppUnderlockStatusUpdateIntegrationTest
         _ =>
           Seq(alice, bob).map { provider =>
             // The instruction is either awaiting execution, or already executed and suspended the right
-            val instructions = instructionsFor(provider)
+            val instructions = underlockInstructionsFor(provider)
             instructions.foreach(_.data.underlocked shouldBe true)
             if (instructions.isEmpty) isSuspended(provider) shouldBe true
             provider -> instructions.size
@@ -60,7 +60,7 @@ class FeaturedAppUnderlockStatusUpdateIntegrationTest
       clue("no duplicate instructions are created") {
         always(10.seconds, pollIntervalMs = 1000) {
           instructionsSeen.foreach { case (provider, seen) =>
-            val numInstructions = instructionsFor(provider).size
+            val numInstructions = underlockInstructionsFor(provider).size
             // Once executed, the right records the underlock, so no new instruction may appear
             if (seen == 0) numInstructions shouldBe 0 else numInstructions should be <= 1
           }

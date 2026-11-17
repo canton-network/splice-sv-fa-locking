@@ -18,7 +18,7 @@ import org.lfdecentralizedtrust.splice.sv.config.InitialGovernanceLockManagement
 
 import scala.jdk.CollectionConverters.*
 
-trait FeaturedAppUnderlockTest extends TestCommon {
+trait FeaturedAppUnderlockTestUtil extends TestCommon {
 
   protected def withFeaturedAppUnderlockEnforcement(
       basicLockThreshold: Option[BigDecimal] = None,
@@ -36,7 +36,7 @@ trait FeaturedAppUnderlockTest extends TestCommon {
       )
     )
 
-  protected def instructionsFor(
+  protected def underlockInstructionsFor(
       provider: PartyId
   )(implicit env: SpliceTestConsoleEnvironment): Seq[FeaturedAppUnderlockInstruction.Contract] =
     sv1Backend.participantClientWithAdminToken.ledger_api_extensions.acs
@@ -66,7 +66,7 @@ trait FeaturedAppUnderlockTest extends TestCommon {
   )(implicit env: SpliceTestConsoleEnvironment): Unit = {
     val participant = sv1Backend.participantClientWithAdminToken
     val sv1Party = sv1Backend.getDsoInfo().svParty
-    instructionsFor(provider).foreach { instruction =>
+    underlockInstructionsFor(provider).foreach { instruction =>
       val dsoRulesCid =
         participant.ledger_api_extensions.acs
           .filterJava(DsoRules.COMPANION)(dsoParty)
