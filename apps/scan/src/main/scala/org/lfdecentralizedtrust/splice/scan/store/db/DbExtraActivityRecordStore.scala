@@ -3,8 +3,8 @@
 
 package org.lfdecentralizedtrust.splice.scan.store.db
 
-import org.lfdecentralizedtrust.splice.store.UpdateHistory
 import org.lfdecentralizedtrust.splice.util.FutureUnlessShutdownUtil.futureUnlessShutdownToFuture
+import com.digitalasset.canton.lifecycle.CloseContext
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.resource.DbStorage
 import com.digitalasset.canton.resource.DbStorage.Implicits.BuilderChain.*
@@ -22,8 +22,8 @@ object DbExtraActivityRecordStore {
 
   /** Extra activity record contributed by an
     * `ActivityRecorder_DsoRecordActivity` exercise (CIP-0104 amendment).
-    * `history_id` is injected from the store's `UpdateHistory` on insert;
-    * the DB PK is `(history_id, round_number, record_time)`.
+    * `store_id` is injected from the store descriptor on insert; the DB
+    * PK is `(store_id, round_number, record_time)`.
     */
   final case class ExtraActivityRecordT(
       roundNumber: Long,
@@ -33,15 +33,28 @@ object DbExtraActivityRecordStore {
       assetActivityProviderParties: Seq[String] = Seq.empty,
       assetActivityWeights: Seq[Long] = Seq.empty,
   )
+
+  def apply(
+      storeDescriptor: org.lfdecentralizedtrust.splice.store.db.StoreDescriptor,
+      storage: DbStorage,
+      loggerFactory: NamedLoggerFactory,
+  )(implicit
+      ec: ExecutionContext,
+      cc: CloseContext,
+      tc: TraceContext,
+  ): Future[DbExtraActivityRecordStore] =
+    org.lfdecentralizedtrust.splice.store.db.StoreDescriptorStore
+      .getStoreIdForDescriptor(storeDescriptor, storage)
+      .map(storeId => new DbExtraActivityRecordStore(storage, storeId, loggerFactory))
 }
 
 /** Row store for extra-activity records contributed by the CIP-0104
   * amendment's `ActivityRecorder_DsoRecordActivity` choice, backed by
   * `extra_app_activity_record_store`.
   */
-class DbExtraActivityRecordStore(
+class DbExtraActivityRecordStore private (
     storage: DbStorage,
-    updateHistory: UpdateHistory,
+    val storeId: Int,
     override protected val loggerFactory: NamedLoggerFactory,
 )(implicit
     ec: ExecutionContext
@@ -55,11 +68,9 @@ class DbExtraActivityRecordStore(
 
   override protected def timeouts = new ProcessingTimeout
 
-  private object Tables {
+  private[store] object Tables {
     val extraActivityRecords = "extra_app_activity_record_store"
   }
-
-  private def historyId = updateHistory.historyId
 
   type ExtraActivityRecordT = DbExtraActivityRecordStore.ExtraActivityRecordT
 
@@ -81,14 +92,14 @@ class DbExtraActivityRecordStore(
     } else {
       val values = sqlCommaSeparated(
         items.map { row =>
-          sql"""($historyId, ${row.roundNumber}, ${row.recordTime},
+          sql"""($storeId, ${row.roundNumber}, ${row.recordTime},
                 ${row.appProviderParties}, ${row.appActivityWeights},
                 ${row.assetActivityProviderParties}, ${row.assetActivityWeights})"""
         }
       )
       (sql"""
         insert into #${Tables.extraActivityRecords}(
-          history_id, round_number, record_time,
+          store_id, round_number, record_time,
           app_provider_parties, app_activity_weights,
           asset_activity_provider_parties, asset_activity_weights
         ) values """ ++ values ++ sql" ON CONFLICT DO NOTHING").asUpdate
@@ -107,7 +118,7 @@ class DbExtraActivityRecordStore(
         )
       )
 
-  /** Read every row for this store's `history_id`, ordered by
+  /** Read every row for this store's `store_id`, ordered by
     * `(round_number, record_time)`.
     */
   @VisibleForTesting
@@ -119,7 +130,7 @@ class DbExtraActivityRecordStore(
                  app_provider_parties, app_activity_weights,
                  asset_activity_provider_parties, asset_activity_weights
           from #${Tables.extraActivityRecords}
-          where history_id = $historyId
+          where store_id = $storeId
           order by round_number, record_time
         """.as[ExtraActivityRecordT],
         "extraActivity.getRecordsForTesting",

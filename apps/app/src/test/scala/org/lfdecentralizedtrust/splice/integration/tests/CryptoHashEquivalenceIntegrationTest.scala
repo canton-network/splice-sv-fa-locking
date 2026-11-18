@@ -29,6 +29,7 @@ import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet.rewardaccounti
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.IntegrationTest
 import org.lfdecentralizedtrust.splice.scan.config.AnalyzableTimeWindowConfig
+import org.lfdecentralizedtrust.splice.scan.store.ScanExtraActivityRecordStore
 import org.lfdecentralizedtrust.splice.scan.store.db.{
   DbAppActivityRecordStore,
   DbScanAppRewardsStore,
@@ -156,6 +157,8 @@ class CryptoHashEquivalenceIntegrationTest extends IntegrationTest with WalletTe
         )
         .futureValue
       updateHistory.ingestionSink.initialize().futureValue
+      val extraActivityRecordStore =
+        ScanExtraActivityRecordStore(svParty, participantId, storage, loggerFactory).futureValue
       val appActivityRecordStore = new DbAppActivityRecordStore(
         storage,
         updateHistory,
@@ -168,6 +171,7 @@ class CryptoHashEquivalenceIntegrationTest extends IntegrationTest with WalletTe
         storage,
         updateHistory,
         appActivityRecordStore,
+        extraActivityRecordStore,
         BigDecimal(0.001),
         loggerFactory,
       )

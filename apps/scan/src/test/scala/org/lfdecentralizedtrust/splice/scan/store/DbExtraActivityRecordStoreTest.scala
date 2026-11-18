@@ -7,13 +7,10 @@ import com.digitalasset.canton.HasExecutionContext
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
 import com.digitalasset.canton.resource.DbStorage
 import com.digitalasset.canton.tracing.TraceContext
-import com.daml.metrics.api.noop.NoOpMetricsFactory
-import org.lfdecentralizedtrust.splice.scan.config.AnalyzableTimeWindowConfig
 import org.lfdecentralizedtrust.splice.scan.store.db.DbExtraActivityRecordStore
 import org.lfdecentralizedtrust.splice.scan.store.db.DbExtraActivityRecordStore.*
-import org.lfdecentralizedtrust.splice.store.{HistoryMetrics, StoreTestBase, UpdateHistory}
-import org.lfdecentralizedtrust.splice.store.UpdateHistory.BackfillingRequirement
-import org.lfdecentralizedtrust.splice.store.db.{AcsJdbcTypes, SplicePostgresTest}
+import org.lfdecentralizedtrust.splice.store.StoreTestBase
+import org.lfdecentralizedtrust.splice.store.db.SplicePostgresTest
 
 import scala.concurrent.Future
 
@@ -21,8 +18,6 @@ class DbExtraActivityRecordStoreTest
     extends StoreTestBase
     with HasExecutionContext
     with SplicePostgresTest {
-
-  private val migrationId = 0L
 
   "DbExtraActivityRecordStore" should {
 
@@ -81,26 +76,7 @@ class DbExtraActivityRecordStoreTest
   private def newStore(): Future[DbExtraActivityRecordStore] = {
     val n = storeCounter.getAndIncrement()
     val participantId = mkParticipantId(s"extra-activity-test-$n")
-    for {
-      updateHistory <- UpdateHistory.create(
-        storage,
-        migrationId,
-        s"extra_activity_test_$n",
-        AcsJdbcTypes.StoreMemberId(participantId),
-        dsoParty,
-        BackfillingRequirement.BackfillingNotRequired,
-        internedStringStore(storage),
-        analyzableTimeWindowDuration = AnalyzableTimeWindowConfig.UnlimitedAtw,
-        loggerFactory,
-        enableImportUpdateBackfill = false,
-        HistoryMetrics(NoOpMetricsFactory, migrationId),
-      )
-      _ <- updateHistory.ingestionSink.initialize()
-    } yield new DbExtraActivityRecordStore(
-      storage,
-      updateHistory,
-      loggerFactory,
-    )
+    ScanExtraActivityRecordStore(dsoParty, participantId, storage, loggerFactory)
   }
 
   override protected def cleanDb(
