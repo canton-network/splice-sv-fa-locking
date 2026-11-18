@@ -6,7 +6,7 @@ module Splice.Scripts.TestAmuletRulesContractStateSchemaMigration where
 import DA.Assert
 import Daml.Script
 
-import Splice.ActivityRecorder
+import Splice.Amulet
 import Splice.AmuletRules
 import Splice.DsoRules
 
