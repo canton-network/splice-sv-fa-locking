@@ -11,6 +11,7 @@ import com.daml.metrics.api.noop.NoOpMetricsFactory
 import org.lfdecentralizedtrust.splice.scan.config.AnalyzableTimeWindowConfig
 import org.lfdecentralizedtrust.splice.scan.store.ActivityRecordMetaStore.RoundIngestionStatus
 import org.lfdecentralizedtrust.splice.scan.store.db.DbActivityRecordMetaStore
+import org.lfdecentralizedtrust.splice.scan.store.ScanExtraActivityRecordStore
 import org.lfdecentralizedtrust.splice.store.{HistoryMetrics, StoreTestBase, UpdateHistory}
 import org.lfdecentralizedtrust.splice.store.UpdateHistory.BackfillingRequirement
 import org.lfdecentralizedtrust.splice.store.db.{AcsJdbcTypes, SplicePostgresTest}
@@ -420,9 +421,16 @@ class DbActivityRecordMetaStoreTest
         HistoryMetrics(NoOpMetricsFactory, migrationId),
       )
       _ <- updateHistory.ingestionSink.initialize()
+      extraActivityRecordStore <- ScanExtraActivityRecordStore(
+        dsoParty,
+        participantId,
+        storage,
+        loggerFactory,
+      )
     } yield new DbActivityRecordMetaStore(
       storage,
       updateHistory,
+      extraActivityRecordStore,
       versions,
       isFirstSv,
       loggerFactory,

@@ -13,9 +13,7 @@
 
 create table extra_app_activity_record_store
 (
-    -- History identifier for update-history partitioning (mirrors
-    -- app_activity_record_store.history_id).
-    history_id                      bigint                   not null,
+    store_id                        int                      not null,
     -- The mining round number to which this activity is assigned,
     -- resolved from the OpenMiningRound active at record_time.
     round_number                    bigint                   not null,
@@ -30,20 +28,23 @@ create table extra_app_activity_record_store
     -- in one-to-one correspondence with asset_activity_weights.
     asset_activity_provider_parties text[]                   not null default '{}',
     asset_activity_weights          bigint[]                 not null default '{}',
+
     constraint extra_app_activity_record_store_pkey
-        primary key (history_id, round_number, record_time)
+        primary key (store_id, round_number, record_time),
+    constraint extra_app_activity_record_store_store_id_fkey
+        foreign key (store_id) references store_descriptors(id)
 );
 
 
 -- Metadata for extra-activity-record ingestion runs. One row per
--- (history_id, code_version, user_version) tuple. Mirrors
+-- (store_id, code_version, user_version) tuple. Mirrors
 -- app_activity_record_meta exactly: a new row is inserted on each version
 -- bump; previous rows are retained as an audit trail.
 --
 -- The schema does not encode an origin rule for earliest_ingested_round.
 create table extra_app_activity_record_meta
 (
-    history_id                        bigint      not null,
+    store_id                          int         not null,
     -- Code version of the ingestion logic. Bumped when the computation
     -- of extra activity records is functionally changed.
     activity_ingestion_code_version   int         not null,
@@ -62,6 +63,8 @@ create table extra_app_activity_record_meta
     last_updated_at                   timestamptz default now(),
 
     constraint extra_app_activity_record_meta_pkey primary key (
-        history_id, activity_ingestion_code_version, activity_ingestion_user_version
-    )
+        store_id, activity_ingestion_code_version, activity_ingestion_user_version
+    ),
+    constraint extra_app_activity_record_meta_store_id_fkey
+        foreign key (store_id) references store_descriptors(id)
 );

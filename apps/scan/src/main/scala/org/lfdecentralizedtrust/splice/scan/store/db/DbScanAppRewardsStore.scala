@@ -145,6 +145,7 @@ class DbScanAppRewardsStore(
     storage: DbStorage,
     updateHistory: UpdateHistory,
     appActivityRecordStore: DbAppActivityRecordStore,
+    extraActivityRecordStore: DbExtraActivityRecordStore,
     rewardMintingAllowanceTolerance: BigDecimal,
     override protected val loggerFactory: NamedLoggerFactory,
 )(implicit
@@ -767,7 +768,8 @@ class DbScanAppRewardsStore(
     * per-party aggregation; a party that only appears via extra activity
     * still shows up with its extra weight alone.
     */
-  private def unnestAndAggregate(historyId: Long, roundNumber: Long) =
+  private def unnestAndAggregate(historyId: Long, roundNumber: Long) = {
+    val extraStoreId = extraActivityRecordStore.storeId
     sql"""app_unnested as (
             select party, weight
             from app_activity_record_store a
@@ -780,7 +782,7 @@ class DbScanAppRewardsStore(
             from extra_app_activity_record_store x
             cross join lateral unnest(x.app_provider_parties, x.app_activity_weights)
                  as pw(party, weight)
-            where x.history_id = $historyId
+            where x.store_id = $extraStoreId
               and x.round_number = $roundNumber
           ),
           app_aggregated as (
@@ -805,7 +807,7 @@ class DbScanAppRewardsStore(
                    coalesce(x.asset_activity_provider_parties, '{}'::text[]),
                    coalesce(x.asset_activity_weights,          '{}'::bigint[]))
                  as pw(party, weight)
-            where x.history_id = $historyId
+            where x.store_id = $extraStoreId
               and x.round_number = $roundNumber
           ),
           asset_aggregated as (
@@ -823,6 +825,7 @@ class DbScanAppRewardsStore(
             from app_aggregated a
             full outer join asset_aggregated s on a.party = s.party
           )"""
+  }
 
   /** Insert per-party totals and return the inserted weights via RETURNING. */
   private def insertPartyTotals(historyId: Long, roundNumber: Long) =
