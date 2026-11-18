@@ -29,7 +29,7 @@ import Splice.Api.Token.HoldingV1 qualified as Api.Token.HoldingV1
 import Splice.Api.Token.TransferInstructionV1(TransferInstruction_Update(..), TransferInstructionResult, TransferInstruction)
 
 import Splice.TokenStandard.Utils
-  ( basicAccount, eventLog_holdingsChangeDefaultImpl, reasonToMeta, mintAccount, burnAccount )
+  ( basicAccount, eventLog_holdingsChangeDefaultImpl, reasonToMeta, mintAccount, burnAccount, require', isLessR )
 
 import Splice.Amulet
 import Splice.Amulet.CryptoHash qualified as CryptoHash
@@ -1057,8 +1057,8 @@ template AmuletRules
       controller dso
       do
         let currentVersion = fromOptional 0 contractStateSchemaVersion
-        require "currentVersion < latestContractStateSchemaVersion"
-          (currentVersion < latestContractStateSchemaVersion)
+        require' ("currentVersion", currentVersion) isLessR
+          ("latestContractStateSchemaVersion", latestContractStateSchemaVersion)
         activityRecorderCid <-
           if currentVersion == 0
             then Some <$> create ActivityRecorder with dso
