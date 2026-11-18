@@ -1051,7 +1051,7 @@ template AmuletRules
           governanceLockConfig = config.governanceLockConfig
         pure AmuletRules_UpdateExternalPartyConfigStatesResult with ..
 
-    -- | Migrate the contract state schema to latest version and create necessary contracts
+    -- Migrate the contract state schema to latest version and create necessary contracts
     choice AmuletRules_MigrateContractStateSchema : AmuletRules_MigrateContractStateSchemaResult
       controller dso
       do
