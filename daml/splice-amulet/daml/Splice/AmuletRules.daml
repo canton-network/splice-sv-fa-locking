@@ -434,6 +434,7 @@ template AmuletRules
       controller provider
       do
         require "isDevNet flag is true" isDevNet
+        require "opsParties has at most 20 entries" (optional 0 length opsParties <= 20)
         featuredAppRightCid <- create FeaturedAppRight with dso; provider; activityWeight; appKind; opsParties
         return AmuletRules_DevNet_FeatureAppResult with ..
 
