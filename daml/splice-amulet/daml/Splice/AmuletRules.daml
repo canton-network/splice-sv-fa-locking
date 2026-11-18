@@ -171,8 +171,8 @@ data AmuletRules_UpdateExternalPartyConfigStatesResult = AmuletRules_UpdateExter
 data AmuletRules_MigrateContractStateSchemaResult = AmuletRules_MigrateContractStateSchemaResult
   with
     newAmuletRulesCid : ContractId AmuletRules
-    activityRecorderCid : Optional (ContractId ActivityRecorder)
-      -- ^ Only set if the ActivityRecorder was created by this migration.
+    changesDescription : [(Int, Text)]
+      -- ^ Short description of what changed, for each schema version for which migration was applied.
   deriving (Show, Eq, Serializable)
 
 -- | The latest contract state schema version that AmuletRules can be migrated to.
@@ -1058,13 +1058,15 @@ template AmuletRules
         let currentVersion = fromOptional 0 contractStateSchemaVersion
         require' ("currentVersion", currentVersion) isLessR
           ("latestContractStateSchemaVersion", latestContractStateSchemaVersion)
-        activityRecorderCid <-
+        changesDescription <-
           if currentVersion == 0
-            then Some <$> create ActivityRecorder with dso
-            else pure None
+            then do
+              _ <- create ActivityRecorder with dso
+              pure [(1, "created ActivityRecorder")]
+            else pure []
         newAmuletRulesCid <- create this with
           contractStateSchemaVersion = Some latestContractStateSchemaVersion
-        pure AmuletRules_MigrateContractStateSchemaResult with newAmuletRulesCid; activityRecorderCid
+        pure AmuletRules_MigrateContractStateSchemaResult with newAmuletRulesCid; changesDescription
 
 
 data OpenMiningRoundTriple = OpenMiningRoundTriple
