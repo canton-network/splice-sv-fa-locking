@@ -42,6 +42,7 @@ trait GovernanceLockTest extends TokenStandardTest {
   sealed abstract class LockKind(val kind: String)
   case object SuperValidatorLock extends LockKind("sv-lock")
   case object ProvisionalFeaturedAppLock extends LockKind("provisional-fa-lock")
+  case object FeaturedAppLock extends LockKind("fa-lock")
 
   sealed abstract class LockStatus(val status: String)
   case object Locked extends LockStatus("locked")
