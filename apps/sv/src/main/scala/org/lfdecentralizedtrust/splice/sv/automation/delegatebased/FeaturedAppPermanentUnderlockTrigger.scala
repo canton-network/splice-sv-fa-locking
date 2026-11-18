@@ -67,8 +67,12 @@ class FeaturedAppPermanentUnderlockTrigger(
         .fromDsoRulesConfig(dsoRules.payload.config)
         .enforcementEnabled
       outcome <-
-        if (!enforcementEnabled) Future.successful(TaskNoop)
-        else
+        if (!enforcementEnabled) {
+          logger.info(
+            s"Skipped ${rights.size} featured app rights: underlock enforcement is disabled"
+          )
+          Future.successful(TaskNoop)
+        } else
           svTaskContext
             .connection(SpliceLedgerConnectionPriority.Low)
             .submit(

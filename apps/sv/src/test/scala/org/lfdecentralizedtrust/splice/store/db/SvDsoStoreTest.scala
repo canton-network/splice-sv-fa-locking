@@ -311,6 +311,7 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
           cidsIgnoring(Set.empty) should contain theSameElementsAs
             Seq(party1Right.contractId, party2Right.contractId)
           cidsIgnoring(Set(party1)) should contain theSameElementsAs Seq(party2Right.contractId)
+          cidsIgnoring(Set(party1, party2)) should be(empty)
           // The DSO party is a stakeholder of every right but is not the `provider`
           cidsIgnoring(Set(dsoParty)) should contain theSameElementsAs
             Seq(party1Right.contractId, party2Right.contractId)
