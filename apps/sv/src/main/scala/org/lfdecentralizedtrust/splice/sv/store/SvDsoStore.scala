@@ -1656,7 +1656,6 @@ object SvDsoStore {
             Some(Timestamp.assertFromInstant(contract.payload.nextPaymentDueAt)),
         )
       },
-      // TODO (DACH-NY/canton-network-node#8782) revisit if it makes sense
       mkFilter(sub.TerminatedSubscription.COMPANION)(co =>
         co.payload.subscriptionData.dso == dso && co.payload.subscriptionData.provider == dso
       ) { contract =>
