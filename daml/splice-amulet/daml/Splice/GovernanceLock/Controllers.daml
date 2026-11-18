@@ -4,7 +4,9 @@
 -- | Specifications for custom controllers of governance locks.
 module Splice.GovernanceLock.Controllers (
   ControllersSpecification,
+  GovernanceLockControllers(..),
   makeControllersSpecification,
+  makeGovernanceLockControllers,
   validateControllersSpecification,
   allControllers,
   encodeControllersSpecification,
@@ -23,6 +25,15 @@ data ControllersSpecification = ControllersSpecification with
       -- ^ Sets of parties that can jointly authorize an action. The action happens once all parties of any one set approve it.
   deriving (Eq, Show, Serializable)
 
+data GovernanceLockControllers = GovernanceLockControllers with
+    unlockControllers : Optional ControllersSpecification
+      -- ^ Controllers that can unlock the lock.
+    substitutionControllers : Optional ControllersSpecification
+      -- ^ Controllers that can authorize a substitution.
+    vestingControllers : Optional ControllersSpecification
+      -- ^ Controllers that can control the disbursal of vesting funds via withdrawals, substitutions, or transfers.
+  deriving (Eq, Show, Serializable)
+
 -- | Sets of controllers that can jointly authorize an action.
 -- This is the form of ControllersSpecification that all callers must go through to ensure deduplication.
 data ControllerSets = ControllerSets (Set.Set (Set.Set Party))
@@ -35,6 +46,13 @@ getControllersSpecification (ControllerSets controllers) = ControllersSpecificat
 
 makeControllersSpecification : [[Party]] -> ControllersSpecification
 makeControllersSpecification = getControllersSpecification . makeControllerSets
+
+makeGovernanceLockControllers : Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> Optional GovernanceLockControllers
+makeGovernanceLockControllers None None None = None
+makeGovernanceLockControllers unlockControllers substitutionControllers vestingControllers = Some GovernanceLockControllers with
+  unlockControllers
+  substitutionControllers
+  vestingControllers
 
 validateControllersSpecification : CanAssert m => Text -> Optional ControllersSpecification -> m ()
 validateControllersSpecification _ None = pure ()

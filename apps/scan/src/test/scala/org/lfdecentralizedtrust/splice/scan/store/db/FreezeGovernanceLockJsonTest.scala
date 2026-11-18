@@ -51,7 +51,7 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
     AcsJdbcTypes
       .payloadJsonFromDefinedDataType(
         new gl.governancelockspecification.GLS_FullLock(
-          new gl.FullLockSpecification(kind, Optional.empty(), Optional.empty(), Optional.empty())
+          new gl.FullLockSpecification(kind, Optional.empty())
         )
       )
 
@@ -76,9 +76,7 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
             "value" := Json.obj("provider" := provider),
           ),
           // TODO(canton-network/splice-sv-fa-locking#211): drop trailing nulls
-          "unlockControllers" := Json.Null,
-          "substitutionControllers" := Json.Null,
-          "vestingControllers" := Json.Null,
+          "controllers" := Json.Null,
         ),
       )
     }
@@ -91,9 +89,7 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
             "tag" := "GLK_ProvisionalFeaturedApp",
             "value" := Json.obj("provider" := provider),
           ),
-          "unlockControllers" := Json.Null,
-          "substitutionControllers" := Json.Null,
-          "vestingControllers" := Json.Null,
+          "controllers" := Json.Null,
         ),
       )
     }
@@ -106,9 +102,7 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
             "tag" := "GLK_SuperValidatorRightsOwner",
             "value" := Json.obj("svName" := "sv1"),
           ),
-          "unlockControllers" := Json.Null,
-          "substitutionControllers" := Json.Null,
-          "vestingControllers" := Json.Null,
+          "controllers" := Json.Null,
         ),
       )
     }

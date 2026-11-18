@@ -385,12 +385,14 @@ setupGovernanceSubstitution = do
   tap app bob testVestingAmount
   WalletClientV2.createBatchingUtility bob.primaryParty
 
-  tsv1Operations.proposeSubstitution (TestEnvRegistries registries registry) bob.primaryParty
-    (GovernanceLockKey with
+  tsv1Operations.proposeSubstitution (TestEnvRegistries registries registry) bob.primaryParty LockSubstitutionArgs with
+    target = GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty
-      specification = fullLockSpecification testLockKind)
-    testVestingAmount
+      specification = fullLockSpecification testLockKind
+    amount = testVestingAmount
+    requestedAt = None
+    extraMemoEntries = []
   [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob.primaryParty
   pure (SubstitutionEnv with .., substitutionCid)
 
@@ -406,12 +408,14 @@ setupVestingSubstitution = do
     tsv1Operations.governanceUnlock (TestEnvRegistries registries registry) governanceLockCid alice.primaryParty (unlockMemo testVestingAmount unlockAt)
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
 
-  tsv1Operations.proposeSubstitution (TestEnvRegistries registries registry) bob.primaryParty
-    (GovernanceLockKey with
+  tsv1Operations.proposeSubstitution (TestEnvRegistries registries registry) bob.primaryParty LockSubstitutionArgs with
+    target = GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty
-      specification = vestingLock.specification)
-    testVestingAmount
+      specification = vestingLock.specification
+    amount = testVestingAmount
+    requestedAt = None
+    extraMemoEntries = []
   [(substitutionCid, _)] <- query @GovernanceLockSubstitution bob.primaryParty
   pure (SubstitutionEnv with .., substitutionCid)
 
