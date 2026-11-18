@@ -29,6 +29,7 @@ import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Proposal qualified as Proposal
+import Splice.TokenStandard.Utils (toAnyContractId)
 import Splice.Types
 import Splice.Util
 
@@ -154,6 +155,7 @@ governanceLock_executeUnlock : Proposal.ProposalExecuteArgs UnlockProposal -> Up
 governanceLock_executeUnlock Proposal.ProposalExecuteArgs{..} = exercise merged.lockCid GovernanceLock_DsoUnlock with
   unlockAmount = proposal.specification.amount
   vestingStartTime = proposal.specification.vestingStartTime
+  originalProposalCid = toAnyContractId <$> optional proposalCid Some proposal.originalProposalCid
   reason
   context
   state

@@ -178,7 +178,7 @@ testCustomControllers_unlock ops = do
       vestingPeriod
       endTime = vestingStartTime `addRelTime` vestingPeriod
       vestingControllers
-    originalLockCid = None
+    originalLockCid = Some (toAnyContractId unlockCid)
     requestedAt = vestingStartTime
 
   remainingLock === GovernanceLock with

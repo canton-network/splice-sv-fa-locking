@@ -98,7 +98,6 @@ import DA.Action (foldrA, unless)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
 import DA.Foldable (foldMap, forA_)
-import DA.Functor (($>))
 import DA.List (sortOn)
 import DA.List.Total (head)
 import DA.Map qualified as Map
@@ -289,6 +288,7 @@ template GovernanceLock
       with
         unlockAmount : Decimal
         vestingStartTime : Time
+        originalProposalCid : Optional AnyContractId
         reason : Text
         context : ExternalPartyTransferContext
         state : ExternalPartyConfigState
@@ -303,7 +303,7 @@ template GovernanceLock
           requireMinimumLock state unlockAmount
           requireMinimumLock state (amount - unlockAmount)
 
-        governanceLock_dsoUnlockImpl self this fullSpec unlockAmount vestingPeriod vestingStartTime reason context
+        governanceLock_dsoUnlockImpl self this originalProposalCid fullSpec unlockAmount vestingPeriod vestingStartTime reason context
 
     choice GovernanceLock_DsoWithdraw : GovernanceLock_DsoWithdrawResult
       -- ^ Withdraw the funds of this vesting lock that vested until `vestedUntilTime` as part of an approved withdrawal.
@@ -606,8 +606,8 @@ governanceLock_lockForGovernance_impl dso amount inputs fullSpecification extraA
 -- The unlocked funds go into a new vesting lock that starts vesting at `vestingStartTime`,
 -- or are released to the owner if the lock kind has no vesting period.
 -- The remaining funds, if any, stay locked in a new full lock.
-governanceLock_dsoUnlockImpl : ContractId GovernanceLock -> GovernanceLock -> FullLockSpecification -> Decimal -> RelTime -> Time -> Text -> ExternalPartyTransferContext -> Update GovernanceLock_DsoUnlockResult
-governanceLock_dsoUnlockImpl lockCid lock@GovernanceLock{..} fullSpec unlockAmount vestingPeriod vestingStartTime reason context = do
+governanceLock_dsoUnlockImpl : ContractId GovernanceLock -> GovernanceLock -> Optional AnyContractId -> FullLockSpecification -> Decimal -> RelTime -> Time -> Text -> ExternalPartyTransferContext -> Update GovernanceLock_DsoUnlockResult
+governanceLock_dsoUnlockImpl lockCid lock@GovernanceLock{..} originalProposalCid fullSpec unlockAmount vestingPeriod vestingStartTime reason context = do
   let endTime = vestingStartTime `addRelTime` vestingPeriod
       specification = GLS_VestingLock VestingLockSpecification with
         kind = fullSpec.kind
@@ -636,7 +636,9 @@ governanceLock_dsoUnlockImpl lockCid lock@GovernanceLock{..} fullSpec unlockAmou
     lockedAmulet
     amount
     specification
-    originalLockCid = guard (unlockAmount == lock.amount) $> fromOptional (toAnyContractId lockCid) originalLockCid
+    originalLockCid = if unlockAmount == lock.amount
+      then Some (fromOptional (toAnyContractId lockCid) originalLockCid)
+      else originalProposalCid
     requestedAt = endTime `addRelTime` (- vestingPeriod))
 
   pure GovernanceLock_DsoUnlockResult with vestingLock; governanceLock; unlockedAmulet
