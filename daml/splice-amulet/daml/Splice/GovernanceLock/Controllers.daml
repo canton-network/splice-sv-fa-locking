@@ -6,6 +6,7 @@ module Splice.GovernanceLock.Controllers (
   ControllersSpecification,
   GovernanceLockControllers(..),
   makeControllersSpecification,
+  makeGovernanceLockControllers,
   validateControllersSpecification,
   allControllers,
   encodeControllersSpecification,
@@ -45,6 +46,13 @@ getControllersSpecification (ControllerSets controllers) = ControllersSpecificat
 
 makeControllersSpecification : [[Party]] -> ControllersSpecification
 makeControllersSpecification = getControllersSpecification . makeControllerSets
+
+makeGovernanceLockControllers : Optional ControllersSpecification -> Optional ControllersSpecification -> Optional ControllersSpecification -> Optional GovernanceLockControllers
+makeGovernanceLockControllers None None None = None
+makeGovernanceLockControllers unlockControllers substitutionControllers vestingControllers = Some GovernanceLockControllers with
+  unlockControllers
+  substitutionControllers
+  vestingControllers
 
 validateControllersSpecification : CanAssert m => Text -> Optional ControllersSpecification -> m ()
 validateControllersSpecification _ None = pure ()

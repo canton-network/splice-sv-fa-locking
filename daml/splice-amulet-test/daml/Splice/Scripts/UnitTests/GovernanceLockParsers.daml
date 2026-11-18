@@ -17,7 +17,7 @@ import Daml.Script
 import Splice.Amulet.TokenApiUtils (reasonMetaKey)
 import Splice.Api.Token.MetadataV1
 import Splice.GovernanceLock
-import Splice.GovernanceLock.Controllers (makeControllersSpecification)
+import Splice.GovernanceLock.Controllers (makeControllersSpecification, makeGovernanceLockControllers)
 import Splice.GovernanceLock.Request
 import Splice.Scripts.UnitTests.GovernanceLock (fullLockSpecification)
 import Splice.Tests.UnitTest_Memo (expectErrors, expectSuccess, mkMemo)
@@ -148,9 +148,10 @@ test_fullLockSpecificationParser'
 test_fullLockSpecificationParser' run = do
   -- Each controllers key is parsed into its own field
   let fullSpecification = (fullLockSpecification $ GLK_FeaturedApp testProvider) with
-        unlockControllers = Some $ makeControllersSpecification [[alice]]
-        substitutionControllers = Some $ makeControllersSpecification [[bob]]
-        vestingControllers = Some $ makeControllersSpecification [[charlie]]
+        controllers = makeGovernanceLockControllers
+          (Some $ makeControllersSpecification [[alice]])
+          (Some $ makeControllersSpecification [[bob]])
+          (Some $ makeControllersSpecification [[charlie]])
   expectSuccess fullSpecification $
     run (governanceLockTagToText GLT_FeaturedApp)
       [ (lockSubjectMemoKey, "provider")

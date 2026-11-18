@@ -22,6 +22,7 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Request
 import Splice.GovernanceLock.Transfer
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
@@ -413,18 +414,14 @@ tsv1RequestMemo request spec = tsv1RequestMemo' request spec []
 tsv1RequestMemo' : GovernanceLockRequestTag -> GovernanceLockSpecification -> [(Text, Text)] -> Text
 tsv1RequestMemo' request spec extraEntries =
   let (tag, subject) = governanceLockKindToTagAndSubject (governanceLockKind spec)
-      (unlockControllers, substitutionControllers, vestingControllers) = case spec of
-        GLS_FullLock FullLockSpecification{..} -> (unlockControllers, substitutionControllers, vestingControllers)
-        GLS_VestingLock VestingLockSpecification{..} -> (None, None, vestingControllers)
+      controllers = case spec of
+        GLS_FullLock FullLockSpecification{..} -> controllers
+        GLS_VestingLock VestingLockSpecification{..} -> Some $ GovernanceLockControllers None None vestingControllers
   in encodeLockCompatMemo $
        [ (requestMemoKey, governanceLockRequestTagToText request)
        , (lockKindMemoKey, governanceLockTagToText tag)
        , (lockSubjectMemoKey, subject)
-       ] <>
-        encodeControllersSpecificationMemoEntries unlockControllersMemoKey unlockControllers <>
-        encodeControllersSpecificationMemoEntries substitutionControllersMemoKey substitutionControllers <>
-        encodeControllersSpecificationMemoEntries vestingControllersMemoKey vestingControllers <>
-        extraEntries
+       ] <> encodeGovernanceLockControllersMemoEntries controllers <> extraEntries
 
 data TestEnvRegistries = TestEnvRegistries with
   registries : MultiRegistry.MultiRegistry
@@ -815,9 +812,7 @@ isVestingLock lock = case lock.specification of
 fullLockSpecification : GovernanceLockKind -> GovernanceLockSpecification
 fullLockSpecification kind = GLS_FullLock FullLockSpecification with
   kind
-  unlockControllers = None
-  substitutionControllers = None
-  vestingControllers = None
+  controllers = None
 
 lockTargetMemoEntries : GovernanceLockSpecification -> [(Text, Text)]
 lockTargetMemoEntries (GLS_FullLock _) = []

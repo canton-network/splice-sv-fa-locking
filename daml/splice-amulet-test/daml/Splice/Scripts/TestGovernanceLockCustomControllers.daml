@@ -58,9 +58,10 @@ testCustomControllers_substitution ops selfSubstitution vestingLock = do
       kind = GLK_SuperValidatorRightsOwner "TestSV"
   (fullLockCid, fullLock) <- lockWithSpec ops env targetOwner 50000.0 $ GLS_FullLock FullLockSpecification with
     kind
-    unlockControllers = None
-    substitutionControllers = if vestingLock then None else controllers
-    vestingControllers = if vestingLock then controllers else None
+    controllers = makeGovernanceLockControllers
+      None
+      (if vestingLock then None else controllers)
+      (if vestingLock then controllers else None)
   (_, target) <- if vestingLock
     then vestingLockFor ops env targetOwner fullLockCid 50000.0
     else pure (fullLockCid, fullLock)

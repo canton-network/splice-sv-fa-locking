@@ -519,8 +519,6 @@ abstract class StoreTestBase
         kind,
         // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
         None.toJava,
-        None.toJava,
-        None.toJava,
       )
     )
 

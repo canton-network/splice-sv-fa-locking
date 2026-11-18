@@ -80,7 +80,7 @@ data GovernanceLockSubstitution_DsoExpireResult = GovernanceLockSubstitution_Dso
 governanceLockSubstitutionControllers : GovernanceLockSubstitution -> ControllersSpecification
 governanceLockSubstitutionControllers GovernanceLockSubstitution{target, owner} =
   let optControllers = case target.specification of
-        GLS_FullLock spec -> spec.substitutionControllers
+        GLS_FullLock spec -> spec.controllers >>= (.substitutionControllers)
         GLS_VestingLock spec -> spec.vestingControllers
       controllerSets = optional [[target.owner]] (.controllers) optControllers
   in makeControllersSpecification $ fmap (\s -> owner :: s) controllerSets

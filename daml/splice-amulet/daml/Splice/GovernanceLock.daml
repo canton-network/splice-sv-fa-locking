@@ -59,7 +59,7 @@ module Splice.GovernanceLock (
   invalidLockSubjectMessage,
   encodeCommonLockMemoEntries,
   encodeLockCompatMemo,
-  encodeControllersSpecificationMemoEntries,
+  encodeGovernanceLockControllersMemoEntries,
   encodeGovernanceLockNewCustomControllersMemoEntries,
   encodeGovernanceLockMetadataWithRequest',
   encodeGovernanceLockMetadataWithRequest,
@@ -145,12 +145,8 @@ data VestingLockSpecification = VestingLockSpecification with
 
 data FullLockSpecification = FullLockSpecification with
     kind : GovernanceLockKind
-    unlockControllers : Optional ControllersSpecification
-      -- ^ Controllers that can unlock the lock.
-    substitutionControllers : Optional ControllersSpecification
-      -- ^ Controllers that can authorize a substitution.
-    vestingControllers : Optional ControllersSpecification
-      -- ^ Controllers that can control the disbursal of vesting funds via withdrawals, substitutions, or transfers.
+    controllers : Optional GovernanceLockControllers
+      -- ^ Controllers that can authorize actions taken on the lock.
   deriving (Eq, Show, Serializable)
 
 data GovernanceLockSpecification
@@ -159,7 +155,8 @@ data GovernanceLockSpecification
   deriving (Eq, Show, Serializable)
 
 validateGovernanceLockSpecification : CanAssert m => GovernanceLockSpecification -> m ()
-validateGovernanceLockSpecification (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) = do
+validateGovernanceLockSpecification (GLS_FullLock (FullLockSpecification _ None)) = pure ()
+validateGovernanceLockSpecification (GLS_FullLock (FullLockSpecification _ (Some (GovernanceLockControllers unlockControllers substitutionControllers vestingControllers)))) = do
   validateControllersSpecification "unlock" unlockControllers
   validateControllersSpecification "substitution" substitutionControllers
   validateControllersSpecification "vesting" vestingControllers
@@ -181,10 +178,7 @@ validateNewGovernanceLockControllers spec (Some (GovernanceLockControllers unloc
 
 setNewGovernanceLockControllers : GovernanceLockSpecification -> Optional GovernanceLockControllers -> GovernanceLockSpecification
 setNewGovernanceLockControllers (GLS_FullLock spec) newControllers =
-  GLS_FullLock spec with
-    unlockControllers = newControllers >>= (.unlockControllers)
-    substitutionControllers = newControllers >>= (.substitutionControllers)
-    vestingControllers = newControllers >>= (.vestingControllers)
+  GLS_FullLock spec with controllers = newControllers
 setNewGovernanceLockControllers (GLS_VestingLock spec) newControllers =
   GLS_VestingLock spec with
     vestingControllers = newControllers >>= (.vestingControllers)
@@ -637,7 +631,7 @@ governanceLock_dsoUnlockImpl lockCid lock@GovernanceLock{..} fullSpec unlockAmou
         kind = fullSpec.kind
         vestingPeriod
         endTime
-        vestingControllers = fullSpec.vestingControllers
+        vestingControllers = fullSpec.controllers >>= (.vestingControllers)
   let forOwner = ForOwner with dso; owner
 
   (optVestingLockedAmulet, optStillLocked, unlockedAmulet) <- if (vestingPeriod == days 0)
@@ -755,7 +749,8 @@ governanceLockObservers spec = case governanceLockKind spec of
   GLK_SuperValidatorRightsOwner _ -> []
 
 governanceLockControllers : GovernanceLockSpecification -> Set.Set Party
-governanceLockControllers (GLS_FullLock (FullLockSpecification _ unlockControllers substitutionControllers vestingControllers)) =
+governanceLockControllers (GLS_FullLock (FullLockSpecification _ None)) = Set.empty
+governanceLockControllers (GLS_FullLock (FullLockSpecification _ (Some (GovernanceLockControllers unlockControllers substitutionControllers vestingControllers)))) =
   foldMap allControllers $ catOptionals [unlockControllers, substitutionControllers, vestingControllers]
 governanceLockControllers (GLS_VestingLock (VestingLockSpecification _ _ _ vestingControllers)) =
   optional Set.empty allControllers vestingControllers
@@ -984,12 +979,9 @@ encodeGovernanceLockNewCustomControllersMemoEntries =
 
 -- | The memo entries of a lock specification, in the order of the CIP.
 encodeGovernanceLockSpecMemoEntries : GovernanceLockSpecification -> [(Text, Text)]
-encodeGovernanceLockSpecMemoEntries (GLS_FullLock FullLockSpecification{..}) =
-  encodeCommonLockMemoEntries kind LS_Locked <> encodeGovernanceLockControllersMemoEntries (Some GovernanceLockControllers with
-    unlockControllers
-    substitutionControllers
-    vestingControllers)
-encodeGovernanceLockSpecMemoEntries (GLS_VestingLock VestingLockSpecification{..}) =
+encodeGovernanceLockSpecMemoEntries (GLS_FullLock (FullLockSpecification kind controllers)) =
+  encodeCommonLockMemoEntries kind LS_Locked <> encodeGovernanceLockControllersMemoEntries controllers
+encodeGovernanceLockSpecMemoEntries (GLS_VestingLock (VestingLockSpecification kind vestingPeriod endTime vestingControllers)) =
   encodeCommonLockMemoEntries kind LS_Vesting <>
     [ (lockVestingDurationMemoKey, encodeRelTime vestingPeriod)
     , (lockVestingEndTimeMemoKey, encodeTime endTime)

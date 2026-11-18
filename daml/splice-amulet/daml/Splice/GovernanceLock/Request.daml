@@ -290,39 +290,25 @@ governanceLockMemoParser = Parser \meta -> runParser (memoParserWithAnyKeys cipM
 parseGovernanceLockMemo : CanAssert m => Metadata -> m Memo
 parseGovernanceLockMemo = assertParsed governanceLockMemoParser
 
-vestingControllersParser : Parser Memo (Optional ControllersSpecification)
-vestingControllersParser = controllersSpecificationParser vestingControllersMemoKey
+governanceLockControllersParser' : Text -> Text -> Text -> Parser Memo (Optional GovernanceLockControllers)
+governanceLockControllersParser' unlockKey substitutionKey vestingKey =
+  makeGovernanceLockControllers <$>
+    controllersSpecificationParser unlockKey <*>
+    controllersSpecificationParser substitutionKey <*>
+    controllersSpecificationParser vestingKey
 
-substitutionControllersParser : Parser Memo (Optional ControllersSpecification)
-substitutionControllersParser = controllersSpecificationParser substitutionControllersMemoKey
+governanceLockControllersParser : Parser Memo (Optional GovernanceLockControllers)
+governanceLockControllersParser =
+  governanceLockControllersParser' unlockControllersMemoKey substitutionControllersMemoKey vestingControllersMemoKey
 
-unlockControllersParser : Parser Memo (Optional ControllersSpecification)
-unlockControllersParser = controllersSpecificationParser unlockControllersMemoKey
-
-newControllersParser : GovernanceLockSpecification -> Parser Memo (Optional GovernanceLockControllers)
-newControllersParser spec =
-  let
-    makeGovernanceLockControllers None None None = None
-    makeGovernanceLockControllers unlockControllers substitutionControllers vestingControllers = Some GovernanceLockControllers with
-      unlockControllers
-      substitutionControllers
-      vestingControllers
-  in case spec of
-    GLS_FullLock _ ->
-      makeGovernanceLockControllers <$>
-        controllersSpecificationParser newUnlockControllersMemoKey <*>
-        controllersSpecificationParser newSubstitutionControllersMemoKey <*>
-        controllersSpecificationParser newVestingControllersMemoKey
-    GLS_VestingLock _ ->
-      makeGovernanceLockControllers None None <$> controllersSpecificationParser newVestingControllersMemoKey
+newGovernanceLockControllersParser : GovernanceLockSpecification -> Parser Memo (Optional GovernanceLockControllers)
+newGovernanceLockControllersParser (GLS_FullLock _) =
+  governanceLockControllersParser' newUnlockControllersMemoKey newSubstitutionControllersMemoKey newVestingControllersMemoKey
+newGovernanceLockControllersParser (GLS_VestingLock _) =
+  makeGovernanceLockControllers None None <$> controllersSpecificationParser newVestingControllersMemoKey
 
 fullLockSpecificationParser : Parser Memo FullLockSpecification
-fullLockSpecificationParser =
-  FullLockSpecification <$>
-    governanceLockKindParser <*>
-    unlockControllersParser <*>
-    substitutionControllersParser <*>
-    vestingControllersParser
+fullLockSpecificationParser = FullLockSpecification <$> governanceLockKindParser <*> governanceLockControllersParser
 
 vestingLockSpecificationParser : Parser Memo VestingLockSpecification
 vestingLockSpecificationParser =
@@ -330,7 +316,7 @@ vestingLockSpecificationParser =
     governanceLockKindParser <*>
     vestingDurationParser <*>
     vestingEndTimeParser <*>
-    vestingControllersParser
+    controllersSpecificationParser vestingControllersMemoKey
 
 governanceLockSpecificationParser : LockState -> Parser Memo GovernanceLockSpecification
 governanceLockSpecificationParser LS_Locked = GLS_FullLock <$> fullLockSpecificationParser
@@ -373,7 +359,7 @@ glr_substituteLock_parser dso = do
   targetState <- lockStateParser
   targetOwner <- targetLockOwnerParser
   specification <- governanceLockSpecificationParser targetState
-  newControllers <- newControllersParser specification
+  newControllers <- newGovernanceLockControllersParser specification
   pure GLR_SubstituteLock with
     target = GovernanceLockKey with
       dso

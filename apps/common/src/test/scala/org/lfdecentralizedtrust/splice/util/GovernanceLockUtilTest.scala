@@ -32,7 +32,7 @@ class GovernanceLockUtilTest extends AnyWordSpec with BaseTest {
       )
     else
       new gl.governancelockspecification.GLS_FullLock(
-        new gl.FullLockSpecification(kind, Optional.empty(), Optional.empty(), Optional.empty())
+        new gl.FullLockSpecification(kind, Optional.empty())
       )
 
   "specificationTypeAndSubject" should {
