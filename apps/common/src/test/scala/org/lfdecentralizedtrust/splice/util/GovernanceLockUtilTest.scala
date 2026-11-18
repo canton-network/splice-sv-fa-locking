@@ -32,7 +32,7 @@ class GovernanceLockUtilTest extends AnyWordSpec with BaseTest {
       )
     else
       new gl.governancelockspecification.GLS_FullLock(
-        new gl.FullLockSpecification(kind, Optional.empty(), Optional.empty(), Optional.empty())
+        new gl.FullLockSpecification(kind, Optional.empty())
       )
 
   "specificationTypeAndSubject" should {
@@ -85,6 +85,9 @@ class GovernanceLockUtilTest extends AnyWordSpec with BaseTest {
       Optional.empty(),
       Instant.EPOCH,
       Instant.EPOCH,
+      Optional.empty(),
+      // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
+      Optional.empty(),
       Optional.empty(),
     )
 

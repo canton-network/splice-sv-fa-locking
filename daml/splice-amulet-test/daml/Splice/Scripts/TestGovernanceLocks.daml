@@ -22,6 +22,7 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Request
 import Splice.GovernanceLock.Transfer
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
@@ -413,18 +414,14 @@ tsv1RequestMemo request spec = tsv1RequestMemo' request spec []
 tsv1RequestMemo' : GovernanceLockRequestTag -> GovernanceLockSpecification -> [(Text, Text)] -> Text
 tsv1RequestMemo' request spec extraEntries =
   let (tag, subject) = governanceLockKindToTagAndSubject (governanceLockKind spec)
-      (unlockControllers, substitutionControllers, vestingControllers) = case spec of
-        GLS_FullLock FullLockSpecification{..} -> (unlockControllers, substitutionControllers, vestingControllers)
-        GLS_VestingLock VestingLockSpecification{..} -> (None, None, vestingControllers)
+      controllers = case spec of
+        GLS_FullLock FullLockSpecification{..} -> controllers
+        GLS_VestingLock VestingLockSpecification{..} -> Some $ GovernanceLockControllers None None vestingControllers
   in encodeLockCompatMemo $
        [ (requestMemoKey, governanceLockRequestTagToText request)
        , (lockKindMemoKey, governanceLockTagToText tag)
        , (lockSubjectMemoKey, subject)
-       ] <>
-        encodeControllersSpecificationMemoEntries unlockControllersMemoKey unlockControllers <>
-        encodeControllersSpecificationMemoEntries substitutionControllersMemoKey substitutionControllers <>
-        encodeControllersSpecificationMemoEntries vestingControllersMemoKey vestingControllers <>
-        extraEntries
+       ] <> encodeGovernanceLockControllersMemoEntries controllers <> extraEntries
 
 data TestEnvRegistries = TestEnvRegistries with
   registries : MultiRegistry.MultiRegistry
@@ -432,6 +429,12 @@ data TestEnvRegistries = TestEnvRegistries with
 
 testEnvRegistries : TestEnv -> TestEnvRegistries
 testEnvRegistries env = TestEnvRegistries env.registries env.registriesEnv.amuletV2
+
+data LockSubstitutionArgs = LockSubstitutionArgs with
+  target : GovernanceLockKey
+  amount : Decimal
+  requestedAt : Optional Time
+  extraMemoEntries: [(Text, Text)]
 
 -- | The operations on governance locks, so that the scenarios can run against each token standard version.
 --
@@ -469,18 +472,10 @@ data GovernanceLockOperations iface result transfer = GovernanceLockOperations w
     -> Party
     -> [(Text, Text)]
     -> Script (Either SubmitError (Optional (ContractId GovernanceLock)))
-  proposeSubstitutionAt
-    :  TestEnvRegistries
-    -> Party
-    -> GovernanceLockKey
-    -> Decimal
-    -> Time
-    -> Script (Either SubmitError result)
   proposeSubstitution
     :  TestEnvRegistries
     -> Party
-    -> GovernanceLockKey
-    -> Decimal
+    -> LockSubstitutionArgs
     -> Script (Either SubmitError result)
   proposeTransfer'
     : TestEnvRegistries
@@ -508,7 +503,6 @@ tsv1Operations = GovernanceLockOperations with
     optGovernanceUnlock
     governanceUnlock
     vestingWithdraw
-    proposeSubstitutionAt
     proposeSubstitution
     proposeTransfer'
     proposeTransfer
@@ -546,9 +540,9 @@ tsv1Operations = GovernanceLockOperations with
           (vestingLockMemoEntries times.vestingPeriod times.endTime <> memoEntries))
       fmap extractPendingGovernanceLock <$> submitLockRequestV1' env.registries actor request
 
-    proposeSubstitutionAt env proposer target amount requestedAt =
-      submitTSv1Request env.registries env.registry proposer amount (substitutionMemo target) requestedAt
-    proposeSubstitution env proposer target amount = getTime >>= proposeSubstitutionAt env proposer target amount
+    proposeSubstitution env proposer args@LockSubstitutionArgs{..} = do
+      requestedAt <- optional getTime pure args.requestedAt
+      submitTSv1Request env.registries env.registry proposer amount (substitutionMemo target extraMemoEntries) requestedAt
 
     proposeTransfer' env proposer transfer map = do
       let memo = tsv1RequestMemo' GLRT_TransferLock transfer.source.specification $
@@ -581,7 +575,6 @@ tsv2Operations = GovernanceLockOperations with
     optGovernanceUnlock
     governanceUnlock
     vestingWithdraw
-    proposeSubstitutionAt
     proposeSubstitution
     proposeTransfer'
     proposeTransfer
@@ -620,9 +613,9 @@ tsv2Operations = GovernanceLockOperations with
           (vestingLockMemoEntries times.vestingPeriod times.endTime <> memoEntries))
       fmap extractPendingGovernanceLock <$> submitLockRequestV2' env.registries actor request
 
-    proposeSubstitutionAt env proposer target amount requestedAt =
-      submitTSv2Request env.registries env.registry proposer amount (substitutionMemo target) requestedAt
-    proposeSubstitution env proposer target amount = getTime >>= proposeSubstitutionAt env proposer target amount
+    proposeSubstitution env proposer args@LockSubstitutionArgs{..} = do
+      requestedAt <- optional getTime pure args.requestedAt
+      submitTSv2Request env.registries env.registry proposer amount (substitutionMemo target extraMemoEntries) requestedAt
 
     proposeTransfer' env proposer transfer map = do
       let memo = tsv1RequestMemo' GLRT_TransferLock transfer.source.specification $
@@ -722,6 +715,27 @@ submitTSv2Request registries registry owner amount memo requestedAt = do
     requestedAt
     inputHoldingCids = inputs
 
+lockWithSpec
+  : GovernanceLockOperations i r t -> TestEnv -> Party -> Decimal -> GovernanceLockSpecification
+  -> Script (ContractId GovernanceLock, GovernanceLock)
+lockWithSpec ops env owner amount specification = do
+  let registry = env.registriesEnv.amuletV2
+  AmuletRegistryV2.tapFaucet registry owner amount
+  lockCid <- expectSuccess $ ops.governanceLock (testEnvRegistries env) owner amount specification
+  Some lock <- queryContractId owner lockCid
+  pure (lockCid, lock)
+
+-- | Fully unlocks a governance lock of `amount`, with vesting starting in an hour.
+vestingLockFor
+  :  GovernanceLockOperations i r t -> TestEnv -> Party -> ContractId GovernanceLock -> Decimal
+  -> Script (ContractId GovernanceLock, GovernanceLock)
+vestingLockFor ops env owner lockCid amount = do
+  now <- getTime
+  let unlockAt = now `addRelTime` hours 1
+  vestingLockCid <- expectSuccess $ ops.governanceUnlock (testEnvRegistries env) lockCid owner (unlockMemo amount unlockAt)
+  Some vestingLock <- queryContractId owner vestingLockCid
+  pure (vestingLockCid, vestingLock)
+
 -- | The memo entries of a request to unlock `unlockAmount`, with vesting starting at `vestingStartTime`.
 unlockMemo : Decimal -> Time -> [(Text, Text)]
 unlockMemo unlockAmount vestingStartTime = [(unlockAmountMemoKey, show unlockAmount), (vestingStartTimeMemoKey, show vestingStartTime)]
@@ -798,16 +812,14 @@ isVestingLock lock = case lock.specification of
 fullLockSpecification : GovernanceLockKind -> GovernanceLockSpecification
 fullLockSpecification kind = GLS_FullLock FullLockSpecification with
   kind
-  unlockControllers = None
-  substitutionControllers = None
-  vestingControllers = None
+  controllers = None
 
 lockTargetMemoEntries : GovernanceLockSpecification -> [(Text, Text)]
 lockTargetMemoEntries (GLS_FullLock _) = []
 lockTargetMemoEntries (GLS_VestingLock v) = vestingTargetMemoEntries v.vestingPeriod v.endTime
 
 -- | The memo of a request to substitute a lock.
-substitutionMemo : GovernanceLockKey -> Text
-substitutionMemo target =
+substitutionMemo : GovernanceLockKey -> [(Text, Text)] -> Text
+substitutionMemo target extraEntries =
   tsv1RequestMemo' GLRT_SubstituteLock target.specification $
-    (targetLockOwnerMemoKey, partyToText target.owner) :: lockTargetMemoEntries target.specification
+    (targetLockOwnerMemoKey, partyToText target.owner) :: (lockTargetMemoEntries target.specification <> extraEntries)

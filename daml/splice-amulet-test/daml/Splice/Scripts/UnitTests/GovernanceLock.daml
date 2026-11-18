@@ -20,9 +20,7 @@ testAdmin = fromSome $ partyFromText "registry-admin"
 fullLockSpecification : GovernanceLockKind -> FullLockSpecification
 fullLockSpecification kind = FullLockSpecification with
   kind
-  unlockControllers = None
-  substitutionControllers = None
-  vestingControllers = None
+  controllers = None
 
 -- | Fully explicit test cases for the TSv1 encoding, to ensure that the specification lines up.
 test_tsv1Encoding : Script ()
