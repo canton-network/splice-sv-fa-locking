@@ -110,6 +110,9 @@ data FeaturedAppRight_UpdateResult = FeaturedAppRight_UpdateResult with
 data FeaturedAppRight_CancelResult = FeaturedAppRight_CancelResult
   deriving (Serializable)
 
+data ActivityRecorder_DsoRecordActivityResult = ActivityRecorder_DsoRecordActivityResult
+  deriving (Serializable)
+
 data FeaturedAppRight_UpdateConfigResult = FeaturedAppRight_UpdateConfigResult with
   featuredAppRightCid : ContractId FeaturedAppRight
     deriving (Serializable)
@@ -730,14 +733,14 @@ template ActivityRecorder with
     key (ActivityRecorderKey with dso) : ActivityRecorderKey
     maintainer key.dso
 
-    nonconsuming choice ActivityRecorder_DsoRecordActivity : ()
+    nonconsuming choice ActivityRecorder_DsoRecordActivity : ActivityRecorder_DsoRecordActivityResult
       with
         appActivity : [(Party, Int)]
           -- ^ App activities to record for the given featured app parties, denominated in traffic bytes.
         assetActivity : [(Party, Int)]
           -- ^ Asset activities to record for the given featured asset parties, denominated in traffic bytes.
       controller dso
-      do pure ()
+      do pure ActivityRecorder_DsoRecordActivityResult
 
 -- Support code
 ---------------
