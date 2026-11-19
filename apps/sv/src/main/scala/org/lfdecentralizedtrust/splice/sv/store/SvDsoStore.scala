@@ -1112,19 +1112,20 @@ trait SvDsoStore
     splice.governancelock.GovernanceLock,
   ]
 
-  /** List underlock instructions whose provider has a `FeaturedAppRight`.
+  /** Returns a random sample of up to `limit`
+    * `FeaturedAppUnderlockInstruction`s, drawn from an arbitrary
+    * (unordered) subset of up to `max(1000, 10 * limit)` of them. Only
+    * instructions whose provider has a `FeaturedAppRight` are returned, each
+    * paired with the contract id of one such right.
     *
     * Instructions whose provider has no right cannot be executed, so they
-    * are left for the expiry automation. Instructions whose provider is an
-    * unavailable party are skipped.
+    * are left for the expiry automation.
     */
-  def listFeaturedAppUnderlockInstructionsWithFeaturedAppRight(
-      unavailablePartiesStore: Option[UnavailablePartiesStore] = None,
-      limit: Limit = defaultLimit,
-  )(implicit tc: TraceContext): Future[Seq[AssignedContract[
-    splice.dso.instruction.FeaturedAppUnderlockInstruction.ContractId,
-    splice.dso.instruction.FeaturedAppUnderlockInstruction,
-  ]]]
+  def listFeaturedAppUnderlockInstructionSample(
+      limit: Limit
+  )(implicit
+      tc: TraceContext
+  ): Future[Seq[SvDsoStore.FeaturedAppUnderlockInstructionWithRight]]
 
   /** List the featured app providers whose underlock status differs from the one on their `FeaturedAppRight`.
     *
@@ -1876,6 +1877,24 @@ object SvDsoStore {
       prettyOfClass(
         param("instruction", _.instruction),
         param("featuredAppRightCid", _.featuredAppRightCid.contractId.singleQuoted),
+      )
+  }
+
+  case class FeaturedAppUnderlockInstructionWithRight(
+      instruction: AssignedContract[
+        splice.dso.instruction.FeaturedAppUnderlockInstruction.ContractId,
+        splice.dso.instruction.FeaturedAppUnderlockInstruction,
+      ],
+      featuredAppRightCid: splice.amulet.FeaturedAppRight.ContractId,
+  ) extends PrettyPrinting {
+
+    override def pretty: Pretty[this.type] =
+      prettyOfClass(
+        param("instruction", _.instruction),
+        param(
+          "featuredAppRightCid",
+          _.featuredAppRightCid.contractId.singleQuoted,
+        ),
       )
   }
 
