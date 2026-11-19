@@ -77,8 +77,7 @@ template GovernanceLockTransfer with
       transferInstruction_withdrawExtraObservers _ = observer this
 
     choice GovernanceLockTransfer_DsoExpire : GovernanceLockTransfer_DsoExpireResult
-      -- ^ Garbage-collect proposal that receiver never accepted, so SV nodes
-      -- are not left storing it forever.
+      -- ^ Garbage-collect a proposal that was never accepted, so SV nodes are not left storing it forever.
       controller source.dso
       do
         assertDeadlineExceeded "GovernanceLockTransfer.expiresAt" expiresAt
