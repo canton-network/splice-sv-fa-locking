@@ -44,3 +44,15 @@ create table extra_app_activity_record_meta
 
     constraint extra_app_activity_record_meta_pkey primary key (store_id)
 );
+
+-- Extra app / asset activity totals per party and round.
+-- Existing rows have no extra activity, hence the default of 0.
+alter table app_activity_party_totals
+    add column total_extra_app_activity_weight   bigint not null default 0,
+    add column total_extra_asset_activity_weight bigint not null default 0,
+    add column num_extra_app_activity_records    bigint not null default 0,
+    add column num_extra_asset_activity_records  bigint not null default 0;
+
+alter table app_activity_round_totals
+    add column total_round_extra_app_activity_weight   bigint not null default 0,
+    add column total_round_extra_asset_activity_weight bigint not null default 0;
