@@ -3886,6 +3886,96 @@ class DbSvDsoStoreTest
     }
   }
 
+  private def revokeFeaturedAppRightInstruction(
+      provider: PartyId,
+      expiresAt: Instant = time(2).toInstant,
+      dso: PartyId = dsoParty,
+  ): Contract[
+    splice.dso.instruction.RevokeFeaturedAppRightInstruction.ContractId,
+    splice.dso.instruction.RevokeFeaturedAppRightInstruction,
+  ] =
+    contract(
+      identifier =
+        splice.dso.instruction.RevokeFeaturedAppRightInstruction.TEMPLATE_ID_WITH_PACKAGE_ID,
+      contractId =
+        new splice.dso.instruction.RevokeFeaturedAppRightInstruction.ContractId(nextCid()),
+      payload = new splice.dso.instruction.RevokeFeaturedAppRightInstruction(
+        dso.toProtoPrimitive,
+        provider.toProtoPrimitive,
+        expiresAt,
+      ),
+    )
+
+  "listExpiredRevokeFeaturedAppRightInstruction" should {
+
+    "return expired instructions of the store's DSO" in {
+      val instruction = revokeFeaturedAppRightInstruction(userParty(1))
+      val otherDsoInstruction = revokeFeaturedAppRightInstruction(userParty(1), dso = userParty(4))
+      for {
+        store <- mkStore()
+        _ <- MonadUtil.sequentialTraverse(Seq(instruction, otherDsoInstruction))(
+          dummyDomain.create(_)(store.multiDomainAcsStore)
+        )
+      } yield {
+        def cidsAt(t: CantonTimestamp) = store
+          .listExpiredRevokeFeaturedAppRightInstruction(t, PageLimit.tryCreate(10))(
+            TraceContext.empty
+          )
+          .futureValue
+          .map(_.contract.contractId)
+
+        cidsAt(time(2)) should be(empty)
+        cidsAt(time(3)) shouldBe Seq(instruction.contractId)
+      }
+    }
+  }
+
+  "listRevokeFeaturedAppRightInstructionSample" should {
+
+    "return only instructions whose provider has a FeaturedAppRight, paired with that right" in {
+      val featuredProvider = userParty(1)
+      val doublyFeaturedProvider = userParty(3)
+      val featuredRight = featuredAppRight(featuredProvider)
+      val doubleRights = Seq(
+        featuredAppRight(doublyFeaturedProvider),
+        featuredAppRight(doublyFeaturedProvider),
+      )
+      val featuredInstruction = revokeFeaturedAppRightInstruction(featuredProvider)
+      val unfeaturedInstruction = revokeFeaturedAppRightInstruction(userParty(2))
+      val doublyFeaturedInstruction = revokeFeaturedAppRightInstruction(doublyFeaturedProvider)
+      val otherDsoInstruction =
+        revokeFeaturedAppRightInstruction(featuredProvider, dso = userParty(4))
+      for {
+        store <- mkStore()
+        _ <- MonadUtil.sequentialTraverse(
+          Seq(featuredRight) ++ doubleRights
+        )(dummyDomain.create(_)(store.multiDomainAcsStore))
+        _ <- MonadUtil.sequentialTraverse(
+          Seq(
+            featuredInstruction,
+            unfeaturedInstruction,
+            doublyFeaturedInstruction,
+            otherDsoInstruction,
+          )
+        )(dummyDomain.create(_)(store.multiDomainAcsStore))
+        result <- store.listRevokeFeaturedAppRightInstructionSample(PageLimit.tryCreate(10))(
+          TraceContext.empty
+        )
+      } yield {
+        val rightByInstruction =
+          result.map(r => r.instruction.contractId -> r.featuredAppRightCid).toMap
+        result.map(_.instruction.contractId) should contain theSameElementsAs Seq(
+          featuredInstruction.contractId,
+          doublyFeaturedInstruction.contractId,
+        )
+        rightByInstruction(featuredInstruction.contractId) shouldBe featuredRight.contractId
+        doubleRights.map(_.contractId) should contain(
+          rightByInstruction(doublyFeaturedInstruction.contractId)
+        )
+      }
+    }
+  }
+
   "listVoteRequestsReadyToBeClosed" should {
 
     val votesAccept =

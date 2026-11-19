@@ -612,6 +612,15 @@ trait SvDsoStore
       limit: Limit = defaultLimit
   )(implicit tc: TraceContext): Future[Seq[SvDsoStore.FeaturedAppConfigUpdateInstructionWithRight]]
 
+  /** Returns a random sample of up to `limit` `RevokeFeaturedAppRightInstruction`,
+    * drawn from an arbitrary (unordered) subset of up to 1000 contracts.
+    * Only instructions whose provider has an active FeaturedAppRight,
+    * each paired with that right's contract ID are fetched.
+    */
+  def listRevokeFeaturedAppRightInstructionSample(
+      limit: Limit = defaultLimit
+  )(implicit tc: TraceContext): Future[Seq[SvDsoStore.RevokeFeaturedAppRightInstructionWithRight]]
+
   /** Returns the histogram for the remaining age (i.e., difference between now and the
     * contract creation time) of all active RewardCouponV2 contracts.
     *
@@ -873,6 +882,17 @@ trait SvDsoStore
     FeaturedAppConfigUpdateInstruction,
   ] =
     multiDomainAcsStore.listExpiredFromPayloadExpiry(FeaturedAppConfigUpdateInstruction.COMPANION)
+
+  /** Lists all expired `RevokeFeaturedAppRightInstruction` contracts, regardless of whether their
+    * provider has a `FeaturedAppRight`.
+    */
+  def listExpiredRevokeFeaturedAppRightInstruction: ListExpiredContracts[
+    splice.dso.instruction.RevokeFeaturedAppRightInstruction.ContractId,
+    splice.dso.instruction.RevokeFeaturedAppRightInstruction,
+  ] =
+    multiDomainAcsStore.listExpiredFromPayloadExpiry(
+      splice.dso.instruction.RevokeFeaturedAppRightInstruction.COMPANION
+    )
 
   /** Does a random sample of coupon providers from the set of coupons where 'providerIsObserver' is false.
     * Returns only the parties, not the coupons, to keep the query index-only.
@@ -1856,6 +1876,18 @@ object SvDsoStore {
           featuredAppRightProvider = Some(PartyId.tryFromProtoPrimitive(contract.payload.provider)),
         )
       },
+      mkFilter(splice.dso.instruction.RevokeFeaturedAppRightInstruction.COMPANION)(
+        co => co.payload.dso == dso,
+        versionGuard = { case (pkgVersionSupport, now) =>
+          (tc) => pkgVersionSupport.supportsFeaturedAppUnderlock(Seq(dsoParty), now)(tc)
+        },
+      ) { contract =>
+        DsoAcsStoreRowData(
+          contract,
+          contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.expiresAt)),
+          featuredAppRightProvider = Some(PartyId.tryFromProtoPrimitive(contract.payload.provider)),
+        )
+      },
     )
 
     MultiDomainAcsStore.SimpleContractFilter(
@@ -1883,6 +1915,21 @@ object SvDsoStore {
       instruction: AssignedContract[
         FeaturedAppConfigUpdateInstruction.ContractId,
         FeaturedAppConfigUpdateInstruction,
+      ],
+      featuredAppRightCid: splice.amulet.FeaturedAppRight.ContractId,
+  ) extends PrettyPrinting {
+
+    override def pretty: Pretty[this.type] =
+      prettyOfClass(
+        param("instruction", _.instruction),
+        param("featuredAppRightCid", _.featuredAppRightCid.contractId.singleQuoted),
+      )
+  }
+
+  case class RevokeFeaturedAppRightInstructionWithRight(
+      instruction: AssignedContract[
+        splice.dso.instruction.RevokeFeaturedAppRightInstruction.ContractId,
+        splice.dso.instruction.RevokeFeaturedAppRightInstruction,
       ],
       featuredAppRightCid: splice.amulet.FeaturedAppRight.ContractId,
   ) extends PrettyPrinting {
