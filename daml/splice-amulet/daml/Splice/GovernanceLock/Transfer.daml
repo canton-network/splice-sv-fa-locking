@@ -54,7 +54,9 @@ template GovernanceLockTransfer with
     signatory source.dso, source.owner,
               -- Make the receiver a signatory once they've approved the transfer
               -- This is necessary for `governanceLock_executeTransfer` to have the authority of the receiver when locking amulet
-              optional [] (const [receiver]) (guard (Map.lookup receiver (fromOptional Map.empty votes) == Some Proposal.PV_Accept))
+              (if Map.lookup receiver (governanceLockTransferVotes this) == Some Proposal.PV_Accept
+                then [receiver]
+                else [])
     observer receiver, allControllers (governanceLockTransferControllers this)
     ensure governanceLockTransferIsValid this
 
@@ -103,6 +105,9 @@ governanceLockTransferControllers GovernanceLockTransfer{source, receiver} =
         GLS_VestingLock spec -> spec.vestingControllers
       controllerSets = optional [[]] (.controllers) optControllers
   in makeControllersSpecification $ fmap (\s -> source.owner :: receiver :: s) controllerSets
+
+governanceLockTransferVotes : GovernanceLockTransfer -> Proposal.ProposalVotes
+governanceLockTransferVotes transfer = fromOptional (Map.singleton transfer.source.owner Proposal.PV_Accept) transfer.votes
 
 governanceLockTransferMetadata : GovernanceLockTransfer -> Metadata
 governanceLockTransferMetadata GovernanceLockTransfer{..} =
@@ -214,7 +219,7 @@ instance Proposal.ProposalOperations GovernanceLockTransfer GovernanceLock_Trans
     -- Transfers created before custom controllers were added will have `votes = None`.
     -- In this case we must provide the proposer's acceptance, the same way it's provided on newly created transfers,
     -- otherwise a pre-existing transfer is stuck and can never be approved.
-    votes = fromOptional (Map.singleton source.owner Proposal.PV_Accept) votes
+    votes = governanceLockTransferVotes proposal
     amount
     lockedAmulet = None
     requestedAt
