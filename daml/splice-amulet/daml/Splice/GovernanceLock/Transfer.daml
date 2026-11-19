@@ -153,9 +153,6 @@ governanceLock_proposeTransfer GovernanceLockProposeTransferArgs{..} = do
   assertInPast24Hours "requestedAt" requestedAt
   require' ("receiver", receiver) (notR isEqualR) ("sender", source.owner)
   require' ("amount", amount) isGreaterR ("zero", 0.0)
-  case source.specification of
-    GLS_FullLock _ -> pure ()
-    GLS_VestingLock VestingLockSpecification{endTime} -> require' ("expiresAt", expiresAt) isLessOrEqualR ("vesting endTime", endTime)
 
   validateNewGovernanceLockControllers source.specification newControllers
 
