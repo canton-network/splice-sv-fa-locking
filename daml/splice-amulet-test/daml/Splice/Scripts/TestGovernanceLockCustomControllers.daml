@@ -258,7 +258,6 @@ testCustomControllers_withdraw ops = do
       dso = vestingLock.dso
       owner = vestingLock.owner
       vestingSpec
-      lockedAmount = vestingLock.amount
       vestedUntilTime
     proposers = [alice]
     votes = Map.singleton alice Proposal.PV_Accept

@@ -20,7 +20,6 @@ module Splice.GovernanceLock.Withdraw (
 import DA.Assert (assertDeadlineExceeded)
 import DA.List qualified as List
 import DA.Map qualified as Map
-import DA.Optional
 import DA.Time
 
 import Splice.AmuletConfig (getTokenStandardMaxTTL)
@@ -40,7 +39,6 @@ data WithdrawVestedFundsSpecification = WithdrawVestedFundsSpecification with
     dso : Party
     owner : Party
     vestingSpec : VestingLockSpecification
-    lockedAmount : Decimal -- ^ Amount being withdrawn.
     vestedUntilTime : Time -- ^ Time at which the vested amount is computed.
   deriving (Eq, Show, Serializable)
 
@@ -85,14 +83,14 @@ data WithdrawVestedFunds_DsoExpireResult = WithdrawVestedFunds_DsoExpireResult {
   deriving (Serializable)
 
 withdrawVestedFundsProposalTarget : WithdrawVestedFundsSpecification -> GovernanceLockKey
-withdrawVestedFundsProposalTarget (WithdrawVestedFundsSpecification dso owner vestingSpec _lockedAmount _vestedUntilTime) =
+withdrawVestedFundsProposalTarget (WithdrawVestedFundsSpecification dso owner vestingSpec _vestedUntilTime) =
   GovernanceLockKey with
     dso
     owner
     specification = GLS_VestingLock vestingSpec
 
 withdrawVestedFundsProposalControllers : WithdrawVestedFundsSpecification -> ControllersSpecification
-withdrawVestedFundsProposalControllers (WithdrawVestedFundsSpecification _dso owner spec _lockedAmount _vestedUntilTime) =
+withdrawVestedFundsProposalControllers (WithdrawVestedFundsSpecification _dso owner spec _vestedUntilTime) =
   makeControllersSpecification $ optional [[owner]] (.controllers) spec.vestingControllers
 
 withdrawVestedFundsProposalMetadata : VestingLockSpecification -> Metadata
@@ -128,7 +126,6 @@ vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
         dso = lock.dso
         owner = lock.owner
         vestingSpec
-        lockedAmount = lock.amount
         vestedUntilTime
       proposers = List.dedupSort actors
       emptyVotes = Map.empty
@@ -169,7 +166,7 @@ instance Proposal.ProposalOperations WithdrawVestedFundsProposal GovernanceLock_
     proposers
     controllers = withdrawVestedFundsProposalControllers specification
     votes
-    amount = specification.lockedAmount - fromOptional 0.0 (calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount specification.vestingSpec)
+    amount = 0.0
     lockedAmulet = None
     requestedAt
     expiresAt
