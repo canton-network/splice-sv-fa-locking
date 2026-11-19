@@ -71,6 +71,7 @@ import org.lfdecentralizedtrust.splice.scan.sequencer.SequencerTrafficClient
 import org.lfdecentralizedtrust.splice.scan.store.{
   AcsSnapshotStore,
   ScanEventStore,
+  ScanExtraActivityRecordStore,
   ScanKeyValueProvider,
   ScanKeyValueStore,
   ScanRewardsReferenceStore,
@@ -314,6 +315,12 @@ class ScanApp(
           )
         }
       )
+      extraActivityRecordStore <- ScanExtraActivityRecordStore(
+        dsoParty,
+        participantId,
+        storage,
+        loggerFactory,
+      )
       appActivityRecordStore = new DbAppActivityRecordStore(
         storage,
         updateHistory,
@@ -329,6 +336,7 @@ class ScanApp(
         storage,
         updateHistory,
         appActivityRecordStore,
+        extraActivityRecordStore,
         config.rewardMintingAllowanceTolerance,
         loggerFactory,
       )
