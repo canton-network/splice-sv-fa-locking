@@ -7,7 +7,10 @@ import com.digitalasset.canton.topology.SynchronizerId
 import com.digitalasset.canton.tracing.TraceContext
 import com.digitalasset.canton.resource.DbStorage
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
+import org.lfdecentralizedtrust.splice.scan.store.ScanExtraActivityRecordStore
 import org.lfdecentralizedtrust.splice.scan.store.AppActivityStore.RoundIngestionStatus
+import org.lfdecentralizedtrust.splice.scan.store.db.DbActivityRecordMetaStore
+import org.lfdecentralizedtrust.splice.scan.store.db.DbActivityRecordMetaStore.*
 import org.lfdecentralizedtrust.splice.scan.store.db.DbAppActivityRecordStore
 import org.lfdecentralizedtrust.splice.scan.store.db.DbAppActivityRecordStore.*
 import org.lfdecentralizedtrust.splice.scan.store.db.DbScanVerdictStore
@@ -741,7 +744,7 @@ class DbAppActivityRecordStoreTest
       "return version 2 earliest round after version bump" in {
         for {
           (store, historyId) <- newStore(
-            versions = DbAppActivityRecordStore.IngestionVersions(2, 0)
+            versions = DbActivityRecordMetaStore.IngestionVersions(2, 0)
           )
           baseTs = CantonTimestamp.now()
           _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 0L, Some(1L))
@@ -768,7 +771,7 @@ class DbAppActivityRecordStoreTest
       "return version 2 earliest round when version bump via ensureMeta" in {
         for {
           (store, historyId) <- newStore(
-            versions = DbAppActivityRecordStore.IngestionVersions(2, 0)
+            versions = DbActivityRecordMetaStore.IngestionVersions(2, 0)
           )
           baseTs = CantonTimestamp.now()
           // Version 1 meta row exists from prior run
@@ -1059,7 +1062,7 @@ class DbAppActivityRecordStoreTest
 
     "insert new row and return InsertMeta on version bump" in {
       for {
-        (store, _) <- newStore(DbAppActivityRecordStore.IngestionVersions(2, 0))
+        (store, _) <- newStore(DbActivityRecordMetaStore.IngestionVersions(2, 0))
         _ <- store.insertActivityRecordMetaForTesting(1, 0, 1000000L, 10L, Some(15L))
         result <- runEnsureMeta(store, (2000000L, 20L), Some(19L))
         meta <- store.lookupActivityRecordMeta(2, 0)
@@ -1107,7 +1110,7 @@ class DbAppActivityRecordStoreTest
     "use actual earliest_ingested_round on version bump" in {
       for {
         (store, _) <- newStore(
-          versions = DbAppActivityRecordStore.IngestionVersions(2, 0)
+          versions = DbActivityRecordMetaStore.IngestionVersions(2, 0)
         )
         _ <- store.insertActivityRecordMetaForTesting(1, 0, 1000000L, 5L, None)
         r1 <- runEnsureMeta(store, (2000000L, 10L))
@@ -1302,10 +1305,11 @@ class DbAppActivityRecordStoreTest
       store: DbAppActivityRecordStore,
       ingestionStart: (Long, Long),
       lastArchivedRoundO: Option[Long] = None,
-  ): Future[MetaCheckResult] =
+  ): Future[DbActivityRecordMetaStore.MetaCheckResult] =
     futureUnlessShutdownToFuture(
       storage.underlying.queryAndUpdate(
-        store.ensureMetaDBIO(ingestionStart, lastArchivedRoundO, exitOnDowngrade = false),
+        store.metaStore
+          .ensureAppMetaDBIO(ingestionStart, lastArchivedRoundO, exitOnDowngrade = false),
         "test.ensureMeta",
       )
     )
@@ -1318,8 +1322,8 @@ class DbAppActivityRecordStoreTest
     * obtained from UpdateHistory initialization.
     */
   private def newStore(
-      versions: DbAppActivityRecordStore.IngestionVersions =
-        DbAppActivityRecordStore.IngestionVersions(1, 0),
+      versions: DbActivityRecordMetaStore.IngestionVersions =
+        DbActivityRecordMetaStore.IngestionVersions(1, 0),
       isFirstSv: Boolean = false,
   ): Future[(DbAppActivityRecordStore, Long)] = {
     val n = storeCounter.getAndIncrement()
@@ -1339,11 +1343,25 @@ class DbAppActivityRecordStoreTest
         HistoryMetrics(NoOpMetricsFactory, migrationId),
       )
       _ <- updateHistory.ingestionSink.initialize()
+      extraActivityRecordStore <- ScanExtraActivityRecordStore(
+        dsoParty,
+        participantId,
+        storage,
+        loggerFactory,
+      )
     } yield {
+      val metaStore = new DbActivityRecordMetaStore(
+        storage,
+        updateHistory,
+        extraActivityRecordStore,
+        versions,
+        isFirstSv,
+        loggerFactory,
+      )
       val store = new DbAppActivityRecordStore(
         storage,
         updateHistory,
-        versions,
+        metaStore,
         isFirstSv,
         initialRound = 0L,
         loggerFactory,
@@ -1374,11 +1392,25 @@ class DbAppActivityRecordStoreTest
         HistoryMetrics(NoOpMetricsFactory, migrationId),
       )
       _ <- updateHistory.ingestionSink.initialize()
+      extraActivityRecordStore <- ScanExtraActivityRecordStore(
+        dsoParty,
+        participantId,
+        storage.underlying,
+        loggerFactory,
+      )
     } yield {
+      val metaStore = new DbActivityRecordMetaStore(
+        storage.underlying,
+        updateHistory,
+        extraActivityRecordStore,
+        DbActivityRecordMetaStore.IngestionVersions(1, 0),
+        isFirstSv,
+        loggerFactory,
+      )
       val appStore = new DbAppActivityRecordStore(
         storage.underlying,
         updateHistory,
-        DbAppActivityRecordStore.IngestionVersions(1, 0),
+        metaStore,
         isFirstSv,
         initialRound = 0L,
         loggerFactory,

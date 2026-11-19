@@ -6,6 +6,7 @@ import com.digitalasset.canton.resource.DbStorage
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
 import org.lfdecentralizedtrust.splice.scan.rewards.{RewardComputationInputs, RewardIssuanceParams}
 import org.lfdecentralizedtrust.splice.scan.store.db.{
+  DbActivityRecordMetaStore,
   DbAppActivityRecordStore,
   DbExtraActivityRecordStore,
   DbScanAppRewardsStore,
@@ -1747,10 +1748,18 @@ class DbScanAppRewardsStoreTest
         loggerFactory,
       )
     } yield {
+      val metaStore = new DbActivityRecordMetaStore(
+        storage.underlying,
+        updateHistory,
+        extraActivityRecordStore,
+        DbActivityRecordMetaStore.IngestionVersions(1, 0),
+        isFirstSv,
+        loggerFactory,
+      )
       val appActivityRecordStore = new DbAppActivityRecordStore(
         storage.underlying,
         updateHistory,
-        DbAppActivityRecordStore.IngestionVersions(1, 0),
+        metaStore,
         isFirstSv,
         initialRound = 0L,
         loggerFactory,
