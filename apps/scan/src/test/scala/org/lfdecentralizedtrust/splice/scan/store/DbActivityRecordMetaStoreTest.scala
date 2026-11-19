@@ -50,7 +50,7 @@ class DbActivityRecordMetaStoreTest
         // earliest_ingested_round + 1 for both. App-side earliest-complete: 5.
         // Extra-side earliest-complete: 7.
         _ <- metaStore.insertAppActivityRecordMetaForTesting(1, 0, 100L, 4L, Some(5L))
-        _ <- metaStore.insertExtraActivityRecordMetaForTesting(1, 0, 200L, 6L, Some(7L))
+        _ <- metaStore.insertExtraActivityRecordMetaForTesting(200L, 6L, Some(7L))
         combined <- metaStore.earliestRoundWithCompleteAppActivity()
       } yield {
         combined shouldBe Some(7L)
@@ -72,7 +72,7 @@ class DbActivityRecordMetaStoreTest
         metaStore <- newStores(initialRound = 5L)
         // App-side latest-complete: 10. Extra-side latest-complete: 8.
         _ <- metaStore.insertAppActivityRecordMetaForTesting(1, 0, 100L, 4L, Some(10L))
-        _ <- metaStore.insertExtraActivityRecordMetaForTesting(1, 0, 200L, 4L, Some(8L))
+        _ <- metaStore.insertExtraActivityRecordMetaForTesting(200L, 4L, Some(8L))
         combined <- metaStore.latestRoundWithCompleteAppActivity()
       } yield {
         combined shouldBe Some(8L)
@@ -84,7 +84,7 @@ class DbActivityRecordMetaStoreTest
         metaStore <- newStores(initialRound = 5L)
         _ <- metaStore.insertAppActivityRecordMetaForTesting(1, 0, 100L, 4L, Some(10L))
         // Extra-side meta present, but no last_archived_round yet.
-        _ <- metaStore.insertExtraActivityRecordMetaForTesting(1, 0, 200L, 4L, None)
+        _ <- metaStore.insertExtraActivityRecordMetaForTesting(200L, 4L, None)
         combined <- metaStore.latestRoundWithCompleteAppActivity()
       } yield {
         combined shouldBe None
@@ -98,7 +98,7 @@ class DbActivityRecordMetaStoreTest
         // each side alone reports CannotProvide for round 4 and
         // Undetermined for round 20. The combined result must agree.
         _ <- metaStore.insertAppActivityRecordMetaForTesting(1, 0, 100L, 4L, None)
-        _ <- metaStore.insertExtraActivityRecordMetaForTesting(1, 0, 200L, 4L, None)
+        _ <- metaStore.insertExtraActivityRecordMetaForTesting(200L, 4L, None)
         atEarliest <- metaStore.ingestionStatusForRound(4L)
         beyond <- metaStore.ingestionStatusForRound(20L)
       } yield {
@@ -115,7 +115,7 @@ class DbActivityRecordMetaStoreTest
         // 20 is BELOW it → CannotProvide on the extra side). The combined
         // response must adopt extra's CannotProvide.
         _ <- metaStore.insertAppActivityRecordMetaForTesting(1, 0, 100L, 4L, None)
-        _ <- metaStore.insertExtraActivityRecordMetaForTesting(1, 0, 200L, 25L, None)
+        _ <- metaStore.insertExtraActivityRecordMetaForTesting(200L, 25L, None)
         combined <- metaStore.ingestionStatusForRound(20L)
       } yield {
         combined shouldBe RoundIngestionStatus.CannotProvide
@@ -126,7 +126,7 @@ class DbActivityRecordMetaStoreTest
       for {
         metaStore <- newStores(initialRound = 5L)
         _ <- metaStore.insertAppActivityRecordMetaForTesting(1, 0, 100L, 4L, None)
-        _ <- metaStore.insertExtraActivityRecordMetaForTesting(1, 0, 200L, 4L, None)
+        _ <- metaStore.insertExtraActivityRecordMetaForTesting(200L, 4L, None)
         combined <- metaStore.ingestionStatusForRound(20L)
       } yield {
         combined shouldBe RoundIngestionStatus.Undetermined
@@ -137,7 +137,7 @@ class DbActivityRecordMetaStoreTest
       for {
         metaStore <- newStores(initialRound = 5L)
         _ <- metaStore.insertAppActivityRecordMetaForTesting(1, 0, 1000L, 4L, None)
-        _ <- metaStore.insertExtraActivityRecordMetaForTesting(1, 0, 500L, 4L, None)
+        _ <- metaStore.insertExtraActivityRecordMetaForTesting(500L, 4L, None)
         combined <- metaStore.startedIngestingAt
       } yield {
         combined shouldBe Some(500L)
@@ -162,12 +162,10 @@ class DbActivityRecordMetaStoreTest
       for {
         metaStore <- newStores(initialRound = 7L)
         result <- runEnsureExtraMeta(metaStore, (startedAt, earliestRound))
-        loaded <- metaStore.lookupExtraActivityRecordMeta(1, 0)
+        loaded <- metaStore.lookupExtraActivityRecordMeta()
       } yield {
         result shouldBe DbActivityRecordMetaStore.InsertMeta
         val meta = loaded.value
-        meta.codeVersion shouldBe 1
-        meta.userVersion shouldBe 0
         meta.startedIngestingAt shouldBe startedAt
         meta.earliestIngestedRound shouldBe earliestRound
         meta.lastArchivedRound shouldBe None
@@ -177,12 +175,10 @@ class DbActivityRecordMetaStoreTest
     "round-trip a seeded extra-side meta row via insertExtraActivityRecordMetaForTesting + lookup" in {
       for {
         metaStore <- newStores(initialRound = 5L)
-        _ <- metaStore.insertExtraActivityRecordMetaForTesting(1, 0, 999L, 4L, Some(10L))
-        loaded <- metaStore.lookupExtraActivityRecordMeta(1, 0)
+        _ <- metaStore.insertExtraActivityRecordMetaForTesting(999L, 4L, Some(10L))
+        loaded <- metaStore.lookupExtraActivityRecordMeta()
       } yield {
         val meta = loaded.value
-        meta.codeVersion shouldBe 1
-        meta.userVersion shouldBe 0
         meta.startedIngestingAt shouldBe 999L
         meta.earliestIngestedRound shouldBe 4L
         meta.lastArchivedRound shouldBe Some(10L)
@@ -192,10 +188,10 @@ class DbActivityRecordMetaStoreTest
     "advance last_archived_round via bumpExtraLastArchivedRoundForTesting" in {
       for {
         metaStore <- newStores(initialRound = 7L)
-        _ <- metaStore.insertExtraActivityRecordMetaForTesting(1, 0, 100L, 6L, None)
-        reloadedBefore <- metaStore.lookupExtraActivityRecordMeta(1, 0)
+        _ <- metaStore.insertExtraActivityRecordMetaForTesting(100L, 6L, None)
+        reloadedBefore <- metaStore.lookupExtraActivityRecordMeta()
         _ <- metaStore.bumpExtraLastArchivedRoundForTesting(round = 12L)
-        reloadedAfter <- metaStore.lookupExtraActivityRecordMeta(1, 0)
+        reloadedAfter <- metaStore.lookupExtraActivityRecordMeta()
       } yield {
         reloadedBefore.value.lastArchivedRound shouldBe None
         reloadedAfter.value.lastArchivedRound shouldBe Some(12L)
@@ -241,20 +237,21 @@ class DbActivityRecordMetaStoreTest
     },
     "extra" -> { (metaStore: DbActivityRecordMetaStore) =>
       new SideFixture {
+        // Extra meta has no code/user version columns; args are ignored.
         def insertMeta(
             codeVersion: Int,
             userVersion: Int,
             startedIngestingAt: Long,
             earliestIngestedRound: Long,
             lastArchivedRound: Option[Long],
-        ): Future[Unit] =
+        ): Future[Unit] = {
+          val _ = (codeVersion, userVersion)
           metaStore.insertExtraActivityRecordMetaForTesting(
-            codeVersion,
-            userVersion,
             startedIngestingAt,
             earliestIngestedRound,
             lastArchivedRound,
           )
+        }
         def table = metaStore.Tables.extraActivityRecordMeta
       }
     },
@@ -297,16 +294,6 @@ class DbActivityRecordMetaStoreTest
         } yield result.value shouldBe 43L
       }
 
-      s"[$sideName] use current meta row when multiple meta rows exist" in {
-        for {
-          metaStore <- newStores()
-          side = pickSide(metaStore)
-          _ <- side.insertMeta(0, 0, 1000L, 10L, Some(15L))
-          _ <- side.insertMeta(1, 0, 2000L, 20L, Some(25L))
-          result <- metaStore.earliestCompleteRoundOf(side.table)
-        } yield result.value shouldBe 21L
-      }
-
       s"[$sideName] only consider the meta row from own history_id" in {
         for {
           metaStore1 <- newStores()
@@ -318,6 +305,17 @@ class DbActivityRecordMetaStoreTest
           result <- metaStore1.earliestCompleteRoundOf(side1.table)
         } yield result shouldBe None
       }
+    }
+
+    // App-side-only: extra meta has no code/user version, so there's
+    // only ever one row per store.
+    "[app] use current meta row when multiple meta rows exist" in {
+      for {
+        metaStore <- newStores()
+        _ <- metaStore.insertAppActivityRecordMetaForTesting(0, 0, 1000L, 10L, Some(15L))
+        _ <- metaStore.insertAppActivityRecordMetaForTesting(1, 0, 2000L, 20L, Some(25L))
+        result <- metaStore.earliestCompleteRoundOf(metaStore.Tables.appActivityRecordMeta)
+      } yield result.value shouldBe 21L
     }
   }
 
@@ -340,16 +338,6 @@ class DbActivityRecordMetaStoreTest
         } yield result.value shouldBe 42L
       }
 
-      s"[$sideName] use the current version's meta row when multiple meta rows exist" in {
-        for {
-          metaStore <- newStores()
-          side = pickSide(metaStore)
-          _ <- side.insertMeta(0, 0, 1000L, 10L, Some(15L))
-          _ <- side.insertMeta(1, 0, 2000L, 20L, None)
-          result <- metaStore.earliestIngestedRoundOf(side.table)
-        } yield result.value shouldBe 20L
-      }
-
       s"[$sideName] only consider the meta row from own history_id" in {
         for {
           metaStore1 <- newStores()
@@ -360,6 +348,16 @@ class DbActivityRecordMetaStoreTest
           result <- metaStore1.earliestIngestedRoundOf(side1.table)
         } yield result shouldBe None
       }
+    }
+
+    // App-side-only: extra meta has no code/user version.
+    "[app] use the current version's meta row when multiple meta rows exist" in {
+      for {
+        metaStore <- newStores()
+        _ <- metaStore.insertAppActivityRecordMetaForTesting(0, 0, 1000L, 10L, Some(15L))
+        _ <- metaStore.insertAppActivityRecordMetaForTesting(1, 0, 2000L, 20L, None)
+        result <- metaStore.earliestIngestedRoundOf(metaStore.Tables.appActivityRecordMeta)
+      } yield result.value shouldBe 20L
     }
   }
 
@@ -444,7 +442,7 @@ class DbActivityRecordMetaStoreTest
   ): Future[DbActivityRecordMetaStore.MetaCheckResult] =
     futureUnlessShutdownToFuture(
       storage.underlying.queryAndUpdate(
-        metaStore.ensureExtraMetaDBIO(ingestionStart, lastArchivedRoundO, exitOnDowngrade = false),
+        metaStore.ensureExtraMetaDBIO(ingestionStart, lastArchivedRoundO),
         "test.ensureExtraMeta",
       )
     )
