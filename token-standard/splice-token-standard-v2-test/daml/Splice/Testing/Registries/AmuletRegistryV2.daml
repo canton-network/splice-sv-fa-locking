@@ -63,6 +63,7 @@ import Splice.ExternalPartyConfigState
 import Splice.ExternalPartyAmuletRules
 import Splice.Fees
 import Splice.GovernanceLock
+import Splice.GovernanceLock.Request
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock (UnlockProposal(..), unlockProposalTarget)
@@ -259,7 +260,8 @@ registryApi_getTransferFactory
   -> Script (EnrichedFactoryChoice TransferFactory TransferFactory_Transfer)
 registryApi_getTransferFactory registry arg = do
   (extAmuletRulesCid, extAmuletRulesD) <- getExtAmuletRulesWithDisclosures registry
-  transferC <- getExternalPartyConfigStateContext registry
+  (externalPartyConfigStateCid, transferC) <- getExternalPartyConfigStateContext' registry
+  Some externalPartyConfigState <- queryContractId registry.dso externalPartyConfigStateCid
   openRoundC <-
     if arg.transfer.receiver.owner == Some trafficPurchaseReceiver
       then getOpenRoundContext registry
@@ -272,8 +274,30 @@ registryApi_getTransferFactory registry arg = do
   featuredAppRightC <- case optPreapproval of
     None -> pure emptyOpenApiChoiceContext
     Some preapproval -> getFeaturedAppRightContext registry preapproval.provider
+  let governanceLockRequest = parseGovernanceLockRequestTSv1 @(Either Text)
+        registry.dso
+        (TSU.regularAccountOwner arg.transfer.sender)
+        (TSU.regularAccountOwner arg.transfer.receiver)
+        externalPartyConfigState.governanceLockConfig
+        arg.transfer.meta
+      governanceLockTarget = case governanceLockRequest of
+        Left _ -> None
+        Right (GLR_CreateGovernanceLock _fullSpec) -> None
+        Right (GLR_UnlockGovernanceLock target _unlockAmount _vestingStartTime) -> Some target
+        Right (GLR_TransferLock specification _newOwner _transferAmount) ->
+          Some GovernanceLockKey with
+            dso = registry.dso
+            owner = TSU.regularAccountOwner arg.transfer.sender
+            specification
+        Right (GLR_WithdrawVestingLock target _vestedUntilTime) -> Some target
+        Right (GLR_SubstituteLock target _newControllers) -> Some target
+  tryGovernanceLockC <- forA governanceLockTarget (registryApi_tryGovernanceLockDisclosures registry)
+  let governanceLockC = case tryGovernanceLockC of
+        None -> mempty
+        Some (Left _) -> mempty
+        Some (Right ctx) -> ctx
   let fullContext = withExtraDisclosures extAmuletRulesD
-        (transferC <> openRoundC <> preapprovalC <> featuredAppRightC)
+        (transferC <> openRoundC <> preapprovalC <> featuredAppRightC <> governanceLockC)
   pure EnrichedFactoryChoice with
     factoryCid = toInterfaceContractId @TransferFactory extAmuletRulesCid
     arg = arg with extraArgs = arg.extraArgs with context = fullContext.choiceContext
@@ -326,10 +350,8 @@ registryApi_getTransferInstruction_AcceptContext registry instrCid = do
     pure $ withExtraDisclosures lockedAmuletD mempty
   governanceLockSubstitutionC <- registryApi_getTransferInstruction_governanceLockSubstitution registry (coerceContractId instrCid)
   governanceLockTransferC <- registryApi_getTransferInstruction_governanceLockTransfer registry (coerceContractId instrCid)
-  unlockProposalC <- registryApi_getTransferFactory_optGetContext @UnlockProposal registry (coerceContractId instrCid) \proposal ->
-    registryApi_governanceLockDisclosures registry (unlockProposalTarget proposal.specification)
-  withdrawVestedFundsProposalC <- registryApi_getTransferFactory_optGetContext @WithdrawVestedFundsProposal registry (coerceContractId instrCid) \proposal ->
-    registryApi_governanceLockDisclosures registry (withdrawVestedFundsProposalTarget proposal.specification)
+  unlockProposalC <- registryApi_getTransferInstruction_unlockProposal registry (coerceContractId instrCid)
+  withdrawVestedFundsProposalC <- registryApi_getTransferInstruction_withdrawVestedFundsProposal registry (coerceContractId instrCid)
   pure $ transferC <> fold amuletTransferInstrC <> fold governanceLockSubstitutionC <> fold governanceLockTransferC <>
     fold unlockProposalC <> fold withdrawVestedFundsProposalC
 
@@ -358,7 +380,10 @@ registryApi_getTransferInstruction_abortTwoStepTransferContext registry instrCid
         pure expireLockC
   governanceLockSubstitutionC <- registryApi_getTransferInstruction_governanceLockSubstitution registry (coerceContractId instrCid)
   governanceLockTransferC <- registryApi_getTransferInstruction_governanceLockTransfer registry (coerceContractId instrCid)
-  pure $ fold amuletTransferInstrC <> fold governanceLockSubstitutionC <> fold governanceLockTransferC
+  unlockProposalC <- registryApi_getTransferInstruction_unlockProposal registry (coerceContractId instrCid)
+  withdrawVestedFundsProposalC <- registryApi_getTransferInstruction_withdrawVestedFundsProposal registry (coerceContractId instrCid)
+  pure $ fold amuletTransferInstrC <> fold governanceLockSubstitutionC <> fold governanceLockTransferC <>
+    fold unlockProposalC <> fold withdrawVestedFundsProposalC
 
 registryApi_getTransferFactory_optGetContext
   :  forall t o. (HasEnsure t, Template t)
@@ -387,22 +412,40 @@ registryApi_getTransferInstruction_governanceLockTransfer registry lockTransferC
   registryApi_getTransferFactory_optGetContext registry lockTransferCid \lockTransfer ->
     registryApi_governanceLockDisclosures registry lockTransfer.source
 
+registryApi_getTransferInstruction_unlockProposal
+  : AmuletRegistry -> ContractId UnlockProposal -> Script (Optional OpenApiChoiceContext)
+registryApi_getTransferInstruction_unlockProposal registry proposalCid =
+  registryApi_getTransferFactory_optGetContext registry proposalCid \proposal ->
+    registryApi_governanceLockDisclosures registry (unlockProposalTarget proposal.specification)
+
+registryApi_getTransferInstruction_withdrawVestedFundsProposal
+  : AmuletRegistry -> ContractId WithdrawVestedFundsProposal -> Script (Optional OpenApiChoiceContext)
+registryApi_getTransferInstruction_withdrawVestedFundsProposal registry proposalCid =
+  registryApi_getTransferFactory_optGetContext registry proposalCid \proposal ->
+    registryApi_governanceLockDisclosures registry (withdrawVestedFundsProposalTarget proposal.specification)
+
 -- | Disclose the governance locks with the given key and their locked amulets.
 -- The party whose vote completes a lock proposal executes it, and that party may have no visibility into
 -- the locks or their locked amulets, e.g. the receiver of a transfer or a custom controller of the lock.
 -- Fails if no lock has the given key.
-registryApi_governanceLockDisclosures : AmuletRegistry -> GovernanceLockKey -> Script OpenApiChoiceContext
-registryApi_governanceLockDisclosures registry lockKey = do
+registryApi_tryGovernanceLockDisclosures : AmuletRegistry -> GovernanceLockKey -> Script (Either Text OpenApiChoiceContext)
+registryApi_tryGovernanceLockDisclosures registry lockKey = do
   -- unlocking the source lock needs the external party config state
   transferC <- getExternalPartyConfigStateContext registry
   locks <- queryAllByKey @GovernanceLock registry.dso lockKey
-  lockD <- case locks of
-    [] -> assertFail $ "Failed to find lock with key " <> show lockKey
-    _ -> fmap fold $ forA locks \(lockCid, lock) -> do
+  case locks of
+    [] -> pure $ Left $ "Failed to find lock with key " <> show lockKey
+    _ -> fmap (Right . fold) $ forA locks \(lockCid, lock) -> do
       lockD <- queryDisclosure' registry.dso lockCid
       lockedAmuletD <- queryDisclosure' @LockedAmulet registry.dso lock.lockedAmulet
-      pure $ lockD <> lockedAmuletD
-  pure $ withExtraDisclosures lockD transferC
+      pure $ withExtraDisclosures (lockD <> lockedAmuletD) transferC
+
+registryApi_governanceLockDisclosures : AmuletRegistry -> GovernanceLockKey -> Script OpenApiChoiceContext
+registryApi_governanceLockDisclosures registry lockKey = do
+  result <- registryApi_tryGovernanceLockDisclosures registry lockKey
+  case result of
+    Left err -> assertFail err
+    Right ctx -> pure ctx
 
 registryApi_getAllocation_abortTwoStepTransferContext
   : AmuletRegistry -> ContractId Allocation -> Script OpenApiChoiceContext
@@ -468,17 +511,20 @@ getExtAmuletRulesWithDisclosures registry = do
   extAmuletRulesD <- queryDisclosure' registry.dso extAmuletRulesCid
   pure (extAmuletRulesCid, extAmuletRulesD)
 
-getExternalPartyConfigStateContext : AmuletRegistry -> Script OpenApiChoiceContext
-getExternalPartyConfigStateContext registry = do
+getExternalPartyConfigStateContext' : AmuletRegistry -> Script (ContractId ExternalPartyConfigState, OpenApiChoiceContext)
+getExternalPartyConfigStateContext' registry = do
   extPartyConfigs <- query @ExternalPartyConfigState registry.dso
   let (newestConfigCid, _) = case maximumOn (\(_, c) -> c.targetArchiveAfter) extPartyConfigs of
         None -> error "No ExternalPartyConfigState found: have you initialized the Amulet registry?"
         Some c -> c
   extConfigDD <- queryDisclosure' @ExternalPartyConfigState registry.dso newestConfigCid
-  pure OpenApiChoiceContext with
+  pure (newestConfigCid, OpenApiChoiceContext with
     choiceContext = mkAmuletContext $ TextMap.fromList
         [(externalPartyConfigStateContextKey, AV_ContractId $ coerceContractId newestConfigCid)]
-    disclosures = extConfigDD
+    disclosures = extConfigDD)
+
+getExternalPartyConfigStateContext : AmuletRegistry -> Script OpenApiChoiceContext
+getExternalPartyConfigStateContext registry = snd <$> getExternalPartyConfigStateContext' registry
 
 lookupPreapprovalWithContext : AmuletRegistry -> Party -> Script (Optional TransferPreapproval, OpenApiChoiceContext)
 lookupPreapprovalWithContext registry receiver = do
