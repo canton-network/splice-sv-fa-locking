@@ -11,15 +11,28 @@ module Splice.Scripts.TestGovernanceLockCustomControllers where
 import DA.Action (unless, void)
 import DA.Assert ((===))
 import DA.Foldable (forA_)
+import DA.Map qualified as Map
+import DA.Time
 import Daml.Script
 
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal qualified as Proposal
+import Splice.GovernanceLock.Unlock
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.TokenStandard.Utils (toAnyContractId)
+
+setupCustomControllersTest : Script TestEnv
+setupCustomControllersTest = do
+  env@TestEnv{..} <- setupTest
+  forA_ [charlie, provider1, instrId.admin] WalletClientV2.createBatchingUtility
+  pure env
+
+-- Substitution
+---------------
 
 testCustomControllers_substitution_fullLock_tsv1 : Script ()
 testCustomControllers_substitution_fullLock_tsv1 = testCustomControllers_substitution tsv1Operations False False
@@ -50,8 +63,7 @@ testCustomControllers_selfSubstitution_vestingLock_tsv2 = testCustomControllers_
 -- and provider1's otherwise. The proposal stays pending with bob's vote, and charlie's vote executes it.
 testCustomControllers_substitution : GovernanceLockOperations i r t -> Bool -> Bool -> Script ()
 testCustomControllers_substitution ops selfSubstitution vestingLock = do
-  env@TestEnv{..} <- setupTest
-  forA_ [charlie, provider1, instrId.admin] WalletClientV2.createBatchingUtility
+  env@TestEnv{..} <- setupCustomControllersTest
 
   let targetOwner = if selfSubstitution then alice else provider1
       controllers = Some $ makeControllersSpecification [[bob, charlie]]
@@ -104,3 +116,98 @@ testCustomControllers_substitution ops selfSubstitution vestingLock = do
     specification = target.specification
     originalLockCid = Some (toAnyContractId fullLockCid)
     requestedAt = target.requestedAt
+
+-- Unlock
+---------
+
+testCustomControllers_unlock_tsv1 : Script ()
+testCustomControllers_unlock_tsv1 = testCustomControllers_unlock tsv1Operations
+
+testCustomControllers_unlock_tsv2 : Script ()
+testCustomControllers_unlock_tsv2 = testCustomControllers_unlock tsv2Operations
+
+testCustomControllers_unlock : GovernanceLockOperations i r t -> Script ()
+testCustomControllers_unlock ops = do
+  env@TestEnv{..} <- setupCustomControllersTest
+
+  let kind = GLK_FeaturedApp alice
+      vestingPeriod = vestingDurationFor kind None
+      unlockControllers = Some $ makeControllersSpecification [[alice, bob, charlie]]
+      vestingControllers = Some $ makeControllersSpecification [[bob, charlie, provider1]]
+      fullSpec = GLS_FullLock FullLockSpecification with
+        kind
+        controllers = makeGovernanceLockControllers unlockControllers None vestingControllers
+      proposeUnlock lockCid proposer vestingStartTime extraMemoEntries = do
+        result <- ops.optGovernanceUnlock (testEnvRegistries env) lockCid proposer (unlockMemo 20000.0 vestingStartTime <> extraMemoEntries)
+        -- the helper types the pending instruction as a lock, but it's the unlock proposal
+        pure $ fmap (fmap (coerceContractId @GovernanceLock @UnlockProposal)) result
+
+  -- Happy path
+  -------------
+
+  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 fullSpec
+  vestingStartTime <- (`addRelTime` hours 1) <$> getTime
+  Some unlockCid <- expectSuccess $ proposeUnlock lockCid bob vestingStartTime (targetLockOwnerMemoEntries $ key lock)
+  Some unlock <- queryContractId bob unlockCid
+  unlock === UnlockProposal with
+    specification = UnlockProposalSpecification with
+      target = key lock
+      amount = 20000.0
+      vestingStartTime
+    proposers = [bob]
+    votes = Map.singleton bob Proposal.PV_Accept
+    requestedAt = unlock.requestedAt
+    expiresAt = unlock.expiresAt
+    originalProposalCid = None
+  checkLockUntouched alice lockCid lock
+
+  pendingCid <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId unlockCid) alice)
+  _ <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
+
+  ([(_, vestingLock)], [(_, remainingLock)]) <- partition (isVestingLock . snd) <$> query @GovernanceLock alice
+
+  vestingLock === GovernanceLock with
+    dso = lock.dso
+    owner = alice
+    amount = 20000.0
+    lockedAmulet = vestingLock.lockedAmulet
+    specification = GLS_VestingLock VestingLockSpecification with
+      kind
+      vestingPeriod
+      endTime = vestingStartTime `addRelTime` vestingPeriod
+      vestingControllers
+    originalLockCid = Some (toAnyContractId unlockCid)
+    requestedAt = vestingStartTime
+
+  remainingLock === GovernanceLock with
+    dso = lock.dso
+    owner = alice
+    amount = 30000.0
+    lockedAmulet = remainingLock.lockedAmulet
+    specification = fullSpec
+    originalLockCid = Some (toAnyContractId lockCid)
+    requestedAt = lock.requestedAt
+
+  -- Failures
+  -----------
+
+  now <- getTime
+  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 fullSpec
+
+  -- target-lock-owner is required when the lock has custom controllers, regardless of whether the proposer is the lock owner
+  expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeUnlock lockCid alice vestingStartTime []
+  expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeUnlock lockCid bob vestingStartTime []
+
+  -- vestingStartTime must be within the next 90 days
+  expectFailureContaining "Ledger time is at or past deadline 'vestingStartTime'" =<<
+    proposeUnlock lockCid bob (now `addRelTime` hours (-1)) (targetLockOwnerMemoEntries $ key lock)
+  expectFailureContaining "Ledger time is strictly before deadline 'vestingStartTime - 90 days'" =<<
+    proposeUnlock lockCid bob (now `addRelTime` days 91) (targetLockOwnerMemoEntries $ key lock)
+
+  -- acceptance fails after vestingStartTime/expiresAt
+  Some unlockCid <- expectSuccess $ proposeUnlock lockCid bob vestingStartTime (targetLockOwnerMemoEntries $ key lock)
+  setTime $ vestingStartTime `addRelTime` seconds 1
+  expectFailureContaining "Ledger time is at or past deadline 'expiresAt'" =<<
+    tsv2Operations.acceptInstruction env (coerceContractId unlockCid) alice

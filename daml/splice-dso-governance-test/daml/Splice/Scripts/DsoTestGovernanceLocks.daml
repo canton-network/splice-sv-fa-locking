@@ -11,10 +11,12 @@ import DA.Time
 import Daml.Script
 
 import Splice.Amulet (Amulet, FeaturedAppRight(..), LockedAmulet, LockedAmulet_OwnerExpireLockV2(..))
-import Splice.DsoRules (DsoRules, DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(..), DsoRules_GovernanceLockSubstitution_DsoExpire(..), DsoRules_GovernanceLockTransfer_DsoExpire(..), DsoRules_GovernanceLock_DsoExpire(..))
+import Splice.DsoRules (DsoRules, DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(..), DsoRules_GovernanceLockSubstitution_DsoExpire(..), DsoRules_GovernanceLockTransfer_DsoExpire(..), DsoRules_GovernanceLock_DsoExpire(..), DsoRules_UnlockProposal_DsoExpire(..))
 import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers (makeControllersSpecification, makeGovernanceLockControllers)
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
+import Splice.GovernanceLock.Unlock (UnlockProposal(..))
 import Splice.Scripts.DsoTestUtils (initDevNet)
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.Util
@@ -34,7 +36,10 @@ data SharedLockEnv = SharedLockEnv with
   governanceLockCid : ContractId GovernanceLock
 
 setupSharedLock : (AmuletUser -> GovernanceLockKind) -> Script SharedLockEnv
-setupSharedLock kind = do
+setupSharedLock kind = setupSharedLockWithSpec (pure . fullLockSpecification . kind)
+
+setupSharedLockWithSpec : (AmuletUser -> Script GovernanceLockSpecification) -> Script SharedLockEnv
+setupSharedLockWithSpec mkSpecification = do
   (app, _, (sv1, _, _, _)) <- initDevNet
   [(dsoRulesCid, _)] <- query @DsoRules app.dso
 
@@ -45,8 +50,9 @@ setupSharedLock kind = do
       registries = Map.singleton app.dso (MultiRegistry.mkRegistryApisV1V2 app.registry registry)
   WalletClientV2.createBatchingUtility alice.primaryParty
 
+  specification <- mkSpecification alice
   governanceLockCid <- expectSuccess $
-    tsv1Operations.governanceLock (TestEnvRegistries registries registry) alice.primaryParty testVestingAmount (fullLockSpecification (kind alice))
+    tsv1Operations.governanceLock (TestEnvRegistries registries registry) alice.primaryParty testVestingAmount specification
 
   pure SharedLockEnv with ..
 
@@ -693,3 +699,72 @@ testDsoRulesExpireVestingLockTransferNotYetExpired = do
 
   optTransfer <- queryContractId env.app.dso transferCid
   assertMsg "the transfer proposal is still live" (isSome optTransfer)
+
+-- | A DsoRules test environment holding a single unlock proposal made by alice
+-- against her own lock, which bob must also approve.
+data UnlockProposalEnv = UnlockProposalEnv with
+  app : AmuletApp
+  sv1 : Party
+  dsoRulesCid : ContractId DsoRules
+  proposalCid : ContractId UnlockProposal
+  proposal : UnlockProposal
+
+setupUnlockProposal : Script UnlockProposalEnv
+setupUnlockProposal = do
+  -- Custom unlock controllers make the unlock a pending proposal instead of an immediate unlock.
+  SharedLockEnv{..} <- setupSharedLockWithSpec \alice -> do
+    bob <- allocateParty "bob"
+    pure $ GLS_FullLock FullLockSpecification with
+      kind = testLockKind
+      controllers = makeGovernanceLockControllers (Some $ makeControllersSpecification [[alice.primaryParty, bob]]) None None
+
+  vestingStartTime <- (`addRelTime` hours 1) <$> getTime
+  Some pendingCid <- expectSuccess $
+    tsv1Operations.optGovernanceUnlock (TestEnvRegistries registries registry) governanceLockCid alice.primaryParty
+      (unlockMemo testVestingAmount vestingStartTime <> [(targetLockOwnerMemoKey, partyToText alice.primaryParty)])
+  -- the helper types the pending instruction as a lock, but it's the unlock proposal
+  let proposalCid = coerceContractId @GovernanceLock @UnlockProposal pendingCid
+  Some proposal <- queryContractId app.dso proposalCid
+
+  -- The vesting start is before `requestedAt + tokenStandardMaxTTL`, so the proposal expires at the vesting start.
+  proposal.expiresAt === vestingStartTime
+
+  pure UnlockProposalEnv with ..
+
+-- | Happy path: an SV expires an unlock proposal that was not accepted in time.
+testDsoRulesExpireUnlockProposal : Script ()
+testDsoRulesExpireUnlockProposal = do
+  env <- setupUnlockProposal
+
+  setTime (env.proposal.expiresAt `addRelTime` seconds 1)
+
+  submit (actAs env.sv1 <> readAs env.app.dso) $
+    exerciseCmd env.dsoRulesCid DsoRules_UnlockProposal_DsoExpire with
+      proposalCid = env.proposalCid
+      sv = env.sv1
+
+  optProposal <- queryContractId env.app.dso env.proposalCid
+  assertMsg "the unlock proposal has been expired" (isNone optProposal)
+
+-- | Negative: the proposal has not expired yet, so there is nothing to collect.
+testDsoRulesExpireUnlockProposalNotYetExpired : Script ()
+testDsoRulesExpireUnlockProposalNotYetExpired = do
+  env <- setupUnlockProposal
+
+  let expireAsSv1 = do
+        r <- trySubmit (actAs env.sv1 <> readAs env.app.dso) $
+          exerciseCmd env.dsoRulesCid DsoRules_UnlockProposal_DsoExpire with
+            proposalCid = env.proposalCid
+            sv = env.sv1
+        pure (() <$ r)
+
+  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'expiresAt'")
+    expireAsSv1
+
+  -- One second early is still early.
+  setTime (env.proposal.expiresAt `addRelTime` seconds (-1))
+  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'expiresAt'")
+    expireAsSv1
+
+  optProposal <- queryContractId env.app.dso env.proposalCid
+  assertMsg "the unlock proposal is still live" (isSome optProposal)

@@ -31,6 +31,7 @@ module Splice.GovernanceLock (
   validateNewGovernanceLockControllers,
   setNewGovernanceLockControllers,
   validationSucceeds,
+  requireFullLock,
   requireVestingLock,
   governanceLockKind,
   governanceLockObservers,
@@ -42,7 +43,6 @@ module Splice.GovernanceLock (
   -- * Lock operations
   governanceLock_lockForGovernance_impl,
   fetchAndMergeGovernanceLocks,
-  governanceLock_unlockImpl,
   vestingLock_withdrawImpl,
   governanceLock_dsoTransferImpl,
 
@@ -90,6 +90,7 @@ module Splice.GovernanceLock (
   lockAmuletFor,
   unlockAmulet,
   assertInPast24Hours,
+  assertInNextPeriod,
 ) where
 
 import Prelude hiding (forA)
@@ -97,7 +98,6 @@ import DA.Action (foldrA, unless)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
 import DA.Foldable (foldMap, forA_)
-import DA.Functor (($>))
 import DA.List (sortOn)
 import DA.List.Total (head)
 import DA.Map qualified as Map
@@ -285,32 +285,25 @@ template GovernanceLock
 
     choice GovernanceLock_DsoUnlock : GovernanceLock_DsoUnlockResult
       -- ^ Unlock `unlockAmount` of the locked funds as part of an approved unlock.
-      -- `optVestingStartTime` may only be `None` for locks which have no vesting period.
       with
         unlockAmount : Decimal
-        optVestingStartTime : Optional Time
+        vestingStartTime : Time
+        originalProposalCid : Optional AnyContractId
         reason : Text
         context : ExternalPartyTransferContext
         state : ExternalPartyConfigState
       controller dso
       do
+        fullSpec <- requireFullLock specification
+        let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
+        unless (vestingPeriod == days 0) $ assertWithinDeadline "vestingStartTime" vestingStartTime
         require' ("unlockAmount", unlockAmount) isLessOrEqualR ("amount", amount)
         require' ("unlockAmount", unlockAmount) isGreaterR ("zero", 0.0)
         unless (unlockAmount == amount) do
           requireMinimumLock state unlockAmount
           requireMinimumLock state (amount - unlockAmount)
 
-        fullSpec <- requireFullLock specification
-        let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
-            hasNoVestingPeriod = vestingPeriod == days 0
-        vestingStartTime <- case (hasNoVestingPeriod, optVestingStartTime) of
-          (True, _) -> pure $ fromOptional minBound optVestingStartTime
-          (False, None) -> assertFail "Missing vestingStartTime"
-          (False, Some vestingStartTime) -> do
-            assertInNext24Hours "vestingStartTime" vestingStartTime
-            pure vestingStartTime
-
-        governanceLock_dsoUnlockImpl self this fullSpec unlockAmount vestingPeriod vestingStartTime reason context
+        governanceLock_dsoUnlockImpl self this originalProposalCid fullSpec unlockAmount vestingPeriod vestingStartTime reason context
 
     choice GovernanceLock_DsoWithdraw : GovernanceLock_DsoWithdrawResult
       -- ^ Withdraw the funds of this vesting lock that vested until `vestedUntilTime` as part of an approved withdrawal.
@@ -571,17 +564,6 @@ fetchAndMergeGovernanceLocks key context state reason = do
   result@GovernanceLock_DsoMergeResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
   pure result
 
--- | Unlocks `unlockAmount` of a governance lock. `optVestingStartTime` may only be `None` for locks which have no vesting period.
-governanceLock_unlockImpl : ContractId GovernanceLock -> GovernanceLock -> Decimal -> Optional Time -> [Party] -> ExternalPartyTransferContext -> ExternalPartyConfigState -> Text -> Update GovernanceLock_DsoUnlockResult
-governanceLock_unlockImpl self GovernanceLock{..} unlockAmount optVestingStartTime actors context state reason = do
-  checkActors actors [[owner]]
-  exercise self GovernanceLock_DsoUnlock with
-    unlockAmount
-    optVestingStartTime
-    reason
-    context
-    state
-
 vestingLock_withdrawImpl : ContractId GovernanceLock -> GovernanceLock -> Time -> [Party] -> ExternalPartyTransferContext -> Text -> Update GovernanceLock_DsoWithdrawResult
 vestingLock_withdrawImpl self GovernanceLock{..} vestedUntilTime actors context reason = do
   checkActors actors [[owner]]
@@ -624,8 +606,8 @@ governanceLock_lockForGovernance_impl dso amount inputs fullSpecification extraA
 -- The unlocked funds go into a new vesting lock that starts vesting at `vestingStartTime`,
 -- or are released to the owner if the lock kind has no vesting period.
 -- The remaining funds, if any, stay locked in a new full lock.
-governanceLock_dsoUnlockImpl : ContractId GovernanceLock -> GovernanceLock -> FullLockSpecification -> Decimal -> RelTime -> Time -> Text -> ExternalPartyTransferContext -> Update GovernanceLock_DsoUnlockResult
-governanceLock_dsoUnlockImpl lockCid lock@GovernanceLock{..} fullSpec unlockAmount vestingPeriod vestingStartTime reason context = do
+governanceLock_dsoUnlockImpl : ContractId GovernanceLock -> GovernanceLock -> Optional AnyContractId -> FullLockSpecification -> Decimal -> RelTime -> Time -> Text -> ExternalPartyTransferContext -> Update GovernanceLock_DsoUnlockResult
+governanceLock_dsoUnlockImpl lockCid lock@GovernanceLock{..} originalProposalCid fullSpec unlockAmount vestingPeriod vestingStartTime reason context = do
   let endTime = vestingStartTime `addRelTime` vestingPeriod
       specification = GLS_VestingLock VestingLockSpecification with
         kind = fullSpec.kind
@@ -654,7 +636,9 @@ governanceLock_dsoUnlockImpl lockCid lock@GovernanceLock{..} fullSpec unlockAmou
     lockedAmulet
     amount
     specification
-    originalLockCid = guard (unlockAmount == lock.amount) $> fromOptional (toAnyContractId lockCid) originalLockCid
+    originalLockCid = if unlockAmount == lock.amount
+      then Some (fromOptional (toAnyContractId lockCid) originalLockCid)
+      else originalProposalCid
     requestedAt = endTime `addRelTime` (- vestingPeriod))
 
   pure GovernanceLock_DsoUnlockResult with vestingLock; governanceLock; unlockedAmulet
@@ -771,10 +755,10 @@ assertInPast24Hours desc time = do
   assertDeadlineExceeded desc time
   assertWithinDeadline (desc <> " + 1 day") (time `addRelTime` days 1)
 
-assertInNext24Hours : Text -> Time -> Update ()
-assertInNext24Hours desc time = do
+assertInNextPeriod : Text -> RelTime -> Text -> Time -> Update ()
+assertInNextPeriod periodDesc period desc time = do
   assertWithinDeadline desc time
-  assertDeadlineExceeded (desc <> " - 1 day") (time `addRelTime` days (-1))
+  assertDeadlineExceeded (desc <> " - " <> periodDesc) (time `addRelTime` (negate period))
 
 unfeaturedPaymentContextAndConfigFromChoiceContext : Party -> ChoiceContext -> Update (ExternalPartyTransferContext, ExternalPartyConfigState)
 unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
