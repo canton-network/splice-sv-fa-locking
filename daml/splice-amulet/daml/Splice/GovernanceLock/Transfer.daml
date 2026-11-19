@@ -211,7 +211,10 @@ instance Proposal.ProposalOperations GovernanceLockTransfer GovernanceLock_Trans
     lockKey = source
     proposers = [source.owner]
     controllers = governanceLockTransferControllers proposal
-    votes = fromOptional Map.empty votes
+    -- Transfers created before custom controllers were added will have `votes = None`.
+    -- In this case we must provide the proposer's acceptance, the same way it's provided on newly created transfers,
+    -- otherwise a pre-existing transfer is stuck and can never be approved.
+    votes = fromOptional (Map.singleton source.owner Proposal.PV_Accept) votes
     amount
     lockedAmulet = None
     requestedAt
