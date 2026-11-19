@@ -8,7 +8,6 @@ import com.digitalasset.canton.tracing.TraceContext
 import com.digitalasset.canton.resource.DbStorage
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
 import org.lfdecentralizedtrust.splice.scan.store.ScanExtraActivityRecordStore
-import org.lfdecentralizedtrust.splice.scan.store.AppActivityStore.RoundIngestionStatus
 import org.lfdecentralizedtrust.splice.scan.store.db.DbActivityRecordMetaStore
 import org.lfdecentralizedtrust.splice.scan.store.db.DbActivityRecordMetaStore.*
 import org.lfdecentralizedtrust.splice.scan.store.db.DbAppActivityRecordStore
@@ -73,7 +72,13 @@ class DbAppActivityRecordStoreTest
         }
 
         _ <- store.insertAppActivityRecordsForTesting(records)
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, roundNumber, None)
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
+          1,
+          0,
+          baseTs.toMicros,
+          roundNumber,
+          None,
+        )
         // Spot-check first, last and a middle record via row decoders
         first <- store.getRecordByVerdictRowIdForTesting(verdictRowIds(0))
         middle <- store.getRecordByVerdictRowIdForTesting(verdictRowIds(25))
@@ -108,14 +113,20 @@ class DbAppActivityRecordStoreTest
         (store2, historyId2) <- newStore()
         baseTs = CantonTimestamp.now()
         Seq(rowId2) <- insertRecordsForRounds(store2, historyId2, baseTs, ("other", 10L))
-        _ <- store2.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 10L, None)
+        _ <- store2.metaStore.insertAppActivityRecordMetaForTesting(
+          1,
+          0,
+          baseTs.toMicros,
+          10L,
+          None,
+        )
         Seq(rowId1) <- insertRecordsForRounds(
           store1,
           historyId1,
           baseTs.plusSeconds(1L),
           ("own", 20L),
         )
-        _ <- store1.insertActivityRecordMetaForTesting(
+        _ <- store1.metaStore.insertAppActivityRecordMetaForTesting(
           1,
           0,
           baseTs.plusSeconds(1L).toMicros,
@@ -217,7 +228,7 @@ class DbAppActivityRecordStoreTest
         r1 <- appStore.getRecordByVerdictRowIdForTesting(v1.value.rowId)
         r2 <- appStore.getRecordByVerdictRowIdForTesting(v2.value.rowId)
         // Verify meta row was created as a side effect
-        meta <- appStore.lookupActivityRecordMeta(1, 0)
+        meta <- appStore.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         v1 shouldBe defined
         v2 shouldBe defined
@@ -298,7 +309,7 @@ class DbAppActivityRecordStoreTest
           firstActiveRoundO = Some(11L),
           lastArchivedRoundO = Some(10L),
         )
-        meta <- appStore.lookupActivityRecordMeta(1, 0)
+        meta <- appStore.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         meta.value.earliestIngestedRound shouldBe 10L
         meta.value.lastArchivedRound shouldBe Some(10L)
@@ -319,7 +330,7 @@ class DbAppActivityRecordStoreTest
           firstActiveRoundO = Some(7L),
           lastArchivedRoundO = None,
         )
-        meta <- appStore.lookupActivityRecordMeta(1, 0)
+        meta <- appStore.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         // Meta row is created using the firstActiveRoundO
         // even though there are no activity records
@@ -344,7 +355,7 @@ class DbAppActivityRecordStoreTest
         )
         v <- verdictStore.getVerdictByUpdateId("update-no-meta")
         countAfter <- countRecords()
-        meta <- appStore.lookupActivityRecordMeta(1, 0)
+        meta <- appStore.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         v shouldBe defined
         countAfter shouldBe 0L
@@ -366,7 +377,7 @@ class DbAppActivityRecordStoreTest
         )
         // Even on firstSV, missing traffic summaries defer meta creation
         // to a later batch.
-        metaBefore <- appStore.lookupActivityRecordMeta(1, 0)
+        metaBefore <- appStore.metaStore.lookupAppActivityRecordMeta(1, 0)
 
         // A later batch with traffic summaries creates the meta row.
         _ <- verdictStore.insertVerdictsWithAppActivityRecords(
@@ -381,7 +392,7 @@ class DbAppActivityRecordStoreTest
           Seq.empty,
           hasTrafficSummaries = true,
         )
-        metaAfter <- appStore.lookupActivityRecordMeta(1, 0)
+        metaAfter <- appStore.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         metaBefore shouldBe None
 
@@ -409,7 +420,7 @@ class DbAppActivityRecordStoreTest
 
         v <- verdictStore.getVerdictByUpdateId("update-no-activity")
         countAfter <- countRecords()
-        meta <- appStore.lookupActivityRecordMeta(1, 0)
+        meta <- appStore.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         v shouldBe defined
         countAfter shouldBe 0L
@@ -611,7 +622,9 @@ class DbAppActivityRecordStoreTest
     "return None when no meta record exists" in {
       for {
         (store, _) <- newStore()
-        result <- store.earliestRoundWithCompleteAppActivity()
+        result <- store.metaStore.earliestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result shouldBe None
       }
@@ -620,8 +633,10 @@ class DbAppActivityRecordStoreTest
     "return None when last_archived_round is not set" in {
       for {
         (store, _) <- newStore()
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, 0L, 0L, None)
-        result <- store.earliestRoundWithCompleteAppActivity()
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(1, 0, 0L, 0L, None)
+        result <- store.metaStore.earliestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result shouldBe None
       }
@@ -631,8 +646,16 @@ class DbAppActivityRecordStoreTest
       for {
         (store, _) <- newStore()
         baseTs = CantonTimestamp.now()
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 42L, Some(42L))
-        result <- store.earliestRoundWithCompleteAppActivity()
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
+          1,
+          0,
+          baseTs.toMicros,
+          42L,
+          Some(42L),
+        )
+        result <- store.metaStore.earliestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result shouldBe None
       }
@@ -642,8 +665,16 @@ class DbAppActivityRecordStoreTest
       for {
         (store, _) <- newStore()
         baseTs = CantonTimestamp.now()
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 42L, Some(43L))
-        result <- store.earliestRoundWithCompleteAppActivity()
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
+          1,
+          0,
+          baseTs.toMicros,
+          42L,
+          Some(43L),
+        )
+        result <- store.metaStore.earliestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result.value shouldBe 43L
       }
@@ -656,8 +687,16 @@ class DbAppActivityRecordStoreTest
         _ <- insertRecordsForRounds(store, historyId, baseTs, ("gap-10", 10L))
         // Only round 10 has activity; rounds 11 and 12 have zero records but
         // their archival makes them complete.
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 10L, Some(12L))
-        result <- store.earliestRoundWithCompleteAppActivity()
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
+          1,
+          0,
+          baseTs.toMicros,
+          10L,
+          Some(12L),
+        )
+        result <- store.metaStore.earliestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result.value shouldBe 11L
       }
@@ -668,16 +707,24 @@ class DbAppActivityRecordStoreTest
         (store, _) <- newStore()
         baseTs = CantonTimestamp.now()
         // Old meta row from a previous ingestion run starting at round 10
-        _ <- store.insertActivityRecordMetaForTesting(0, 0, baseTs.toMicros, 10L, Some(15L))
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
+          0,
+          0,
+          baseTs.toMicros,
+          10L,
+          Some(15L),
+        )
         // Current meta row starting at round 20
-        _ <- store.insertActivityRecordMetaForTesting(
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
           1,
           0,
           baseTs.plusSeconds(10L).toMicros,
           20L,
           Some(25L),
         )
-        result <- store.earliestRoundWithCompleteAppActivity()
+        result <- store.metaStore.earliestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         // Should use the current meta row (round 20), not the old one (round 10)
         result.value shouldBe 21L
@@ -689,16 +736,24 @@ class DbAppActivityRecordStoreTest
         (store1, _) <- newStore()
         (store2, _) <- newStore()
         baseTs = CantonTimestamp.now()
-        _ <- store2.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 10L, Some(11L))
+        _ <- store2.metaStore.insertAppActivityRecordMetaForTesting(
+          1,
+          0,
+          baseTs.toMicros,
+          10L,
+          Some(11L),
+        )
         // store1's meta has no archived round yet
-        _ <- store1.insertActivityRecordMetaForTesting(
+        _ <- store1.metaStore.insertAppActivityRecordMetaForTesting(
           1,
           0,
           baseTs.plusSeconds(2L).toMicros,
           50L,
           None,
         )
-        result <- store1.earliestRoundWithCompleteAppActivity()
+        result <- store1.metaStore.earliestCompleteRoundOf(
+          store1.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result shouldBe None
       }
@@ -711,7 +766,13 @@ class DbAppActivityRecordStoreTest
           (store, historyId) <- newStore()
           baseTs = CantonTimestamp.now()
           // earliest_ingested_round = -1 so that round 0 = -1 + 1 is considered complete
-          _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, -1L, Some(1L))
+          _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
+            1,
+            0,
+            baseTs.toMicros,
+            -1L,
+            Some(1L),
+          )
           _ <- insertRecordsForRounds(
             store,
             historyId,
@@ -719,7 +780,9 @@ class DbAppActivityRecordStoreTest
             ("round-0", 0L),
             ("round-1", 1L),
           )
-          result <- store.earliestRoundWithCompleteAppActivity()
+          result <- store.metaStore.earliestCompleteRoundOf(
+            store.metaStore.Tables.appActivityRecordMeta
+          )
         } yield {
           // query returns -1 + 1 = 0
           result.value shouldBe 0L
@@ -730,9 +793,17 @@ class DbAppActivityRecordStoreTest
         for {
           (store, historyId) <- newStore()
           baseTs = CantonTimestamp.now()
-          _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, -1L, None)
+          _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
+            1,
+            0,
+            baseTs.toMicros,
+            -1L,
+            None,
+          )
           _ <- insertRecordsForRounds(store, historyId, baseTs, ("round-0", 0L))
-          result <- store.earliestRoundWithCompleteAppActivity()
+          result <- store.metaStore.earliestCompleteRoundOf(
+            store.metaStore.Tables.appActivityRecordMeta
+          )
         } yield {
           result shouldBe None
         }
@@ -747,8 +818,14 @@ class DbAppActivityRecordStoreTest
             versions = DbActivityRecordMetaStore.IngestionVersions(2, 0)
           )
           baseTs = CantonTimestamp.now()
-          _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 0L, Some(1L))
-          _ <- store.insertActivityRecordMetaForTesting(
+          _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
+            1,
+            0,
+            baseTs.toMicros,
+            0L,
+            Some(1L),
+          )
+          _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
             2,
             0,
             baseTs.plusSeconds(10L).toMicros,
@@ -762,7 +839,9 @@ class DbAppActivityRecordStoreTest
             ("round-10", 10L),
             ("round-11", 11L),
           )
-          result <- store.earliestRoundWithCompleteAppActivity()
+          result <- store.metaStore.earliestCompleteRoundOf(
+            store.metaStore.Tables.appActivityRecordMeta
+          )
         } yield {
           result.value shouldBe 11L
         }
@@ -775,7 +854,13 @@ class DbAppActivityRecordStoreTest
           )
           baseTs = CantonTimestamp.now()
           // Version 1 meta row exists from prior run
-          _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 0L, Some(1L))
+          _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
+            1,
+            0,
+            baseTs.toMicros,
+            0L,
+            Some(1L),
+          )
           // Version 2 meta row added by ensureMeta
           _ <- runEnsureMeta(store, (baseTs.toMicros + 1000000L, 10L), Some(11L))
           _ <- insertRecordsForRounds(
@@ -785,7 +870,9 @@ class DbAppActivityRecordStoreTest
             ("round-10", 10L),
             ("round-11", 11L),
           )
-          result <- store.earliestRoundWithCompleteAppActivity()
+          result <- store.metaStore.earliestCompleteRoundOf(
+            store.metaStore.Tables.appActivityRecordMeta
+          )
         } yield {
           // Query reads version 2 meta (earliest_ingested_round = 10),
           // returns Some(11).
@@ -800,7 +887,9 @@ class DbAppActivityRecordStoreTest
     "return None when no meta record exists" in {
       for {
         (store, _) <- newStore()
-        result <- store.earliestIngestedRound()
+        result <- store.metaStore.earliestIngestedRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result shouldBe None
       }
@@ -812,8 +901,10 @@ class DbAppActivityRecordStoreTest
         baseTs = CantonTimestamp.now()
         // Unlike earliestRoundWithCompleteAppActivity, this does not require any
         // archival to have happened yet.
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 42L, None)
-        result <- store.earliestIngestedRound()
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 42L, None)
+        result <- store.metaStore.earliestIngestedRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result.value shouldBe 42L
       }
@@ -823,15 +914,23 @@ class DbAppActivityRecordStoreTest
       for {
         (store, _) <- newStore()
         baseTs = CantonTimestamp.now()
-        _ <- store.insertActivityRecordMetaForTesting(0, 0, baseTs.toMicros, 10L, Some(15L))
-        _ <- store.insertActivityRecordMetaForTesting(
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
+          0,
+          0,
+          baseTs.toMicros,
+          10L,
+          Some(15L),
+        )
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
           1,
           0,
           baseTs.plusSeconds(10L).toMicros,
           20L,
           None,
         )
-        result <- store.earliestIngestedRound()
+        result <- store.metaStore.earliestIngestedRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result.value shouldBe 20L
       }
@@ -842,55 +941,18 @@ class DbAppActivityRecordStoreTest
         (store1, _) <- newStore()
         (store2, _) <- newStore()
         baseTs = CantonTimestamp.now()
-        _ <- store2.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 10L, Some(11L))
-        result <- store1.earliestIngestedRound()
+        _ <- store2.metaStore.insertAppActivityRecordMetaForTesting(
+          1,
+          0,
+          baseTs.toMicros,
+          10L,
+          Some(11L),
+        )
+        result <- store1.metaStore.earliestIngestedRoundOf(
+          store1.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result shouldBe None
-      }
-    }
-  }
-
-  "ingestionStatusForRound" should {
-
-    "return CannotProvide when meta row absent and isFirstSv=false" in {
-      for {
-        (store, _) <- newStore(isFirstSv = false)
-        result <- store.ingestionStatusForRound(5L)
-      } yield {
-        result shouldBe RoundIngestionStatus.CannotProvide
-      }
-    }
-
-    "return Undetermined when meta row absent and isFirstSv=true" in {
-      for {
-        (store, _) <- newStore(isFirstSv = true)
-        result <- store.ingestionStatusForRound(5L)
-      } yield {
-        result shouldBe RoundIngestionStatus.Undetermined
-      }
-    }
-
-    "return CannotProvide when meta row present and roundNumber <= earliestIngested" in {
-      for {
-        (store, _) <- newStore()
-        baseTs = CantonTimestamp.now()
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 10L, Some(11L))
-        atBoundary <- store.ingestionStatusForRound(10L)
-        below <- store.ingestionStatusForRound(5L)
-      } yield {
-        atBoundary shouldBe RoundIngestionStatus.CannotProvide
-        below shouldBe RoundIngestionStatus.CannotProvide
-      }
-    }
-
-    "return Undetermined when meta row present and roundNumber > earliestIngested" in {
-      for {
-        (store, _) <- newStore()
-        baseTs = CantonTimestamp.now()
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 10L, Some(11L))
-        result <- store.ingestionStatusForRound(15L)
-      } yield {
-        result shouldBe RoundIngestionStatus.Undetermined
       }
     }
   }
@@ -900,7 +962,7 @@ class DbAppActivityRecordStoreTest
     "return None when no meta row exists" in {
       for {
         (store, _) <- newStore()
-        result <- store.lookupActivityRecordMeta(1, 0)
+        result <- store.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         result shouldBe None
       }
@@ -909,14 +971,14 @@ class DbAppActivityRecordStoreTest
     "return the meta row after insert" in {
       for {
         (store, _) <- newStore()
-        _ <- store.insertActivityRecordMetaForTesting(
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
           codeVersion = 1,
           userVersion = 0,
           startedIngestingAt = 1000000L,
           earliestIngestedRound = 0L,
           lastArchivedRound = None,
         )
-        result <- store.lookupActivityRecordMeta(1, 0)
+        result <- store.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         result shouldBe defined
         result.value.codeVersion shouldBe 1
@@ -929,23 +991,23 @@ class DbAppActivityRecordStoreTest
     "return the matching version when multiple rows exist" in {
       for {
         (store, _) <- newStore()
-        _ <- store.insertActivityRecordMetaForTesting(
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
           codeVersion = 1,
           userVersion = 0,
           startedIngestingAt = 1000000L,
           earliestIngestedRound = 0L,
           lastArchivedRound = None,
         )
-        _ <- store.insertActivityRecordMetaForTesting(
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
           codeVersion = 2,
           userVersion = 1,
           startedIngestingAt = 2000000L,
           earliestIngestedRound = 5L,
           lastArchivedRound = Some(7L),
         )
-        result1 <- store.lookupActivityRecordMeta(1, 0)
-        result2 <- store.lookupActivityRecordMeta(2, 1)
-        resultMissing <- store.lookupActivityRecordMeta(3, 0)
+        result1 <- store.metaStore.lookupAppActivityRecordMeta(1, 0)
+        result2 <- store.metaStore.lookupAppActivityRecordMeta(2, 1)
+        resultMissing <- store.metaStore.lookupAppActivityRecordMeta(3, 0)
       } yield {
         result1.value.startedIngestingAt shouldBe 1000000L
         result1.value.lastArchivedRound shouldBe None
@@ -960,22 +1022,22 @@ class DbAppActivityRecordStoreTest
       for {
         (store1, _) <- newStore()
         (store2, _) <- newStore()
-        _ <- store1.insertActivityRecordMetaForTesting(
+        _ <- store1.metaStore.insertAppActivityRecordMetaForTesting(
           codeVersion = 1,
           userVersion = 0,
           startedIngestingAt = 1000000L,
           earliestIngestedRound = 0L,
           lastArchivedRound = None,
         )
-        _ <- store2.insertActivityRecordMetaForTesting(
+        _ <- store2.metaStore.insertAppActivityRecordMetaForTesting(
           codeVersion = 1,
           userVersion = 0,
           startedIngestingAt = 9000000L,
           earliestIngestedRound = 0L,
           lastArchivedRound = None,
         )
-        result1 <- store1.lookupActivityRecordMeta(1, 0)
-        result2 <- store2.lookupActivityRecordMeta(1, 0)
+        result1 <- store1.metaStore.lookupAppActivityRecordMeta(1, 0)
+        result2 <- store2.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         result1.value.startedIngestingAt shouldBe 1000000L
         result2.value.startedIngestingAt shouldBe 9000000L
@@ -986,28 +1048,28 @@ class DbAppActivityRecordStoreTest
       for {
         (store1, _) <- newStore()
         (store2, _) <- newStore()
-        _ <- store1.insertActivityRecordMetaForTesting(
+        _ <- store1.metaStore.insertAppActivityRecordMetaForTesting(
           codeVersion = 1,
           userVersion = 0,
           startedIngestingAt = 1000000L,
           earliestIngestedRound = 0L,
           lastArchivedRound = None,
         )
-        _ <- store2.insertActivityRecordMetaForTesting(
+        _ <- store2.metaStore.insertAppActivityRecordMetaForTesting(
           codeVersion = 1,
           userVersion = 0,
           startedIngestingAt = 1000000L,
           earliestIngestedRound = 0L,
           lastArchivedRound = None,
         )
-        _ <- store1.insertActivityRecordMetaForTesting(
+        _ <- store1.metaStore.insertAppActivityRecordMetaForTesting(
           codeVersion = 99,
           userVersion = 99,
           startedIngestingAt = 9999999L,
           earliestIngestedRound = 0L,
           lastArchivedRound = None,
         )
-        result2 <- store2.lookupActivityRecordMeta(1, 0)
+        result2 <- store2.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         result2.value.codeVersion shouldBe 1
         result2.value.userVersion shouldBe 0
@@ -1023,7 +1085,7 @@ class DbAppActivityRecordStoreTest
         (store, _) <- newStore()
         r1 <- runEnsureMeta(store, (1000000L, 10L), Some(9L))
         r2 <- runEnsureMeta(store, (1000000L, 10L))
-        meta <- store.lookupActivityRecordMeta(1, 0)
+        meta <- store.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         r1 shouldBe InsertMeta
         r2 shouldBe Resume
@@ -1037,10 +1099,10 @@ class DbAppActivityRecordStoreTest
       for {
         (store, _) <- newStore()
         // Before ensure, no meta row — startedIngestingAt returns None
-        beforeO <- store.startedIngestingAt
+        beforeO <- store.metaStore.appStartedIngestingAt
         _ <- runEnsureMeta(store, (1000000L, 10L))
         // After ensure, the read path should load from DB
-        afterO <- store.startedIngestingAt
+        afterO <- store.metaStore.appStartedIngestingAt
       } yield {
         beforeO shouldBe None
         afterO shouldBe Some(1000000L)
@@ -1050,9 +1112,9 @@ class DbAppActivityRecordStoreTest
     "return Resume when versions match existing meta" in {
       for {
         (store, _) <- newStore()
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, 1000000L, 10L, None)
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(1, 0, 1000000L, 10L, None)
         result <- runEnsureMeta(store, (2000000L, 20L))
-        meta <- store.lookupActivityRecordMeta(1, 0)
+        meta <- store.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         result shouldBe Resume
         meta.value.startedIngestingAt shouldBe 1000000L
@@ -1063,10 +1125,10 @@ class DbAppActivityRecordStoreTest
     "insert new row and return InsertMeta on version bump" in {
       for {
         (store, _) <- newStore(DbActivityRecordMetaStore.IngestionVersions(2, 0))
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, 1000000L, 10L, Some(15L))
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(1, 0, 1000000L, 10L, Some(15L))
         result <- runEnsureMeta(store, (2000000L, 20L), Some(19L))
-        meta <- store.lookupActivityRecordMeta(2, 0)
-        oldMeta <- store.lookupActivityRecordMeta(1, 0)
+        meta <- store.metaStore.lookupAppActivityRecordMeta(2, 0)
+        oldMeta <- store.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         result shouldBe InsertMeta
         meta.value.codeVersion shouldBe 2
@@ -1080,14 +1142,14 @@ class DbAppActivityRecordStoreTest
     "return DowngradeDetected without modifying the row" in {
       for {
         (store, _) <- newStore()
-        _ <- store.insertActivityRecordMetaForTesting(2, 0, 1000000L, 10L, None)
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(2, 0, 1000000L, 10L, None)
         result <- loggerFactory.assertLogs(
           runEnsureMeta(store, (2000000L, 20L)),
           _.errorMessage should include(
             "App activity ingestion version downgrade detected"
           ),
         )
-        meta <- store.lookupActivityRecordMeta(2, 0)
+        meta <- store.metaStore.lookupAppActivityRecordMeta(2, 0)
       } yield {
         result shouldBe DowngradeDetected(1, 0, 2, 0)
         meta.value.codeVersion shouldBe 2
@@ -1100,7 +1162,7 @@ class DbAppActivityRecordStoreTest
       for {
         (store, _) <- newStore()
         r1 <- runEnsureMeta(store, (1000000L, 10L))
-        meta <- store.lookupActivityRecordMeta(1, 0)
+        meta <- store.metaStore.lookupAppActivityRecordMeta(1, 0)
       } yield {
         r1 shouldBe InsertMeta
         meta.value.earliestIngestedRound shouldBe 10L
@@ -1112,9 +1174,9 @@ class DbAppActivityRecordStoreTest
         (store, _) <- newStore(
           versions = DbActivityRecordMetaStore.IngestionVersions(2, 0)
         )
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, 1000000L, 5L, None)
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(1, 0, 1000000L, 5L, None)
         r1 <- runEnsureMeta(store, (2000000L, 10L))
-        meta <- store.lookupActivityRecordMeta(2, 0)
+        meta <- store.metaStore.lookupAppActivityRecordMeta(2, 0)
       } yield {
         r1 shouldBe InsertMeta
         meta.value.earliestIngestedRound shouldBe 10L
@@ -1129,8 +1191,10 @@ class DbAppActivityRecordStoreTest
         (store, _) <- newStore()
         // Simulate: meta created with earliestRound = 5 (from lastArchivedRound),
         // then lastArchivedRound advances to 7
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, 1000000L, 5L, Some(7L))
-        result <- store.earliestRoundWithCompleteAppActivity()
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(1, 0, 1000000L, 5L, Some(7L))
+        result <- store.metaStore.earliestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result.value shouldBe 6L
       }
@@ -1141,8 +1205,10 @@ class DbAppActivityRecordStoreTest
         (store, _) <- newStore()
         // Fresh network: earliestRound = -1 (no lastArchivedRound at meta creation),
         // then lastArchivedRound advances to 0 after first round closes
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, 1000000L, -1L, Some(0L))
-        result <- store.earliestRoundWithCompleteAppActivity()
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(1, 0, 1000000L, -1L, Some(0L))
+        result <- store.metaStore.earliestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result.value shouldBe 0L
       }
@@ -1154,7 +1220,9 @@ class DbAppActivityRecordStoreTest
     "return None when no meta row exists" in {
       for {
         (store, _) <- newStore()
-        result <- store.latestRoundWithCompleteAppActivity()
+        result <- store.metaStore.latestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result shouldBe None
       }
@@ -1172,7 +1240,9 @@ class DbAppActivityRecordStoreTest
           ("no-meta-11", 11L),
         )
         // No meta row — latestRound returns None, consistent with earliestRound
-        result <- store.latestRoundWithCompleteAppActivity()
+        result <- store.metaStore.latestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result shouldBe None
       }
@@ -1181,14 +1251,16 @@ class DbAppActivityRecordStoreTest
     "return None when last_archived_round is not set" in {
       for {
         (store, _) <- newStore()
-        _ <- store.insertActivityRecordMetaForTesting(
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
           1,
           0,
           CantonTimestamp.now().toMicros,
           42L,
           None,
         )
-        result <- store.latestRoundWithCompleteAppActivity()
+        result <- store.metaStore.latestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result shouldBe None
       }
@@ -1199,8 +1271,16 @@ class DbAppActivityRecordStoreTest
         (store, historyId) <- newStore()
         baseTs = CantonTimestamp.now()
         _ <- insertRecordsForRounds(store, historyId, baseTs, ("gap-10", 10L))
-        _ <- store.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 10L, Some(12L))
-        result <- store.latestRoundWithCompleteAppActivity()
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
+          1,
+          0,
+          baseTs.toMicros,
+          10L,
+          Some(12L),
+        )
+        result <- store.metaStore.latestCompleteRoundOf(
+          store.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result.value shouldBe 12L
       }
@@ -1211,8 +1291,16 @@ class DbAppActivityRecordStoreTest
         (store1, _) <- newStore()
         (store2, _) <- newStore()
         baseTs = CantonTimestamp.now()
-        _ <- store2.insertActivityRecordMetaForTesting(1, 0, baseTs.toMicros, 10L, Some(11L))
-        result <- store1.latestRoundWithCompleteAppActivity()
+        _ <- store2.metaStore.insertAppActivityRecordMetaForTesting(
+          1,
+          0,
+          baseTs.toMicros,
+          10L,
+          Some(11L),
+        )
+        result <- store1.metaStore.latestCompleteRoundOf(
+          store1.metaStore.Tables.appActivityRecordMeta
+        )
       } yield {
         result shouldBe None
       }
@@ -1224,7 +1312,7 @@ class DbAppActivityRecordStoreTest
     "fail when no meta row exists" in {
       for {
         (store, _) <- newStore()
-        result <- store.assertCompleteActivity(10L).failed
+        result <- store.metaStore.appAssertCompleteActivity(10L).failed
       } yield {
         result.getMessage should include("Incomplete app activity")
       }
@@ -1233,14 +1321,14 @@ class DbAppActivityRecordStoreTest
     "fail when last_archived_round is not set" in {
       for {
         (store, _) <- newStore()
-        _ <- store.insertActivityRecordMetaForTesting(
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
           1,
           0,
           CantonTimestamp.now().toMicros,
           10L,
           None,
         )
-        result <- store.assertCompleteActivity(11L).failed
+        result <- store.metaStore.appAssertCompleteActivity(11L).failed
       } yield {
         result.getMessage should include("Incomplete app activity")
       }
@@ -1249,17 +1337,17 @@ class DbAppActivityRecordStoreTest
     "pass only for rounds after the first ingested round and up to the last archived round" in {
       for {
         (store, _) <- newStore()
-        _ <- store.insertActivityRecordMetaForTesting(
+        _ <- store.metaStore.insertAppActivityRecordMetaForTesting(
           1,
           0,
           CantonTimestamp.now().toMicros,
           10L,
           Some(12L),
         )
-        _ <- store.assertCompleteActivity(11L)
-        _ <- store.assertCompleteActivity(12L)
-        tooEarly <- store.assertCompleteActivity(10L).failed
-        tooLate <- store.assertCompleteActivity(13L).failed
+        _ <- store.metaStore.appAssertCompleteActivity(11L)
+        _ <- store.metaStore.appAssertCompleteActivity(12L)
+        tooEarly <- store.metaStore.appAssertCompleteActivity(10L).failed
+        tooLate <- store.metaStore.appAssertCompleteActivity(13L).failed
       } yield {
         tooEarly.getMessage should include("Incomplete app activity")
         tooLate.getMessage should include("Incomplete app activity")
