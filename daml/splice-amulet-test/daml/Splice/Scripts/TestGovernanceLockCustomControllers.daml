@@ -228,13 +228,17 @@ testCustomControllers_withdraw : GovernanceLockOperations i r t -> Script ()
 testCustomControllers_withdraw ops = do
   env@TestEnv{..} <- setupCustomControllersTest
 
-  let fullSpec = GLS_FullLock FullLockSpecification with
+  let fullSpec controllers = GLS_FullLock FullLockSpecification with
         kind = GLK_FeaturedApp alice
-        controllers = makeGovernanceLockControllers None None (Some $ makeControllersSpecification [[alice, bob, charlie]])
-      setupLock = do
-        (fullLockCid, _) <- lockWithSpec ops env alice 60000.0 fullSpec
+        controllers = makeGovernanceLockControllers None None (Some $ makeControllersSpecification controllers)
+      setupLock controllers = do
+        (fullLockCid, _) <- lockWithSpec ops env alice 60000.0 (fullSpec controllers)
         (vestingLockCid, vestingLock) <- vestingLockFor ops env alice fullLockCid 60000.0
-        pure (fullLockCid, vestingLockCid, vestingLock)
+        -- vestingLockFor sets unlockAt to 1 hour in the future
+        -- We calculate vestedUntilTime as that time + 20 days, which is 1/3 of the way into the vesting period (60 days)
+        passTime (days 20 + hours 1 + seconds 1)
+        vestedUntilTime <- (`addRelTime` seconds (-1)) <$> getTime
+        pure (fullLockCid, vestingLockCid, vestingLock, vestedUntilTime)
       proposeWithdraw lockCid proposer vestedUntilTime extraMemoEntries = do
         result <- ops.vestingWithdraw env lockCid proposer (withdrawMemo vestedUntilTime <> extraMemoEntries)
         -- the helper types the pending instruction as a lock, but it's the withdrawal proposal
@@ -243,13 +247,8 @@ testCustomControllers_withdraw ops = do
   -- Happy path
   -------------
 
-  (fullLockCid, vestingLockCid, vestingLock) <- setupLock
+  (fullLockCid, vestingLockCid, vestingLock, vestedUntilTime) <- setupLock [[alice, bob, charlie]]
   vestingSpec <- requireVestingLock vestingLock.specification
-
-  -- vestingLockFor sets unlockAt to 1 hour in the future
-  -- We calculate vestedUntilTime as that time + 20 days, which is 1/3 of the way into the vesting period (60 days)
-  passTime (days 20 + hours 1 + seconds 1)
-  vestedUntilTime <- (`addRelTime` seconds (-1)) <$> getTime
 
   Some withdrawCid <- expectSuccess $ proposeWithdraw vestingLockCid alice vestedUntilTime (targetLockOwnerMemoEntries $ key vestingLock)
   Some withdraw <- queryContractId alice withdrawCid
@@ -271,21 +270,31 @@ testCustomControllers_withdraw ops = do
   _ <- tsv2Operations.expectPendingTransfer =<<
     expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
 
-  [(_, remainingLock)] <- query @GovernanceLock alice
-  remainingLock === GovernanceLock with
-    dso = vestingLock.dso
-    owner = alice
-    amount = 40000.0
-    lockedAmulet = remainingLock.lockedAmulet
-    specification = GLS_VestingLock vestingSpec with vestingPeriod = days 40
-    originalLockCid = Some (toAnyContractId fullLockCid)
-    requestedAt = vestingLock.requestedAt
+  let checkRemainingLock fullLockCid vestingLock = do
+        vestingSpec <- requireVestingLock vestingLock.specification
+        [(remainingLockCid, remainingLock)] <- query @GovernanceLock alice
+        remainingLock === GovernanceLock with
+          dso = vestingLock.dso
+          owner = alice
+          amount = 40000.0
+          lockedAmulet = remainingLock.lockedAmulet
+          specification = GLS_VestingLock vestingSpec with vestingPeriod = days 40
+          originalLockCid = Some (toAnyContractId fullLockCid)
+          requestedAt = vestingLock.requestedAt
+        -- archive the remaining lock so later tests don't see it
+        submit (actAs remainingLock.dso <> actAs alice) $ archiveCmd remainingLockCid
+
+  checkRemainingLock fullLockCid vestingLock
+
+  -- A non-owner proposer can withdraw in a single step
+  (fullLockCid, vestingLockCid, vestingLock, vestedUntilTime) <- setupLock [[alice, bob], [charlie]]
+  expectSuccess $ proposeWithdraw vestingLockCid charlie vestedUntilTime (targetLockOwnerMemoEntries $ key vestingLock)
+  checkRemainingLock fullLockCid vestingLock
 
   -- Failures
   -----------
 
-  now <- getTime
-  (_, vestingLockCid, vestingLock) <- setupLock
+  (_, vestingLockCid, vestingLock, vestedUntilTime) <- setupLock [[alice, bob], [charlie]]
 
   -- target-lock-owner is required when the lock has custom controllers, regardless of whether the proposer is the lock owner
   expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeWithdraw vestingLockCid alice vestedUntilTime []
@@ -293,4 +302,13 @@ testCustomControllers_withdraw ops = do
 
   -- vestedUntilTime must be in the past
   expectFailureContaining "Ledger time is strictly before deadline 'vestedUntilTime'" =<<
-    proposeWithdraw vestingLockCid bob (now `addRelTime` seconds 1) (targetLockOwnerMemoEntries $ key vestingLock)
+    proposeWithdraw vestingLockCid bob (vestedUntilTime `addRelTime` seconds 2) (targetLockOwnerMemoEntries $ key vestingLock)
+
+  -- An old withdrawal executed after a newer one fails since vesting time has advanced
+  vestedUntilTime <- (`addRelTime` seconds (-1)) <$> getTime
+  Some oldWithdrawCid <- expectSuccess $ proposeWithdraw vestingLockCid alice vestedUntilTime (targetLockOwnerMemoEntries $ key vestingLock)
+  passTime (days 1)
+  Some newWithdrawCid <- expectSuccess $ proposeWithdraw vestingLockCid alice (vestedUntilTime `addRelTime` days 1) (targetLockOwnerMemoEntries $ key vestingLock)
+  tsv2Operations.expectPendingTransfer =<< expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId newWithdrawCid) charlie)
+  expectFailureContaining "Failed to find lock with key" =<<
+    tryFailureStatus (tsv2Operations.acceptInstruction env (coerceContractId oldWithdrawCid) charlie)

@@ -395,7 +395,7 @@ submitWithTransferContext registry options commands = do
 expectSuccess : (CanAssert m, Show err) => m (Either err a) -> m a
 expectSuccess a = a >>= errorIfLeft
 
-expectFailureContaining : Text -> Either SubmitError a -> Script ()
+expectFailureContaining : Show e => Text -> Either e a -> Script ()
 expectFailureContaining needle (Right _) =
   fail $ "Expected a failure containing '" <> needle <> "', but the submission succeeded"
 expectFailureContaining needle (Left err) =
