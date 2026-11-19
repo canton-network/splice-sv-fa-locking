@@ -47,6 +47,8 @@ template GovernanceLockTransfer with
       -- ^ When the transfer proposal expires.
     newControllers : Optional GovernanceLockControllers
       -- ^ New custom controllers of the transferred lock.
+      -- Note: the new controllers are specified by the sender of the transfer, rather than the receiver.
+      -- This is an accepted departure from CIP-0127.
     votes : Optional Proposal.ProposalVotes
       -- ^ Votes recorded so far.
     originalProposalCid : Optional (ContractId GovernanceLockTransfer)
