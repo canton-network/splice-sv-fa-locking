@@ -29,6 +29,9 @@
     - SV app automation now archives a suspended featured app right once its underlock grace period
       has passed, while `featuredAppUnderlockEnforcementEnabled` is true.
 
+    - SV app automation now executes `RevokeFeaturedAppRightInstruction`s, archiving the provider's
+      featured app right, and archives the instructions that expire before they are executed.
+
   - Governance locks
 
     - The `cip-127/*` metadata entries (e.g. `cip-127/lock-kind` and `cip-127/lock-status`), which were created by accident in the metadata, are no longer
