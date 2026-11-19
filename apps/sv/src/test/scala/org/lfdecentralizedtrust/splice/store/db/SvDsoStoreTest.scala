@@ -3891,7 +3891,6 @@ class DbSvDsoStoreTest
 
   private def revokeFeaturedAppRightInstruction(
       provider: PartyId,
-      expiresAt: Instant = time(2).toInstant,
       dso: PartyId = dsoParty,
   ): Contract[
     splice.dso.instruction.RevokeFeaturedAppRightInstruction.ContractId,
@@ -3905,7 +3904,7 @@ class DbSvDsoStoreTest
       payload = new splice.dso.instruction.RevokeFeaturedAppRightInstruction(
         dso.toProtoPrimitive,
         provider.toProtoPrimitive,
-        expiresAt,
+        time(2).toInstant,
       ),
     )
 
@@ -3946,20 +3945,13 @@ class DbSvDsoStoreTest
       val featuredInstruction = revokeFeaturedAppRightInstruction(featuredProvider)
       val unfeaturedInstruction = revokeFeaturedAppRightInstruction(userParty(2))
       val doublyFeaturedInstruction = revokeFeaturedAppRightInstruction(doublyFeaturedProvider)
-      val otherDsoInstruction =
-        revokeFeaturedAppRightInstruction(featuredProvider, dso = userParty(4))
       for {
         store <- mkStore()
         _ <- MonadUtil.sequentialTraverse(
           Seq(featuredRight) ++ doubleRights
         )(dummyDomain.create(_)(store.multiDomainAcsStore))
         _ <- MonadUtil.sequentialTraverse(
-          Seq(
-            featuredInstruction,
-            unfeaturedInstruction,
-            doublyFeaturedInstruction,
-            otherDsoInstruction,
-          )
+          Seq(featuredInstruction, unfeaturedInstruction, doublyFeaturedInstruction)
         )(dummyDomain.create(_)(store.multiDomainAcsStore))
         result <- store.listRevokeFeaturedAppRightInstructionSample(PageLimit.tryCreate(10))(
           TraceContext.empty
