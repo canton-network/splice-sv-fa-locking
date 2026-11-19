@@ -32,7 +32,6 @@ import org.lfdecentralizedtrust.splice.scan.config.AnalyzableTimeWindowConfig
 import org.lfdecentralizedtrust.splice.scan.store.ScanExtraActivityRecordStore
 import org.lfdecentralizedtrust.splice.scan.store.db.{
   DbActivityRecordMetaStore,
-  DbAppActivityRecordStore,
   DbScanAppRewardsStore,
 }
 import org.lfdecentralizedtrust.splice.scan.store.db.DbScanAppRewardsStore.{
@@ -168,18 +167,10 @@ class CryptoHashEquivalenceIntegrationTest extends IntegrationTest with WalletTe
         isFirstSv = false,
         loggerFactory,
       )
-      val appActivityRecordStore = new DbAppActivityRecordStore(
-        storage,
-        updateHistory,
-        metaStore,
-        isFirstSv = false,
-        initialRound = 0L,
-        loggerFactory,
-      )
       rewardsStore = new DbScanAppRewardsStore(
         storage,
         updateHistory,
-        appActivityRecordStore,
+        metaStore,
         extraActivityRecordStore,
         BigDecimal(0.001),
         loggerFactory,

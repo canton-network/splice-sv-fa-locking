@@ -150,7 +150,7 @@ object DbScanAppRewardsStore {
 class DbScanAppRewardsStore(
     storage: DbStorage,
     updateHistory: UpdateHistory,
-    appActivityRecordStore: DbAppActivityRecordStore,
+    activityRecordMetaStore: DbActivityRecordMetaStore,
     extraActivityRecordStore: DbExtraActivityRecordStore,
     rewardMintingAllowanceTolerance: BigDecimal,
     override protected val loggerFactory: NamedLoggerFactory,
@@ -751,7 +751,7 @@ class DbScanAppRewardsStore(
     import profile.api.jdbcActionExtensionMethods
 
     for {
-      _ <- appActivityRecordStore.assertCompleteActivity(roundNumber)
+      _ <- activityRecordMetaStore.appAssertCompleteActivity(roundNumber)
       _ <- runUpdate(
         (for {
           _ <- aggregateActivityTotalsAction(roundNumber)
@@ -779,7 +779,7 @@ class DbScanAppRewardsStore(
       roundNumber: Long
   )(implicit tc: TraceContext): Future[Unit] =
     for {
-      _ <- appActivityRecordStore.assertCompleteActivity(roundNumber)
+      _ <- activityRecordMetaStore.appAssertCompleteActivity(roundNumber)
       _ <- runUpdate(
         aggregateActivityTotalsAction(roundNumber)
           .map(_ => logger.debug(s"Aggregated activity totals for round $roundNumber.")),

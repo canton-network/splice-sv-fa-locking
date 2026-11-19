@@ -106,12 +106,12 @@ import org.lfdecentralizedtrust.splice.scan.metrics.ScanHttpApiMetrics.{
 }
 import org.lfdecentralizedtrust.splice.scan.store.{
   AcsSnapshotStore,
-  AppActivityStore,
+  ActivityRecordMetaStore,
   ScanEventStore,
   ScanStore,
   TxLogEntry,
 }
-import org.lfdecentralizedtrust.splice.scan.store.AppActivityStore.RoundIngestionStatus
+import org.lfdecentralizedtrust.splice.scan.store.ActivityRecordMetaStore.RoundIngestionStatus
 import org.lfdecentralizedtrust.splice.scan.store.bulk.{
   BulkObjectKind,
   BulkObjectsAvailability,
@@ -175,7 +175,7 @@ class HttpScanHandler(
     protected val storeWithIngestion: AppStoreWithIngestion[ScanStore],
     updateHistory: UpdateHistory,
     appRewardsStore: DbScanAppRewardsStore,
-    appActivityStore: AppActivityStore,
+    activityRecordMetaStore: ActivityRecordMetaStore,
     snapshotStore: AcsSnapshotStore,
     eventStore: ScanEventStore,
     historicalVotesStore: HistoricalVotesStore,
@@ -2899,7 +2899,7 @@ class HttpScanHandler(
   ] = {
     implicit val tc = extracted
     withSpan(s"$workflowId.getRewardAccountingEarliestAvailableRound") { _ => _ =>
-      appActivityStore.earliestRoundWithCompleteAppActivity().map {
+      activityRecordMetaStore.earliestRoundWithCompleteAppActivity().map {
         case Some(round) =>
           ScanResource.GetRewardAccountingEarliestAvailableRoundResponse.OK(
             definitions.GetRewardAccountingEarliestAvailableRoundResponse(round)
@@ -2964,7 +2964,7 @@ class HttpScanHandler(
               undetermined
           }
         case None =>
-          appActivityStore.ingestionStatusForRound(roundNumber).map {
+          activityRecordMetaStore.ingestionStatusForRound(roundNumber).map {
             case RoundIngestionStatus.CannotProvide => cannotProvide
             case RoundIngestionStatus.Undetermined => undetermined
           }
@@ -3003,7 +3003,7 @@ class HttpScanHandler(
             )
           )
         case None =>
-          appActivityStore.ingestionStatusForRound(roundNumber).map {
+          activityRecordMetaStore.ingestionStatusForRound(roundNumber).map {
             case RoundIngestionStatus.CannotProvide => cannotProvide
             case RoundIngestionStatus.Undetermined => undetermined
           }

@@ -14,7 +14,7 @@ import org.lfdecentralizedtrust.splice.automation.{
 import org.lfdecentralizedtrust.splice.scan.metrics.RewardComputationMetrics
 import org.lfdecentralizedtrust.splice.scan.rewards.RewardComputationInputs
 import org.lfdecentralizedtrust.splice.scan.store.{
-  AppActivityStore,
+  ActivityRecordMetaStore,
   ScanAppRewardsStore,
   ScanRewardsReferenceStore,
 }
@@ -36,7 +36,7 @@ import scala.concurrent.{ExecutionContext, Future}
   */
 class RewardComputationTrigger(
     appRewardsStore: ScanAppRewardsStore,
-    appActivityStore: AppActivityStore,
+    activityRecordMetaStore: ActivityRecordMetaStore,
     rewardsReferenceStore: ScanRewardsReferenceStore,
     updateHistory: UpdateHistory,
     override protected val context: TriggerContext,
@@ -74,8 +74,8 @@ class RewardComputationTrigger(
         candidateRounds = candidates.map(_.payload.round.number.toLong).distinct.sorted
         computedRounds <- appRewardsStore.roundsWithComputedRewards(candidateRounds)
         afterComputedFilter = candidateRounds.filterNot(computedRounds.contains)
-        earliestCompleteO <- appActivityStore.earliestRoundWithCompleteAppActivity()
-        latestCompleteO <- appActivityStore.latestRoundWithCompleteAppActivity()
+        earliestCompleteO <- activityRecordMetaStore.earliestRoundWithCompleteAppActivity()
+        latestCompleteO <- activityRecordMetaStore.latestRoundWithCompleteAppActivity()
         eligible = (earliestCompleteO, latestCompleteO) match {
           case (Some(earliest), Some(latest)) =>
             afterComputedFilter.filter(r => r >= earliest && r <= latest)

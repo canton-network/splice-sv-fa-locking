@@ -16,7 +16,10 @@ import org.lfdecentralizedtrust.splice.environment.SynchronizerNode.LocalSynchro
 import org.lfdecentralizedtrust.splice.scan.config.ScanAppBackendConfig
 import org.lfdecentralizedtrust.splice.scan.metrics.ScanMediatorVerdictIngestionMetrics
 import org.lfdecentralizedtrust.splice.scan.rewards.AppActivityComputation
-import org.lfdecentralizedtrust.splice.scan.store.ScanRewardsReferenceStore
+import org.lfdecentralizedtrust.splice.scan.store.{
+  ActivityRecordMetaStore,
+  ScanRewardsReferenceStore,
+}
 import org.lfdecentralizedtrust.splice.scan.store.db.DbScanVerdictStore
 import org.lfdecentralizedtrust.splice.scan.ScanSynchronizerNode
 import org.lfdecentralizedtrust.splice.store.DomainTimeSynchronization
@@ -31,6 +34,7 @@ class ScanVerdictAutomationService(
     protected val loggerFactory: NamedLoggerFactory,
     grpcClientMetrics: GrpcClientMetrics,
     store: DbScanVerdictStore,
+    activityRecordMetaStore: ActivityRecordMetaStore,
     migrationId: Long,
     synchronizerId: SynchronizerId,
     ingestionMetrics: ScanMediatorVerdictIngestionMetrics,
@@ -58,6 +62,7 @@ class ScanVerdictAutomationService(
       synchronizerNodes = synchronizerNodes,
       grpcClientMetrics = grpcClientMetrics,
       store = store,
+      activityRecordMetaStore = activityRecordMetaStore,
       migrationId = migrationId,
       synchronizerId = synchronizerId,
       ingestionMetrics = ingestionMetrics,

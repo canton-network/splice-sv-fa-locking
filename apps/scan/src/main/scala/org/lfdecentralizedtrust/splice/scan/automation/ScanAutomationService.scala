@@ -26,7 +26,7 @@ import org.lfdecentralizedtrust.splice.store.{
 }
 import org.lfdecentralizedtrust.splice.scan.store.{
   AcsSnapshotStore,
-  AppActivityStore,
+  ActivityRecordMetaStore,
   ScanRewardsReferenceStore,
   ScanStore,
 }
@@ -53,7 +53,7 @@ class ScanAutomationService(
     store: ScanStore,
     val updateHistory: UpdateHistory,
     appRewardsStore: DbScanAppRewardsStore,
-    appActivityStore: AppActivityStore,
+    activityRecordMetaStore: ActivityRecordMetaStore,
     storage: DbStorage,
     snapshotStore: AcsSnapshotStore,
     svParty: PartyId,
@@ -89,7 +89,7 @@ class ScanAutomationService(
     registerTrigger(
       new RewardComputationTrigger(
         appRewardsStore,
-        appActivityStore,
+        activityRecordMetaStore,
         rewardsReferenceStore,
         updateHistory,
         triggerContext,
