@@ -16,16 +16,15 @@ create table extra_app_activity_record_store
 
     -- Dedup target for ON CONFLICT DO NOTHING under retry-forever inserts,
     -- mirroring app_activity_record_store's PK on verdict_row_id.
+    -- round_number omitted: it is functionally determined by record_time
+    -- (the mining round open at record_time is deterministic).
     constraint extra_app_activity_record_store_pkey
-        primary key (store_id, round_number, record_time)
+        primary key (store_id, record_time)
 );
 
 -- Used to compute the per-party totals for a round
 create index extra_app_activity_record_store_sid_rn_idx on
   extra_app_activity_record_store (store_id, round_number);
-
-create index extra_app_activity_record_store_sid_rt_idx on
-  extra_app_activity_record_store (store_id, record_time);
 
 -- Metadata for extra activity record ingestion runs, analogous to app_activity_record_meta.
 -- The store_id should never be modified as that could result in loss of activity data.
