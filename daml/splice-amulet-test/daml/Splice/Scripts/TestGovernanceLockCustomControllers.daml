@@ -135,7 +135,7 @@ testCustomControllers_unlock ops = do
       vestingPeriod = vestingDurationFor kind None
       unlockControllers = Some $ makeControllersSpecification [[alice, bob, charlie]]
       vestingControllers = Some $ makeControllersSpecification [[bob, charlie, provider1]]
-      fullSpec = GLS_FullLock FullLockSpecification with
+      fullSpec = FullLockSpecification with
         kind
         controllers = makeGovernanceLockControllers unlockControllers None vestingControllers
       proposeUnlock lockCid proposer vestingStartTime extraMemoEntries = do
@@ -146,13 +146,15 @@ testCustomControllers_unlock ops = do
   -- Happy path
   -------------
 
-  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 fullSpec
+  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 (GLS_FullLock fullSpec)
   vestingStartTime <- (`addRelTime` hours 1) <$> getTime
   Some unlockCid <- expectSuccess $ proposeUnlock lockCid bob vestingStartTime (targetLockOwnerMemoEntries $ key lock)
   Some unlock <- queryContractId bob unlockCid
   unlock === UnlockProposal with
     specification = UnlockProposalSpecification with
-      target = key lock
+      dso = lock.dso
+      owner = lock.owner
+      fullSpec
       amount = 20000.0
       vestingStartTime
     proposers = [bob]
@@ -187,7 +189,7 @@ testCustomControllers_unlock ops = do
     owner = alice
     amount = 30000.0
     lockedAmulet = remainingLock.lockedAmulet
-    specification = fullSpec
+    specification = GLS_FullLock fullSpec
     originalLockCid = Some (toAnyContractId lockCid)
     requestedAt = lock.requestedAt
 
@@ -195,7 +197,7 @@ testCustomControllers_unlock ops = do
   -----------
 
   now <- getTime
-  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 fullSpec
+  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 (GLS_FullLock fullSpec)
 
   -- target-lock-owner is required when the lock has custom controllers, regardless of whether the proposer is the lock owner
   expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeUnlock lockCid alice vestingStartTime []
@@ -253,7 +255,9 @@ testCustomControllers_withdraw ops = do
   Some withdraw <- queryContractId alice withdrawCid
   withdraw === WithdrawVestedFundsProposal with
     specification = WithdrawVestedFundsSpecification with
-      target = key vestingLock
+      dso = vestingLock.dso
+      owner = vestingLock.owner
+      vestingSpec
       lockedAmount = vestingLock.amount
       vestedUntilTime
     proposers = [alice]
@@ -261,7 +265,6 @@ testCustomControllers_withdraw ops = do
     requestedAt = withdraw.requestedAt
     expiresAt = withdraw.expiresAt
     originalProposalCid = None
-  withdraw.specification.vestedUntilTime === vestedUntilTime
   checkLockUntouched alice vestingLockCid vestingLock
 
   pendingCid <- tsv2Operations.expectPendingTransfer =<<

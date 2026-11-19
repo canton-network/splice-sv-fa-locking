@@ -13,6 +13,7 @@ module Splice.GovernanceLock.Withdraw (
   -- * State and operations
   VestingLockProposeWithdrawArgs(..),
   vestingLock_proposeWithdraw,
+  withdrawVestedFundsProposalTarget,
   calculateUnvestedAmount,
 ) where
 
@@ -36,7 +37,9 @@ import Splice.Types
 import Splice.Util
 
 data WithdrawVestedFundsSpecification = WithdrawVestedFundsSpecification with
-    target : GovernanceLockKey
+    dso : Party
+    owner : Party
+    vestingSpec : VestingLockSpecification
     lockedAmount : Decimal -- ^ Amount being withdrawn.
     vestedUntilTime : Time -- ^ Time at which the vested amount is computed.
   deriving (Eq, Show, Serializable)
@@ -51,13 +54,13 @@ template WithdrawVestedFundsProposal
     originalProposalCid : Optional (ContractId WithdrawVestedFundsProposal)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
-    signatory specification.target.dso, proposers
-    observer specification.target.owner, governanceLockObservers specification.target.specification,
-             allControllers (withdrawVestedFundsControllers specification)
-    ensure (not $ null proposers) && validationSucceeds (requireVestingLock specification.target.specification)
+    signatory specification.dso, proposers
+    observer specification.owner, governanceLockObservers (GLS_VestingLock specification.vestingSpec),
+             allControllers (withdrawVestedFundsProposalControllers specification)
+    ensure (not $ null proposers)
 
     choice WithdrawVestedFunds_DsoExpire : WithdrawVestedFunds_DsoExpireResult
-      controller specification.target.dso
+      controller specification.dso
       do
         assertDeadlineExceeded "expiresAt" expiresAt
         pure WithdrawVestedFunds_DsoExpireResult
@@ -81,14 +84,19 @@ template WithdrawVestedFundsProposal
 data WithdrawVestedFunds_DsoExpireResult = WithdrawVestedFunds_DsoExpireResult {}
   deriving (Serializable)
 
-withdrawVestedFundsControllers : WithdrawVestedFundsSpecification -> ControllersSpecification
-withdrawVestedFundsControllers (WithdrawVestedFundsSpecification target _lockedAmount _vestedUntilTime) =
-  case target.specification of
-    GLS_FullLock spec -> error $ "Unexpected FullLockSpecification in WithdrawVestedFundsProposal: " <> show spec
-    GLS_VestingLock spec -> makeControllersSpecification $ optional [[target.owner]] (.controllers) spec.vestingControllers
+withdrawVestedFundsProposalTarget : WithdrawVestedFundsSpecification -> GovernanceLockKey
+withdrawVestedFundsProposalTarget (WithdrawVestedFundsSpecification dso owner vestingSpec _lockedAmount _vestedUntilTime) =
+  GovernanceLockKey with
+    dso
+    owner
+    specification = GLS_VestingLock vestingSpec
 
-withdrawVestedFundsMetadata : GovernanceLockSpecification -> Metadata
-withdrawVestedFundsMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-withdraw-vested-funds"
+withdrawVestedFundsProposalControllers : WithdrawVestedFundsSpecification -> ControllersSpecification
+withdrawVestedFundsProposalControllers (WithdrawVestedFundsSpecification _dso owner spec _lockedAmount _vestedUntilTime) =
+  makeControllersSpecification $ optional [[owner]] (.controllers) spec.vestingControllers
+
+withdrawVestedFundsProposalMetadata : VestingLockSpecification -> Metadata
+withdrawVestedFundsProposalMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-withdraw-vested-funds" . GLS_VestingLock
 
 vestingLock_withdrawResultToTransferInstructionResult : GovernanceLock_DsoWithdrawResult -> V2.TransferInstructionResult
 vestingLock_withdrawResultToTransferInstructionResult GovernanceLock_DsoWithdrawResult{..} =
@@ -114,11 +122,12 @@ vestingLock_proposeWithdraw : VestingLockProposeWithdrawArgs -> Update (Proposal
 vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
   assertDeadlineExceeded "vestedUntilTime" vestedUntilTime
   let lock = merged.lock
-  requireVestingLock lock.specification
+  vestingSpec <- requireVestingLock lock.specification
 
-  let target = key lock
-      specification = WithdrawVestedFundsSpecification with
-        target
+  let specification = WithdrawVestedFundsSpecification with
+        dso = lock.dso
+        owner = lock.owner
+        vestingSpec
         lockedAmount = lock.amount
         vestedUntilTime
       proposers = List.dedupSort actors
@@ -152,22 +161,20 @@ vestingLock_executeWithdraw Proposal.ProposalExecuteArgs{..} = exercise merged.l
 ------------
 
 instance HasCheckedFetch WithdrawVestedFundsProposal ForDso where
-  contractGroupId WithdrawVestedFundsProposal{..} = ForDso with dso = specification.target.dso
+  contractGroupId WithdrawVestedFundsProposal{..} = ForDso with dso = specification.dso
 
 instance Proposal.ProposalOperations WithdrawVestedFundsProposal GovernanceLock_DsoWithdrawResult where
   mkProposalView WithdrawVestedFundsProposal{..} = Proposal.ProposalView with
-    lockKey = specification.target
+    lockKey = withdrawVestedFundsProposalTarget specification
     proposers
-    controllers = withdrawVestedFundsControllers specification
+    controllers = withdrawVestedFundsProposalControllers specification
     votes
-    amount = case specification.target.specification of
-      GLS_FullLock _ -> 0.0 -- impossible given template validation, but here for exhaustiveness
-      GLS_VestingLock v -> specification.lockedAmount - fromOptional 0.0 (calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount v)
+    amount = specification.lockedAmount - fromOptional 0.0 (calculateUnvestedAmount specification.vestedUntilTime specification.lockedAmount specification.vestingSpec)
     lockedAmulet = None
     requestedAt
     expiresAt
     originalProposalCid
-    meta = withdrawVestedFundsMetadata specification.target.specification
+    meta = withdrawVestedFundsProposalMetadata specification.vestingSpec
 
   recreateProposal votes originalProposalCid proposal =
     let updatedProposal = proposal with votes; originalProposalCid

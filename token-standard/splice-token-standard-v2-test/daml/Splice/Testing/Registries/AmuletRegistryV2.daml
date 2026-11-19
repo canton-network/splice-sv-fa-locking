@@ -65,8 +65,8 @@ import Splice.Fees
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
-import Splice.GovernanceLock.Unlock (UnlockProposal(..))
-import Splice.GovernanceLock.Withdraw (WithdrawVestedFundsProposal(..))
+import Splice.GovernanceLock.Unlock (UnlockProposal(..), unlockProposalTarget)
+import Splice.GovernanceLock.Withdraw (WithdrawVestedFundsProposal(..), withdrawVestedFundsProposalTarget)
 import Splice.Issuance
 import Splice.Schedule
 import Splice.Round
@@ -327,11 +327,11 @@ registryApi_getTransferInstruction_AcceptContext registry instrCid = do
   governanceLockSubstitutionC <- registryApi_getTransferInstruction_governanceLockSubstitution registry (coerceContractId instrCid)
   governanceLockTransferC <- registryApi_getTransferInstruction_governanceLockTransfer registry (coerceContractId instrCid)
   unlockProposalC <- registryApi_getTransferFactory_optGetContext @UnlockProposal registry (coerceContractId instrCid) \proposal ->
-    registryApi_governanceLockDisclosures registry proposal.specification.target
-  withdrawVestedFundsC <- registryApi_getTransferFactory_optGetContext @WithdrawVestedFundsProposal registry (coerceContractId instrCid) \proposal ->
-    registryApi_governanceLockDisclosures registry proposal.specification.target
+    registryApi_governanceLockDisclosures registry (unlockProposalTarget proposal.specification)
+  withdrawVestedFundsProposalC <- registryApi_getTransferFactory_optGetContext @WithdrawVestedFundsProposal registry (coerceContractId instrCid) \proposal ->
+    registryApi_governanceLockDisclosures registry (withdrawVestedFundsProposalTarget proposal.specification)
   pure $ transferC <> fold amuletTransferInstrC <> fold governanceLockSubstitutionC <> fold governanceLockTransferC <>
-    fold unlockProposalC <> fold withdrawVestedFundsC
+    fold unlockProposalC <> fold withdrawVestedFundsProposalC
 
 registryApi_getTransferInstruction_abortTwoStepTransferContext
   : AmuletRegistry -> ContractId TransferInstruction -> Script OpenApiChoiceContext

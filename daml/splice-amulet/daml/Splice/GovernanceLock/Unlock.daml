@@ -12,6 +12,7 @@ module Splice.GovernanceLock.Unlock (
   -- * Operations
   GovernanceLockProposeUnlockArgs(..),
   governanceLock_proposeUnlock,
+  unlockProposalTarget,
 ) where
 
 import DA.Assert (assertDeadlineExceeded)
@@ -34,7 +35,9 @@ import Splice.Types
 import Splice.Util
 
 data UnlockProposalSpecification = UnlockProposalSpecification with
-    target : GovernanceLockKey
+    dso : Party
+    owner : Party
+    fullSpec : FullLockSpecification
     amount : Decimal -- ^ Amount being unlocked.
     vestingStartTime : Time -- ^ Time at which vesting is proposed to start.
   deriving (Eq, Show, Serializable)
@@ -49,13 +52,13 @@ template UnlockProposal
     originalProposalCid : Optional (ContractId UnlockProposal)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
   where
-    signatory specification.target.dso, proposers
-    observer specification.target.owner, governanceLockObservers specification.target.specification,
-             allControllers (unlockProposalControllers specification.target)
-    ensure specification.amount > 0.0 && (not $ null proposers) && validationSucceeds (requireFullLock specification.target.specification)
+    signatory specification.dso, proposers
+    observer specification.owner, governanceLockObservers (GLS_FullLock specification.fullSpec),
+             allControllers (unlockProposalControllers specification)
+    ensure specification.amount > 0.0 && (not $ null proposers)
 
     choice UnlockProposal_DsoExpire : UnlockProposal_DsoExpireResult
-      controller specification.target.dso
+      controller specification.dso
       do
         assertDeadlineExceeded "expiresAt" expiresAt
         pure UnlockProposal_DsoExpireResult
@@ -79,17 +82,22 @@ template UnlockProposal
 data UnlockProposal_DsoExpireResult = UnlockProposal_DsoExpireResult {}
   deriving (Serializable)
 
-optUnlockProposalControllers : GovernanceLockKey -> Optional ControllersSpecification
-optUnlockProposalControllers target = case target.specification of
-  GLS_FullLock spec -> spec.controllers >>= (.unlockControllers)
-  GLS_VestingLock spec -> error $ "Unexpected VestingLockSpecification in UnlockProposal: " <> show spec
+unlockProposalTarget : UnlockProposalSpecification -> GovernanceLockKey
+unlockProposalTarget (UnlockProposalSpecification dso owner fullSpec _amount _vestingStartTime) =
+  GovernanceLockKey with
+    dso
+    owner
+    specification = GLS_FullLock fullSpec
 
-unlockProposalControllers : GovernanceLockKey -> ControllersSpecification
-unlockProposalControllers target =
-  makeControllersSpecification $ optional [[target.owner]] (.controllers) (optUnlockProposalControllers target)
+optUnlockProposalControllers : FullLockSpecification -> Optional ControllersSpecification
+optUnlockProposalControllers spec = spec.controllers >>= (.unlockControllers)
 
-unlockProposalMetadata : GovernanceLockSpecification -> Metadata
-unlockProposalMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-unlock-lock"
+unlockProposalControllers : UnlockProposalSpecification -> ControllersSpecification
+unlockProposalControllers (UnlockProposalSpecification _dso owner spec _amount _vestingStartTime) =
+  makeControllersSpecification $ optional [[owner]] (.controllers) (optUnlockProposalControllers spec)
+
+unlockProposalMetadata : FullLockSpecification -> Metadata
+unlockProposalMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-unlock-lock" . GLS_FullLock
 
 governanceLock_dsoUnlockResultToTransferInstructionResult : GovernanceLock_DsoUnlockResult -> V2.TransferInstructionResult
 governanceLock_dsoUnlockResultToTransferInstructionResult GovernanceLock_DsoUnlockResult{..} =
@@ -115,7 +123,6 @@ governanceLock_proposeUnlock : GovernanceLockProposeUnlockArgs -> Update (Propos
 governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
   assertInPast24Hours "requestedAt" requestedAt
   let lock = merged.lock
-      target = key lock
   fullSpec <- requireFullLock lock.specification
 
   let vestingPeriod = vestingDurationFor fullSpec.kind state.governanceLockConfig
@@ -125,13 +132,15 @@ governanceLock_proposeUnlock GovernanceLockProposeUnlockArgs{..} = do
         (True, _) -> pure (fromOptional minBound optVestingStartTime, maxExpiresAt)
         (False, None) -> assertFail "Missing vestingStartTime"
         (False, Some vestingStartTime) -> do
-          case optUnlockProposalControllers target of
+          case optUnlockProposalControllers fullSpec of
             None -> assertInNextPeriod "1 day" (days 1) "vestingStartTime" vestingStartTime
             Some _ -> assertInNextPeriod "90 days" (days 90) "vestingStartTime" vestingStartTime
           pure (vestingStartTime, min vestingStartTime maxExpiresAt)
 
   let specification = UnlockProposalSpecification with
-        target = key lock
+        dso = lock.dso
+        owner = lock.owner
+        fullSpec
         amount = unlockAmount
         vestingStartTime
       proposers = List.dedupSort actors
@@ -164,20 +173,20 @@ governanceLock_executeUnlock Proposal.ProposalExecuteArgs{..} = exercise merged.
 ------------
 
 instance HasCheckedFetch UnlockProposal ForDso where
-  contractGroupId UnlockProposal{..} = ForDso with dso = specification.target.dso
+  contractGroupId UnlockProposal{..} = ForDso with dso = specification.dso
 
 instance Proposal.ProposalOperations UnlockProposal GovernanceLock_DsoUnlockResult where
   mkProposalView UnlockProposal{..} = Proposal.ProposalView with
-    lockKey = specification.target
+    lockKey = unlockProposalTarget specification
     proposers
-    controllers = unlockProposalControllers specification.target
+    controllers = unlockProposalControllers specification
     votes
     amount = specification.amount
     lockedAmulet = None
     requestedAt
     expiresAt
     originalProposalCid
-    meta = unlockProposalMetadata specification.target.specification
+    meta = unlockProposalMetadata specification.fullSpec
 
   recreateProposal votes originalProposalCid proposal =
     let updatedProposal = proposal with votes; originalProposalCid
