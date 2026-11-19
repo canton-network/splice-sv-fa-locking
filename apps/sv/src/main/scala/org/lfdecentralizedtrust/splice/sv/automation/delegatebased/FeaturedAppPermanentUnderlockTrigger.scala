@@ -96,7 +96,9 @@ class FeaturedAppPermanentUnderlockTrigger(
             .withSynchronizerId(dsoRules.domain)
             .yieldUnit()
             .map(_ =>
-              TaskSuccess(s"archived ${rights.size} featured app rights past their underlock deadline")
+              TaskSuccess(
+                s"archived ${rights.size} featured app rights past their underlock deadline"
+              )
             )
     } yield outcome
   }
