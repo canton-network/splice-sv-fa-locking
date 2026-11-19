@@ -433,6 +433,38 @@ object GovernanceLockTransferWithdraw
         splice.api.token.transferinstructionv1.TransferInstruction.CHOICE_TransferInstruction_Withdraw,
     )
 
+object UnlockProposalAcceptV2
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.transferinstructionv2.TransferInstruction.INTERFACE,
+      template = splice.governancelock.unlock.UnlockProposal.COMPANION,
+      choice =
+        splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Accept,
+    )
+
+object UnlockProposalRejectV2
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.transferinstructionv2.TransferInstruction.INTERFACE,
+      template = splice.governancelock.unlock.UnlockProposal.COMPANION,
+      choice =
+        splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Reject,
+    )
+
+object UnlockProposalWithdraw
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.transferinstructionv1.TransferInstruction.INTERFACE,
+      template = splice.governancelock.unlock.UnlockProposal.COMPANION,
+      choice =
+        splice.api.token.transferinstructionv1.TransferInstruction.CHOICE_TransferInstruction_Withdraw,
+    )
+
+object UnlockProposalWithdrawV2
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.transferinstructionv2.TransferInstruction.INTERFACE,
+      template = splice.governancelock.unlock.UnlockProposal.COMPANION,
+      choice =
+        splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Withdraw,
+    )
+
 object AmuletCreate {
   type TCid = amuletCodegen.Amulet.ContractId
   type T = amuletCodegen.Amulet

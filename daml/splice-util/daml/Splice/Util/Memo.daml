@@ -29,6 +29,7 @@ module Splice.Util.Memo (
   relTimeFromMicrosecondsMemoFieldParser,
   timeFromMicrosecondsMemoFieldParser,
   partyMemoFieldParser,
+  optionalPartyMemoFieldParser,
   optionalPartiesListsMemoFieldParser,
 
   -- * Encoding
@@ -120,6 +121,9 @@ timeFromMicrosecondsMemoFieldParser = requiredMemoFieldParserFromTextParser time
 
 partyMemoFieldParser : Text -> Parser Memo Party
 partyMemoFieldParser = requiredMemoFieldParserFromTextParser partyParser
+
+optionalPartyMemoFieldParser : Text -> Parser Memo (Optional Party)
+optionalPartyMemoFieldParser = optionalMemoFieldParserFromTextParser partyParser
 
 optionalPartiesListsMemoFieldParser : Text -> Parser Memo (Optional [[Party]])
 optionalPartiesListsMemoFieldParser = optionalMemoFieldParserFromTextParser jsonPartiesListsParser

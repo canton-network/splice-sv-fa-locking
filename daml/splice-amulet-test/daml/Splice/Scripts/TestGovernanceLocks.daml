@@ -526,7 +526,7 @@ tsv1Operations = GovernanceLockOperations with
     optGovernanceUnlock' env cid actor memoEntries =
       unlockAndExtractResult env.registry.instrumentId.admin cid extractPendingGovernanceLock do
         Some lock <- queryContractId env.registry.instrumentId.admin cid
-        request <- lockRequestV1 env.registry lock.owner 0.0
+        request <- lockRequestV1 env.registry actor 0.0
           (tsv1RequestMemo' GLRT_UnlockAndStartVesting lock.specification memoEntries)
         submitLockRequestV1' env.registries actor request
     optGovernanceUnlock env cid actor memoEntries = fmap fst3 <$> optGovernanceUnlock' env cid actor memoEntries
@@ -598,7 +598,7 @@ tsv2Operations = GovernanceLockOperations with
     optGovernanceUnlock' env cid actor memoEntries =
       unlockAndExtractResult env.registry.instrumentId.admin cid extractPendingGovernanceLock do
         Some lock <- queryContractId env.registry.instrumentId.admin cid
-        request <- lockRequestV2 env.registry lock.owner 0.0
+        request <- lockRequestV2 env.registry actor 0.0
           (tsv1RequestMemo' GLRT_UnlockAndStartVesting lock.specification memoEntries)
         submitLockRequestV2' env.registries actor request
 
@@ -818,8 +818,11 @@ lockTargetMemoEntries : GovernanceLockSpecification -> [(Text, Text)]
 lockTargetMemoEntries (GLS_FullLock _) = []
 lockTargetMemoEntries (GLS_VestingLock v) = vestingTargetMemoEntries v.vestingPeriod v.endTime
 
+targetLockOwnerMemoEntries : GovernanceLockKey -> [(Text, Text)]
+targetLockOwnerMemoEntries target = [(targetLockOwnerMemoKey, partyToText target.owner)]
+
 -- | The memo of a request to substitute a lock.
 substitutionMemo : GovernanceLockKey -> [(Text, Text)] -> Text
 substitutionMemo target extraEntries =
   tsv1RequestMemo' GLRT_SubstituteLock target.specification $
-    (targetLockOwnerMemoKey, partyToText target.owner) :: (lockTargetMemoEntries target.specification <> extraEntries)
+    targetLockOwnerMemoEntries target <> lockTargetMemoEntries target.specification <> extraEntries

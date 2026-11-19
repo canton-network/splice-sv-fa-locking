@@ -170,16 +170,17 @@ governanceLock_executeSubstitution : Proposal.ProposalExecuteArgs GovernanceLock
 governanceLock_executeSubstitution Proposal.ProposalExecuteArgs{..} = do
   let (GovernanceLock_DsoMergeResult lockCid lock _changeHolding) = merged
       GovernanceLockSubstitution{..} = proposal
+      originalProposalCid = toAnyContractId <$> optional proposalCid Some originalSubstitutionCid
   -- The target lock owner may not be a controller of the substitution, so act on the target lock
   -- through choices that provide the authority of its owner
-  (newLockedAmulet, remainingLockCid, unlockedAmulet) <- case lockedAmulet of
+  (newLockedAmulet, remainingLockCid, unlockedAmulet, originalLockCid) <- case lockedAmulet of
     Some proposalLockedAmulet -> do
       substituteResult <- exercise lockCid GovernanceLock_DsoSubstitute with
         substitutedAmount = amount
         reason
         context
         state
-      pure (proposalLockedAmulet, substituteResult.remainingLockCid, Some substituteResult.unlockedAmulet)
+      pure (proposalLockedAmulet, substituteResult.remainingLockCid, Some substituteResult.unlockedAmulet, originalProposalCid)
     None -> do
       -- The proposer is the owner of the target lock, so the target lock funds the new lock
       requireMatchExpected ("owner", owner) lock.owner
@@ -189,14 +190,19 @@ governanceLock_executeSubstitution Proposal.ProposalExecuteArgs{..} = do
         reason
         context
         state
-      pure (splitResult.splitAmulet, splitResult.remainingLockCid, None)
+      pure (splitResult.splitAmulet,
+            splitResult.remainingLockCid,
+            None,
+            if amount == lock.amount
+              then Some (fromOptional (toAnyContractId lockCid) lock.originalLockCid)
+              else originalProposalCid)
   newLockCid <- create GovernanceLock with
     dso = target.dso
     owner
     amount
     lockedAmulet = newLockedAmulet
     specification = setNewGovernanceLockControllers target.specification newControllers
-    originalLockCid = toAnyContractId <$> optional proposalCid Some originalSubstitutionCid
+    originalLockCid
     requestedAt = requestedAt
   pure GovernanceLock_SubstitutionResult_Completed with
     lockCid = newLockCid

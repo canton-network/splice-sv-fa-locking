@@ -65,6 +65,7 @@ import Splice.Fees
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
+import Splice.GovernanceLock.Unlock (UnlockProposal(..))
 import Splice.Issuance
 import Splice.Schedule
 import Splice.Round
@@ -324,7 +325,10 @@ registryApi_getTransferInstruction_AcceptContext registry instrCid = do
     pure $ withExtraDisclosures lockedAmuletD mempty
   governanceLockSubstitutionC <- registryApi_getTransferInstruction_governanceLockSubstitution registry (coerceContractId instrCid)
   governanceLockTransferC <- registryApi_getTransferInstruction_governanceLockTransfer registry (coerceContractId instrCid)
-  pure $ transferC <> fold amuletTransferInstrC <> fold governanceLockSubstitutionC <> fold governanceLockTransferC
+  unlockProposalC <- registryApi_getTransferFactory_optGetContext @UnlockProposal registry (coerceContractId instrCid) \proposal ->
+    registryApi_governanceLockDisclosures registry proposal.specification.target
+  pure $ transferC <> fold amuletTransferInstrC <> fold governanceLockSubstitutionC <> fold governanceLockTransferC <>
+    fold unlockProposalC
 
 registryApi_getTransferInstruction_abortTwoStepTransferContext
   : AmuletRegistry -> ContractId TransferInstruction -> Script OpenApiChoiceContext

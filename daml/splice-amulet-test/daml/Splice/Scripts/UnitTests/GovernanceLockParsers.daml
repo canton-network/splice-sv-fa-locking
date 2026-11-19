@@ -193,7 +193,7 @@ expectRequestErrors expected result = case result of
 
 test_governanceLockRequestTSv1Parser : Script ()
 test_governanceLockRequestTSv1Parser = do
-  let run receiver entries = runParser (governanceLockRequestTSv1Parser testAdmin receiver None) (mkMemo entries)
+  let run receiver entries = runParser (governanceLockRequestTSv1Parser testAdmin testAdmin receiver None) (mkMemo entries)
       request r = (requestMemoKey, r)
       faLock = [(lockKindMemoKey, governanceLockTagToText GLT_FeaturedApp), (lockSubjectMemoKey, "provider")]
       faSpecification = fullLockSpecification $ GLK_FeaturedApp testProvider
@@ -218,8 +218,8 @@ test_governanceLockRequestTSv1Parser = do
         :: (vestingStartTimeMemoKey, "2026-01-01T00:00:00Z")
         :: faLock)
     \case
-      GLR_UnlockGovernanceLock{fullSpecification, unlockAmount, vestingStartTime} -> do
-        fullSpecification === faSpecification
+      GLR_UnlockGovernanceLock{target, unlockAmount, vestingStartTime} -> do
+        target.specification === GLS_FullLock faSpecification
         unlockAmount === 10000.0
         vestingStartTime === Some (time (date 2026 Jan 1) 0 0 0)
       _ -> fail "Expected GLR_UnlockGovernanceLock"
@@ -231,8 +231,8 @@ test_governanceLockRequestTSv1Parser = do
   -- Provisional featured app locks do not vest, so their unlock ignores the vesting start time
   let provisionalFaLock = [(lockKindMemoKey, governanceLockTagToText GLT_ProvisionalFeaturedApp), (lockSubjectMemoKey, "provider")]
       expectProvisionalUnlock entries = expectRequest (run lockManagerParty entries) \case
-        GLR_UnlockGovernanceLock{fullSpecification, unlockAmount, vestingStartTime} -> do
-          fullSpecification === fullLockSpecification (GLK_ProvisionalFeaturedApp testProvider)
+        GLR_UnlockGovernanceLock{target, unlockAmount, vestingStartTime} -> do
+          target.specification === GLS_FullLock (fullLockSpecification (GLK_ProvisionalFeaturedApp testProvider))
           unlockAmount === 10000.0
           vestingStartTime === None
         _ -> fail "Expected GLR_UnlockGovernanceLock"
@@ -340,7 +340,7 @@ testAdmin = testParty "registry-admin"
 -- | Parses a substitution request and returns its substitution.
 -- Arguments: registry admin. Input: metadata to be converted to a compat mode memo.
 substitutionTSv1Parser : Party -> Parser Memo GovernanceLockKey
-substitutionTSv1Parser admin = governanceLockRequestTSv1Parser admin lockManagerParty None >>= \case
+substitutionTSv1Parser admin = governanceLockRequestTSv1Parser admin admin lockManagerParty None >>= \case
   GLR_SubstituteLock{target} -> pure target
   result -> assertFail $ "Expected GLR_SubstituteLock but got: " <> show result
 

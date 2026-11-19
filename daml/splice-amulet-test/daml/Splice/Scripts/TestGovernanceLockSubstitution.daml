@@ -17,6 +17,7 @@ import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
 import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
 import Splice.Testing.Utils
+import Splice.TokenStandard.Utils (toAnyContractId)
 
 testSubstitution_governanceLock_tsv1 : Script ()
 testSubstitution_governanceLock_tsv1 = testSubstitution_governanceLock tsv1Operations
@@ -217,6 +218,7 @@ testSubstitution_accept ops = do
   newLock.owner === bob
   newLock.amount === 20000.0
   newLock.specification === newSpec
+  newLock.originalLockCid === Some (toAnyContractId substitutionCid)
   WalletClientV2.checkUnlockedBalance alice instrId 20000.0
   WalletClientV2.checkBalance alice instrId 50000.0
 
@@ -425,13 +427,14 @@ testSelfSubstitution_full_tsv2 = testSelfSubstitution_full tsv2Operations
 
 testSelfSubstitution_full : HasField "senderChangeCids" r [ContractId h] => GovernanceLockOperations i r t -> Script ()
 testSelfSubstitution_full ops = do
-  (env@TestEnv{..}, _, targetSpec) <- setupSelfSubstitution ops $ fullLockSpecification selfSubstitutionKind
+  (env@TestEnv{..}, targetCid, targetSpec) <- setupSelfSubstitution ops $ fullLockSpecification selfSubstitutionKind
 
   selfSubstituteCompleted ops env targetSpec 50000.0
 
   [(newLockCid, newLock)] <- query @GovernanceLock alice
   newLock.amount === 50000.0
   newLock.specification === targetSpec
+  newLock.originalLockCid === Some (toAnyContractId targetCid)
   checkLockedHolding alice newLockCid 50000.0
   WalletClientV2.checkUnlockedBalance alice instrId 0.0
   WalletClientV2.checkBalance alice instrId 50000.0
