@@ -212,6 +212,10 @@ class CryptoHashEquivalenceIntegrationTest extends IntegrationTest with WalletTe
                 1L,
                 0L,
                 0L,
+                0L,
+                0L,
+                0L,
+                0L,
               )
             })
             .futureValue
