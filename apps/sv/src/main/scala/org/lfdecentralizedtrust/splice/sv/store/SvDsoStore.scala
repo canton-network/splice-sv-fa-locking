@@ -612,10 +612,8 @@ trait SvDsoStore
       limit: Limit = defaultLimit
   )(implicit tc: TraceContext): Future[Seq[SvDsoStore.FeaturedAppConfigUpdateInstructionWithRight]]
 
-  /** Returns a random sample of up to `limit` `RevokeFeaturedAppRightInstruction`,
-    * drawn from an arbitrary (unordered) subset of up to 1000 contracts.
-    * Only instructions whose provider has an active FeaturedAppRight,
-    * each paired with that right's contract ID are fetched.
+  /** A random sample of up to `limit` instructions whose provider has a `FeaturedAppRight`,
+    * each paired with that right.
     */
   def listRevokeFeaturedAppRightInstructionSample(
       limit: Limit = defaultLimit
@@ -883,9 +881,6 @@ trait SvDsoStore
   ] =
     multiDomainAcsStore.listExpiredFromPayloadExpiry(FeaturedAppConfigUpdateInstruction.COMPANION)
 
-  /** Lists all expired `RevokeFeaturedAppRightInstruction` contracts, regardless of whether their
-    * provider has a `FeaturedAppRight`.
-    */
   def listExpiredRevokeFeaturedAppRightInstruction: ListExpiredContracts[
     splice.dso.instruction.RevokeFeaturedAppRightInstruction.ContractId,
     splice.dso.instruction.RevokeFeaturedAppRightInstruction,
