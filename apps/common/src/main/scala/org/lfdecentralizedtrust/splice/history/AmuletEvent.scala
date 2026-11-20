@@ -433,6 +433,30 @@ object GovernanceLockTransferWithdraw
         splice.api.token.transferinstructionv1.TransferInstruction.CHOICE_TransferInstruction_Withdraw,
     )
 
+object GovernanceLockTransferAcceptV2
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.transferinstructionv2.TransferInstruction.INTERFACE,
+      template = splice.governancelock.transfer.GovernanceLockTransfer.COMPANION,
+      choice =
+        splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Accept,
+    )
+
+object GovernanceLockTransferRejectV2
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.transferinstructionv2.TransferInstruction.INTERFACE,
+      template = splice.governancelock.transfer.GovernanceLockTransfer.COMPANION,
+      choice =
+        splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Reject,
+    )
+
+object GovernanceLockTransferWithdrawV2
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.transferinstructionv2.TransferInstruction.INTERFACE,
+      template = splice.governancelock.transfer.GovernanceLockTransfer.COMPANION,
+      choice =
+        splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Withdraw,
+    )
+
 object UnlockProposalAcceptV2
     extends InterfaceExerciseNodeCompanion.Mk(
       interface = splice.api.token.transferinstructionv2.TransferInstruction.INTERFACE,
