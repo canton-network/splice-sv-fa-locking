@@ -43,7 +43,6 @@ module Splice.GovernanceLock (
   -- * Lock operations
   governanceLock_lockForGovernance_impl,
   fetchAndMergeGovernanceLocks,
-  governanceLock_dsoTransferImpl,
 
   -- * Lock memo
   dataFromText,

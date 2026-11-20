@@ -56,6 +56,7 @@ data GovernanceLockRequest
   | GLR_TransferLock with
       specification : GovernanceLockSpecification
       newOwner : Party
+      newControllers : Optional GovernanceLockControllers
       transferAmount : Decimal
   | GLR_WithdrawVestingLock with
       target : GovernanceLockKey
@@ -106,16 +107,13 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
       governanceLock_transferFactoryV1_lockImpl dso arg fullSpecification
     GLR_UnlockGovernanceLock{target, unlockAmount, vestingStartTime} ->
       governanceLock_transferFactoryV1_unlockImpl actors arg target unlockAmount vestingStartTime context state
-    GLR_TransferLock{specification,  newOwner, transferAmount} -> do
+    GLR_TransferLock{specification,  newOwner, newControllers, transferAmount} -> do
       checkActors actors [[transfer.sender]]
-      governanceLock_transferFactoryV1_transferLockImpl
-        arg
-        GovernanceLockKey with
-          dso
-          owner = transfer.sender
-          specification
-        newOwner
-        transferAmount
+      let source = GovernanceLockKey with
+            dso
+            owner = transfer.sender
+            specification
+      governanceLock_transferFactoryV1_transferLockImpl arg source newOwner newControllers transferAmount context state
     GLR_WithdrawVestingLock{target, vestedUntilTime} ->
       governanceLock_transferFactoryV1_withdrawVestedFundsImpl actors arg target vestedUntilTime context state
     GLR_SubstituteLock{target, newControllers} -> do
@@ -174,31 +172,36 @@ governanceLock_transferFactoryV1_transferLockImpl
   :  V1.TransferFactory_Transfer
   -> GovernanceLockKey
   -> Party
+  -> Optional GovernanceLockControllers
   -> Decimal
+  -> ExternalPartyTransferContext
+  -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{transfer = inputTransfer, extraArgs} source newOwner transferAmount = do
-  (transferCid, transfer) <- createGovernanceLockTransfer LockTransferArgs with
+governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{transfer = inputTransfer} source newOwner newControllers transferAmount context state = do
+  result <- governanceLock_proposeTransfer GovernanceLockProposeTransferArgs with
     source
     receiver = newOwner
+    newControllers
     amount = transferAmount
+    context
+    state
+    reason = reasonFromMeta inputTransfer.meta
     requestedAt = inputTransfer.requestedAt
-    extraArgs
 
-  -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
-  let outputTransfer = (view $ toInterface @V1.TransferInstruction transfer).transfer
-  requireMatchExpected ("transfer", outputTransfer) inputTransfer with
-    -- The receiver of the transfer is the new owner, not `lockManagerParty`
-    receiver = newOwner
-    amount = outputTransfer.amount
-    executeBefore = outputTransfer.executeBefore
-    inputHoldingCids = outputTransfer.inputHoldingCids
-    meta = transferGovernanceLockMetadata source.specification
+  case result of
+    Right _ -> pure ()
+    Left (_, pendingProposal) -> do
+      -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
+      let outputTransfer = (view $ toInterface @V1.TransferInstruction pendingProposal).transfer
+      requireMatchExpected ("transfer", outputTransfer) inputTransfer with
+        -- The receiver of the transfer is the new owner, not `lockManagerParty`
+        receiver = newOwner
+        amount = outputTransfer.amount
+        executeBefore = outputTransfer.executeBefore
+        inputHoldingCids = outputTransfer.inputHoldingCids
+        meta = governanceLockTransferMetadata pendingProposal
 
-  pure V1.TransferInstructionResult with
-    output = V1.TransferInstructionResult_Pending with
-      transferInstructionCid = toInterfaceContractId transferCid
-    senderChangeCids = []
-    meta = emptyMetadata
+  pure $ downcast $ proposalUpdateResultToTransferInstructionResult None result
 
 governanceLock_transferFactoryV1_withdrawVestedFundsImpl
   :  [Party]
@@ -363,9 +366,11 @@ glr_transferLock_parser = do
   specification <- governanceLockSpecificationParser targetState
   newOwner <- partyMemoFieldParser newLockOwnerMemoKey
   transferAmount <- transferAmountParser
+  newControllers <- newGovernanceLockControllersParser specification
   pure GLR_TransferLock with
     specification
     newOwner
+    newControllers
     transferAmount
 
 glr_substituteLock_parser : Party -> Parser Memo GovernanceLockRequest

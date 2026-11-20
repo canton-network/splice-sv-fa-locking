@@ -251,9 +251,10 @@ test_governanceLockRequestTSv1Parser = do
         :: (transferAmountMemoKey, "1.0")
         :: faLock)
     \case
-      GLR_TransferLock specification newOwner transferAmount -> do
+      GLR_TransferLock specification newOwner newControllers transferAmount -> do
         specification === GLS_FullLock faSpecification
         newOwner === alice
+        newControllers === None
         transferAmount === 1.0
       _ -> fail "Expected GLR_TransferLock"
 

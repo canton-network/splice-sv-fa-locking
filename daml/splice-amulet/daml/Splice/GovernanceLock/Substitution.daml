@@ -230,7 +230,10 @@ instance Proposal.ProposalOperations GovernanceLockSubstitution GovernanceLock_S
     lockKey = target
     proposers = [owner]
     controllers = governanceLockSubstitutionControllers proposal
-    votes = fromOptional Map.empty votes
+    -- Substitutions created before custom controllers were added will have `votes = None`.
+    -- In this case we must provide the proposer's acceptance, the same way it's provided on newly created substitutions,
+    -- otherwise a pre-existing substitution is stuck and can never be approved.
+    votes = fromOptional (Map.singleton owner Proposal.PV_Accept) votes
     amount
     lockedAmulet
     requestedAt

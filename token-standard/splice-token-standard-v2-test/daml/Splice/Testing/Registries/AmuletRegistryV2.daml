@@ -284,7 +284,7 @@ registryApi_getTransferFactory registry arg = do
         Left _ -> None
         Right (GLR_CreateGovernanceLock _fullSpec) -> None
         Right (GLR_UnlockGovernanceLock target _unlockAmount _vestingStartTime) -> Some target
-        Right (GLR_TransferLock specification _newOwner _transferAmount) ->
+        Right (GLR_TransferLock specification _newOwner _newControllers _transferAmount) ->
           Some GovernanceLockKey with
             dso = registry.dso
             owner = TSU.regularAccountOwner arg.transfer.sender

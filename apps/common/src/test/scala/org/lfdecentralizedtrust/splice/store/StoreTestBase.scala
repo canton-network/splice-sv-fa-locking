@@ -628,6 +628,10 @@ abstract class StoreTestBase
         BigDecimal(10).bigDecimal,
         Instant.EPOCH,
         expiresAt,
+        // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
+        Optional.empty(),
+        Optional.empty(),
+        Optional.empty(),
       ),
     )
 
