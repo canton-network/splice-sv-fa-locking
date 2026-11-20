@@ -30,6 +30,9 @@
       the `governanceLockManagementConfig` of the `DsoRules` config, and checks every minute by default
       (`featured-app-underlock-status-update-interval`).
 
+    - SV app automation now archives a suspended featured app right once its underlock grace period
+      has passed, while `featuredAppUnderlockEnforcementEnabled` is true.
+
   - Deployment
 
     - SV onboarding snapshots are kept in `canton.sv-apps.sv.onboarding-snapshots.directory`, a new required setting
