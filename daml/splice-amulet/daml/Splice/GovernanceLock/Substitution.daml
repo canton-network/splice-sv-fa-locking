@@ -256,6 +256,7 @@ instance HasCheckedFetch GovernanceLockSubstitution ForDso where
 instance Proposal.ProposalOperations GovernanceLockSubstitution GovernanceLock_SubstitutionResult_Completed where
   mkProposalView proposal@GovernanceLockSubstitution{..} = Proposal.ProposalView with
     lockKey = target
+    sender = owner
     proposers = governanceLockSubstitutionProposers proposal
     controllers = governanceLockSubstitutionControllers proposal
     votes = governanceLockSubstitutionVotes proposal

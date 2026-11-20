@@ -23,7 +23,6 @@ module Splice.GovernanceLock.Request (
 
 import DA.Action (unless)
 import DA.Assert
-import DA.List qualified as List
 import DA.Optional
 import DA.Text qualified as Text
 import DA.Time

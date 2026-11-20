@@ -235,7 +235,8 @@ instance HasCheckedFetch GovernanceLockTransfer ForDso where
 instance Proposal.ProposalOperations GovernanceLockTransfer GovernanceLock_TransferResult_Completed where
   mkProposalView proposal@GovernanceLockTransfer{..} = Proposal.ProposalView with
     lockKey = source
-    proposers = fromOptional [source.owner] proposers
+    sender = source.owner
+    proposers = governanceLockTransferProposers proposal
     controllers = governanceLockTransferControllers proposal
     votes = governanceLockTransferVotes proposal
     amount
