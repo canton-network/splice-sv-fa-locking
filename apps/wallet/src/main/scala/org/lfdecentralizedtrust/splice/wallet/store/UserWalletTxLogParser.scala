@@ -101,6 +101,10 @@ import org.lfdecentralizedtrust.splice.history.{
   UnlockProposalRejectV2,
   UnlockProposalWithdraw,
   UnlockProposalWithdrawV2,
+  WithdrawVestedFundsAcceptV2,
+  WithdrawVestedFundsRejectV2,
+  WithdrawVestedFundsWithdraw,
+  WithdrawVestedFundsWithdrawV2,
 }
 import org.lfdecentralizedtrust.splice.store.TxLogStore
 import org.lfdecentralizedtrust.splice.util.{
@@ -985,7 +989,7 @@ class UserWalletTxLogParser(
 
           // Executing an unlock or a withdrawal unlocks the funds of the lock owner and locks again
           // the part that stays locked, so the owner's balance changes by the part that becomes available
-          case UnlockProposalAcceptV2(_) =>
+          case UnlockProposalAcceptV2(_) | WithdrawVestedFundsAcceptV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -1079,7 +1083,9 @@ class UserWalletTxLogParser(
 
           case TransferInstruction_Withdraw(_) | GovernanceLockSubstitutionWithdraw(_) |
               GovernanceLockSubstitutionWithdrawV2(_) | GovernanceLockTransferWithdraw(_) |
-              UnlockProposalWithdraw(_) | UnlockProposalWithdrawV2(_) =>
+              UnlockProposalWithdraw(_) | UnlockProposalWithdrawV2(_) | WithdrawVestedFundsWithdraw(
+                _
+              ) | WithdrawVestedFundsWithdrawV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -1100,7 +1106,7 @@ class UserWalletTxLogParser(
 
           case TransferInstruction_Reject(_) | GovernanceLockSubstitutionReject(_) |
               GovernanceLockSubstitutionRejectV2(_) | GovernanceLockTransferReject(_) |
-              UnlockProposalRejectV2(_) =>
+              UnlockProposalRejectV2(_) | WithdrawVestedFundsRejectV2(_) =>
             defer {
               parseTrees(
                 tree,
@@ -1685,6 +1691,9 @@ class UserWalletTxLogParser(
       splice.governancelock.substitution.GovernanceLockSubstitution.COMPANION.getTemplateIdWithPackageId
     ),
     QualifiedName(splice.governancelock.unlock.UnlockProposal.COMPANION.getTemplateIdWithPackageId),
+    QualifiedName(
+      splice.governancelock.withdraw.WithdrawVestedFundsProposal.COMPANION.getTemplateIdWithPackageId
+    ),
   )
 
   // The V1 and V2 choices have the same names

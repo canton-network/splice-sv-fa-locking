@@ -465,6 +465,38 @@ object UnlockProposalWithdrawV2
         splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Withdraw,
     )
 
+object WithdrawVestedFundsAcceptV2
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.transferinstructionv2.TransferInstruction.INTERFACE,
+      template = splice.governancelock.withdraw.WithdrawVestedFundsProposal.COMPANION,
+      choice =
+        splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Accept,
+    )
+
+object WithdrawVestedFundsRejectV2
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.transferinstructionv2.TransferInstruction.INTERFACE,
+      template = splice.governancelock.withdraw.WithdrawVestedFundsProposal.COMPANION,
+      choice =
+        splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Reject,
+    )
+
+object WithdrawVestedFundsWithdraw
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.transferinstructionv1.TransferInstruction.INTERFACE,
+      template = splice.governancelock.withdraw.WithdrawVestedFundsProposal.COMPANION,
+      choice =
+        splice.api.token.transferinstructionv1.TransferInstruction.CHOICE_TransferInstruction_Withdraw,
+    )
+
+object WithdrawVestedFundsWithdrawV2
+    extends InterfaceExerciseNodeCompanion.Mk(
+      interface = splice.api.token.transferinstructionv2.TransferInstruction.INTERFACE,
+      template = splice.governancelock.withdraw.WithdrawVestedFundsProposal.COMPANION,
+      choice =
+        splice.api.token.transferinstructionv2.TransferInstruction.CHOICE_TransferInstruction_Withdraw,
+    )
+
 object AmuletCreate {
   type TCid = amuletCodegen.Amulet.ContractId
   type T = amuletCodegen.Amulet

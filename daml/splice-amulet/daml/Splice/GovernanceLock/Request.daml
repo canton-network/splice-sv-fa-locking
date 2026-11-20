@@ -40,6 +40,7 @@ import Splice.GovernanceLock.Proposal (proposalUpdateResultToTransferInstruction
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock
+import Splice.GovernanceLock.Withdraw
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
 import Splice.Util.Memo
 import Splice.Util.Parser
@@ -57,7 +58,7 @@ data GovernanceLockRequest
       newOwner : Party
       transferAmount : Decimal
   | GLR_WithdrawVestingLock with
-      vestingSpecification : VestingLockSpecification
+      target : GovernanceLockKey
       vestedUntilTime : Time
   | GLR_SubstituteLock with
       target : GovernanceLockKey
@@ -115,9 +116,8 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
           specification
         newOwner
         transferAmount
-    GLR_WithdrawVestingLock{vestingSpecification, vestedUntilTime} -> do
-      checkActors actors [[transfer.sender]]
-      governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso arg vestingSpecification vestedUntilTime context state
+    GLR_WithdrawVestingLock{target, vestedUntilTime} ->
+      governanceLock_transferFactoryV1_withdrawVestedFundsImpl actors arg target vestedUntilTime context state
     GLR_SubstituteLock{target, newControllers} -> do
       checkActors actors [[transfer.sender]]
       governanceLock_transferFactoryV1_substituteImpl dso arg target newControllers context state
@@ -201,27 +201,27 @@ governanceLock_transferFactoryV1_transferLockImpl V1.TransferFactory_Transfer{tr
     meta = emptyMetadata
 
 governanceLock_transferFactoryV1_withdrawVestedFundsImpl
-  :  Party
+  :  [Party]
   -> V1.TransferFactory_Transfer
-  -> VestingLockSpecification
+  -> GovernanceLockKey
   -> Time
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_withdrawVestedFundsImpl dso V1.TransferFactory_Transfer{..} specification vestedUntilTime context state = do
-  let key = GovernanceLockKey with
-        dso
-        owner = transfer.sender
-        specification = GLS_VestingLock specification
-      reason = reasonFromMeta transfer.meta
-  GovernanceLock_DsoMergeResult{lockCid, lock} <- fetchAndMergeGovernanceLocks key context state reason
-  result <- vestingLock_withdrawImpl lockCid lock vestedUntilTime [transfer.sender] context reason
-  pure V1.TransferInstructionResult with
-    output = case result.vestingLock of
-      Some vestingLock -> V1.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId vestingLock
-      None -> V1.TransferInstructionResult_Completed with receiverHoldingCids = []
-    senderChangeCids = [result.vested]
-    meta = emptyMetadata
+governanceLock_transferFactoryV1_withdrawVestedFundsImpl actors V1.TransferFactory_Transfer{..} target vestedUntilTime context state = do
+  checkActor transfer.sender actors
+  let reason = reasonFromMeta transfer.meta
+  merged <- fetchAndMergeGovernanceLocks target context state reason
+  result <- vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs with
+    merged
+    vestedUntilTime
+    actors
+    context
+    state
+    reason
+    requestedAt = transfer.requestedAt
+
+  pure $ downcast $ proposalUpdateResultToTransferInstructionResult None result
 
 governanceLock_transferFactoryV1_substituteImpl
   :  Party
@@ -339,11 +339,17 @@ glr_unlockGovernanceLock_parser dso sender config = do
     unlockAmount
     vestingStartTime
 
-glr_withdrawVestingLock_parser : Parser Memo GovernanceLockRequest
-glr_withdrawVestingLock_parser =
-  GLR_WithdrawVestingLock <$>
-    vestingLockSpecificationParser <*>
-    vestedUntilTimeParser
+glr_withdrawVestingLock_parser : Party -> Party -> Parser Memo GovernanceLockRequest
+glr_withdrawVestingLock_parser dso sender = do
+  specification <- vestingLockSpecificationParser
+  owner <- fromOptional sender <$> optTargetLockOwnerParser specification.vestingControllers
+  vestedUntilTime <- vestedUntilTimeParser
+  pure GLR_WithdrawVestingLock with
+    target = GovernanceLockKey with
+      dso
+      owner
+      specification = GLS_VestingLock specification
+    vestedUntilTime
 
 lockStateParser : Parser Memo LockState
 lockStateParser = optionalMemoFieldParser lockStatusMemoKey >>= \case
@@ -387,7 +393,7 @@ governanceLockRequestTSv1Parser dso sender receiver config = governanceLockReque
     GLRT_CreateLock -> do glr_createGovernanceLock_parser
     GLRT_UnlockAndStartVesting -> glr_unlockGovernanceLock_parser dso sender config
     GLRT_TransferLock -> glr_transferLock_parser
-    GLRT_WithdrawVestedFunds -> glr_withdrawVestingLock_parser
+    GLRT_WithdrawVestedFunds -> glr_withdrawVestingLock_parser dso sender
     GLRT_SubstituteLock -> glr_substituteLock_parser dso)
   where
     checkReceiverIsLockManager : Parser Memo ()

@@ -201,12 +201,12 @@ test_governanceLockRequestTSv1Parser = do
 
   -- Create a lock: the specification is parsed
   expectRequest (run lockManagerParty $ request "create-lock" :: (unlockAmountMemoKey, "1.0") :: faLock) \case
-    GLR_CreateGovernanceLock{fullSpecification} -> fullSpecification === faSpecification
+    GLR_CreateGovernanceLock fullSpecification -> fullSpecification === faSpecification
     _ -> fail "Expected GLR_CreateGovernanceLock"
 
   -- Create a lock
   expectRequest (run lockManagerParty $ request "create-lock" :: faLock) \case
-    GLR_CreateGovernanceLock{fullSpecification} ->
+    GLR_CreateGovernanceLock fullSpecification ->
       fullSpecification === faSpecification
     _ -> fail "Expected GLR_CreateGovernanceLock"
 
@@ -218,7 +218,7 @@ test_governanceLockRequestTSv1Parser = do
         :: (vestingStartTimeMemoKey, "2026-01-01T00:00:00Z")
         :: faLock)
     \case
-      GLR_UnlockGovernanceLock{target, unlockAmount, vestingStartTime} -> do
+      GLR_UnlockGovernanceLock target unlockAmount vestingStartTime -> do
         target.specification === GLS_FullLock faSpecification
         unlockAmount === 10000.0
         vestingStartTime === Some (time (date 2026 Jan 1) 0 0 0)
@@ -231,7 +231,7 @@ test_governanceLockRequestTSv1Parser = do
   -- Provisional featured app locks do not vest, so their unlock ignores the vesting start time
   let provisionalFaLock = [(lockKindMemoKey, governanceLockTagToText GLT_ProvisionalFeaturedApp), (lockSubjectMemoKey, "provider")]
       expectProvisionalUnlock entries = expectRequest (run lockManagerParty entries) \case
-        GLR_UnlockGovernanceLock{target, unlockAmount, vestingStartTime} -> do
+        GLR_UnlockGovernanceLock target unlockAmount vestingStartTime -> do
           target.specification === GLS_FullLock (fullLockSpecification (GLK_ProvisionalFeaturedApp testProvider))
           unlockAmount === 10000.0
           vestingStartTime === None
@@ -251,7 +251,7 @@ test_governanceLockRequestTSv1Parser = do
         :: (transferAmountMemoKey, "1.0")
         :: faLock)
     \case
-      GLR_TransferLock{specification, newOwner, transferAmount} -> do
+      GLR_TransferLock specification newOwner transferAmount -> do
         specification === GLS_FullLock faSpecification
         newOwner === alice
         transferAmount === 1.0
@@ -268,8 +268,8 @@ test_governanceLockRequestTSv1Parser = do
         :: (lockVestingEndTimeMemoKey, "1767225600000000")
         :: faLock)
     \case
-      GLR_WithdrawVestingLock{vestingSpecification, vestedUntilTime} -> do
-        vestingSpecification === VestingLockSpecification with
+      GLR_WithdrawVestingLock target vestedUntilTime -> do
+        target.specification === GLS_VestingLock VestingLockSpecification with
           kind = GLK_FeaturedApp testProvider
           vestingPeriod = days 60
           endTime = time (date 2026 Jan 1) 0 0 0
@@ -341,7 +341,7 @@ testAdmin = testParty "registry-admin"
 -- Arguments: registry admin. Input: metadata to be converted to a compat mode memo.
 substitutionTSv1Parser : Party -> Parser Memo GovernanceLockKey
 substitutionTSv1Parser admin = governanceLockRequestTSv1Parser admin admin lockManagerParty None >>= \case
-  GLR_SubstituteLock{target} -> pure target
+  GLR_SubstituteLock target _newControllers -> pure target
   result -> assertFail $ "Expected GLR_SubstituteLock but got: " <> show result
 
 -- | The metadata entry that requests a substitution.
