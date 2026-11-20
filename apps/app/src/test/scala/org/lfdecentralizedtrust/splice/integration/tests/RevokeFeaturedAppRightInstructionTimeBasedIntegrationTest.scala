@@ -11,9 +11,13 @@ import org.lfdecentralizedtrust.splice.config.ConfigTransforms.{
   ConfigurableApp,
   updateAutomationConfig,
 }
+import org.lfdecentralizedtrust.splice.console.{
+  ValidatorAppBackendReference,
+  WalletAppClientReference,
+}
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.{
-  IntegrationTestWithIsolatedEnvironment,
+  IntegrationTest,
   SpliceTestConsoleEnvironment,
 }
 import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.{
@@ -24,7 +28,7 @@ import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, WalletTestUtil}
 
 @org.lfdecentralizedtrust.splice.util.scalatesttags.SpliceDsoGovernance_0_1_32
 class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
-    extends IntegrationTestWithIsolatedEnvironment
+    extends IntegrationTest
     with HasExecutionContext
     with WalletTestUtil
     with TimeTestUtil {
@@ -41,7 +45,7 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
 
   "ExecuteRevokeFeaturedAppRightInstructionTrigger revokes the provider's featured app right" in {
     implicit env =>
-      val providerParty = setupProviderWithFeaturedAppRight()
+      val providerParty = setupProviderWithFeaturedAppRight(bobWalletClient, bobValidatorBackend)
 
       actAndCheck(
         "SV votes to revoke the provider's featured app right",
@@ -68,7 +72,8 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
 
   "ExpireRevokeFeaturedAppRightInstructionTrigger expires an unexecuted instruction" in {
     implicit env =>
-      val providerParty = setupProviderWithFeaturedAppRight()
+      val providerParty =
+        setupProviderWithFeaturedAppRight(aliceWalletClient, aliceValidatorBackend)
       val voteRequestTimeout =
         sv1Backend.getDsoInfo().dsoRules.payload.config.voteRequestTimeout
 
@@ -104,10 +109,11 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
       .listContracts(RevokeFeaturedAppRightInstruction.COMPANION)
       .futureValue
 
-  private def setupProviderWithFeaturedAppRight()(implicit
-      env: SpliceTestConsoleEnvironment
-  ): PartyId = {
-    val providerParty = onboardWalletUser(bobWalletClient, bobValidatorBackend)
+  private def setupProviderWithFeaturedAppRight(
+      walletClient: WalletAppClientReference,
+      validatorBackend: ValidatorAppBackendReference,
+  )(implicit env: SpliceTestConsoleEnvironment): PartyId = {
+    val providerParty = onboardWalletUser(walletClient, validatorBackend)
     actAndCheck(
       "DSO creates the provider's FeaturedAppRight",
       sv1Backend.participantClientWithAdminToken.ledger_api_extensions.commands
