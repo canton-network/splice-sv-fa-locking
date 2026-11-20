@@ -10,6 +10,7 @@ module Splice.Scripts.TestGovernanceLockProposal where
 
 import DA.Assert ((===))
 import DA.Foldable (forA_)
+import DA.List qualified as List
 import DA.Map qualified as Map
 import DA.Time
 import Daml.Script
@@ -101,6 +102,7 @@ data TestProposalResult = TestProposalResult with
 instance Proposal.ProposalOperations TestProposal TestProposalResult where
   mkProposalView TestProposal{..} = Proposal.ProposalView with
     lockKey
+    sender = List.head proposers
     proposers
     controllers
     votes

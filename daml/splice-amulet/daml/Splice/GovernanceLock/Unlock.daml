@@ -178,6 +178,7 @@ instance HasCheckedFetch UnlockProposal ForDso where
 instance Proposal.ProposalOperations UnlockProposal GovernanceLock_DsoUnlockResult where
   mkProposalView UnlockProposal{..} = Proposal.ProposalView with
     lockKey = unlockProposalTarget specification
+    sender = List.head proposers
     proposers
     controllers = unlockProposalControllers specification
     votes
