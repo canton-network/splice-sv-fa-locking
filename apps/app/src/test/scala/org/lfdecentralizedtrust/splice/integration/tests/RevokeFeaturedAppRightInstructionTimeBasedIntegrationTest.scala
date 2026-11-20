@@ -1,7 +1,6 @@
 package org.lfdecentralizedtrust.splice.integration.tests
 
 import com.digitalasset.canton.topology.PartyId
-import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet.FeaturedAppRight
 import org.lfdecentralizedtrust.splice.codegen.java.splice.dso.instruction.RevokeFeaturedAppRightInstruction
 import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.DsoRules_CreateRevokeFeaturedAppRightInstruction
 import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.actionrequiringconfirmation.ARC_DsoRules
@@ -23,7 +22,7 @@ import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.{
   ExecuteRevokeFeaturedAppRightInstructionTrigger,
   ExpireRevokeFeaturedAppRightInstructionTrigger,
 }
-import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, WalletTestUtil}
+import org.lfdecentralizedtrust.splice.util.{SpliceUtil, TimeTestUtil, WalletTestUtil}
 
 @org.lfdecentralizedtrust.splice.util.scalatesttags.SpliceDsoGovernance_0_1_32
 class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
@@ -44,14 +43,7 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
   "ExecuteRevokeFeaturedAppRightInstructionTrigger revokes the provider's featured app right" in {
     implicit env =>
       val providerParty = setupProviderWithFeaturedAppRight(bobWalletClient, bobValidatorBackend)
-
-      actAndCheck(
-        "SV votes to revoke the provider's featured app right",
-        voteToRevokeFeaturedAppRight(providerParty),
-      )(
-        "the revoke instruction is created",
-        _ => revokeInstructions() should not be empty,
-      )
+      createRevokeInstruction(providerParty)
 
       actAndCheck(
         "the execute trigger runs",
@@ -72,19 +64,12 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
     implicit env =>
       val providerParty =
         setupProviderWithFeaturedAppRight(aliceWalletClient, aliceValidatorBackend)
-      val voteRequestTimeout =
-        sv1Backend.getDsoInfo().dsoRules.payload.config.voteRequestTimeout
-
-      actAndCheck(
-        "SV votes to revoke the provider's featured app right",
-        voteToRevokeFeaturedAppRight(providerParty),
-      )(
-        "the revoke instruction is created",
-        _ => revokeInstructions() should not be empty,
-      )
+      createRevokeInstruction(providerParty)
 
       advanceTime(
-        java.time.Duration.ofNanos(voteRequestTimeout.microseconds * 1000).plusMinutes(1)
+        SpliceUtil
+          .relTimeToDuration(sv1Backend.getDsoInfo().dsoRules.payload.config.voteRequestTimeout)
+          .plusMinutes(1)
       )
 
       actAndCheck(
@@ -113,21 +98,8 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
   )(implicit env: SpliceTestConsoleEnvironment): PartyId = {
     val providerParty = onboardWalletUser(walletClient, validatorBackend)
     actAndCheck(
-      "DSO creates the provider's FeaturedAppRight",
-      sv1Backend.participantClientWithAdminToken.ledger_api_extensions.commands
-        .submitWithResult(
-          userId = sv1Backend.config.ledgerApiUser,
-          actAs = Seq(dsoParty),
-          readAs = Seq.empty,
-          update = new FeaturedAppRight(
-            dsoParty.toProtoPrimitive,
-            providerParty.toProtoPrimitive,
-            java.util.Optional.empty(),
-            java.util.Optional.empty(),
-            java.util.Optional.empty(),
-            java.util.Optional.empty(),
-          ).create,
-        ),
+      "the provider grants itself a FeaturedAppRight",
+      eventuallySucceeds() { walletClient.selfGrantFeaturedAppRight() },
     )(
       "the provider's featured app right is visible in scan",
       _ => sv1ScanBackend.lookupFeaturedAppRight(providerParty) should not be empty,
@@ -135,21 +107,27 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
     providerParty
   }
 
-  private def voteToRevokeFeaturedAppRight(providerParty: PartyId)(implicit
+  private def createRevokeInstruction(providerParty: PartyId)(implicit
       env: SpliceTestConsoleEnvironment
   ): Unit = {
-    val action = new ARC_DsoRules(
-      new SRARC_CreateRevokeFeaturedAppRightInstruction(
-        new DsoRules_CreateRevokeFeaturedAppRightInstruction(providerParty.toProtoPrimitive)
-      )
-    )
-    sv1Backend.createVoteRequest(
-      sv1Backend.getDsoInfo().svParty.toProtoPrimitive,
-      action,
-      "url",
-      "revoke featured app right",
-      sv1Backend.getDsoInfo().dsoRules.payload.config.voteRequestTimeout,
-      None,
+    val dsoInfo = sv1Backend.getDsoInfo()
+    actAndCheck(
+      "SV votes to revoke the provider's featured app right",
+      sv1Backend.createVoteRequest(
+        dsoInfo.svParty.toProtoPrimitive,
+        new ARC_DsoRules(
+          new SRARC_CreateRevokeFeaturedAppRightInstruction(
+            new DsoRules_CreateRevokeFeaturedAppRightInstruction(providerParty.toProtoPrimitive)
+          )
+        ),
+        "url",
+        "revoke featured app right",
+        dsoInfo.dsoRules.payload.config.voteRequestTimeout,
+        None,
+      ),
+    )(
+      "the revoke instruction is created",
+      _ => revokeInstructions() should not be empty,
     )
   }
 }
