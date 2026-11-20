@@ -1,6 +1,5 @@
 package org.lfdecentralizedtrust.splice.integration.tests
 
-import com.digitalasset.canton.HasExecutionContext
 import com.digitalasset.canton.topology.PartyId
 import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet.FeaturedAppRight
 import org.lfdecentralizedtrust.splice.codegen.java.splice.dso.instruction.RevokeFeaturedAppRightInstruction
@@ -29,7 +28,6 @@ import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, WalletTestUtil}
 @org.lfdecentralizedtrust.splice.util.scalatesttags.SpliceDsoGovernance_0_1_32
 class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
     extends IntegrationTest
-    with HasExecutionContext
     with WalletTestUtil
     with TimeTestUtil {
 
