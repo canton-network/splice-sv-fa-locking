@@ -485,6 +485,7 @@ data GovernanceLockOperations iface result transfer = GovernanceLockOperations w
   proposeSubstitution
     :  TestEnvRegistries
     -> Party
+    -> [Party]
     -> LockSubstitutionArgs
     -> Script (Either SubmitError result)
   proposeTransfer'
@@ -550,9 +551,10 @@ tsv1Operations = GovernanceLockOperations with
           (vestingLockMemoEntries times.vestingPeriod times.endTime <> memoEntries))
       fmap extractPendingGovernanceLock <$> submitLockRequestV1' env.registries actor request
 
-    proposeSubstitution env proposer args@LockSubstitutionArgs{..} = do
+    proposeSubstitution env owner proposers args@LockSubstitutionArgs{..} = do
+      unless (proposers == [owner]) $ assertFail $ "TSv1 only supports a substitution owner, got proposers: " <> show proposers
       requestedAt <- optional getTime pure args.requestedAt
-      submitTSv1Request env.registries env.registry proposer amount (substitutionMemo target extraMemoEntries) requestedAt
+      submitTSv1Request env.registries env.registry owner amount (substitutionMemo target extraMemoEntries) requestedAt
 
     proposeTransfer' env proposers transfer map = do
       unless (length proposers == 1) $ assertFail $ "TSv1 only supports one transfer proposer, got: " <> show proposers
@@ -604,7 +606,7 @@ tsv2Operations = GovernanceLockOperations with
   where
     governanceLock env owner amount spec = do
       now <- getTime
-      result <- submitTSv2Request env.registries env.registry owner amount (tsv1RequestMemo GLRT_CreateLock spec) now
+      result <- submitTSv2Request env.registries env.registry owner [owner] amount (tsv1RequestMemo GLRT_CreateLock spec) now
       pure $ fromSomeNote "Expected a pending governance lock" . extractPendingGovernanceLock <$> result
 
     optGovernanceUnlock' env cid actor memoEntries =
@@ -625,9 +627,9 @@ tsv2Operations = GovernanceLockOperations with
           (vestingLockMemoEntries times.vestingPeriod times.endTime <> memoEntries))
       fmap extractPendingGovernanceLock <$> submitLockRequestV2 env.registries [actor] request
 
-    proposeSubstitution env proposer args@LockSubstitutionArgs{..} = do
+    proposeSubstitution env owner proposers args@LockSubstitutionArgs{..} = do
       requestedAt <- optional getTime pure args.requestedAt
-      submitTSv2Request env.registries env.registry proposer amount (substitutionMemo target extraMemoEntries) requestedAt
+      submitTSv2Request env.registries env.registry owner proposers amount (substitutionMemo target extraMemoEntries) requestedAt
 
     proposeTransfer' env proposers transfer map = do
       let memo = tsv1RequestMemo' GLRT_TransferLock transfer.source.specification $
@@ -723,12 +725,12 @@ submitTSv1Request registries registry owner amount memo requestedAt = do
 
 -- | Submits a TSv2 request
 submitTSv2Request
-  :  MultiRegistry.MultiRegistry -> AmuletRegistryV2.AmuletRegistry -> Party -> Decimal -> Text -> Time
+  :  MultiRegistry.MultiRegistry -> AmuletRegistryV2.AmuletRegistry -> Party -> [Party] -> Decimal -> Text -> Time
   -> Script (Either SubmitError V2.TransferInstructionResult)
-submitTSv2Request registries registry owner amount memo requestedAt = do
+submitTSv2Request registries registry owner actors amount memo requestedAt = do
   inputs <- WalletClientV2.listUnlockedHoldingCidsFor (basicAccount owner) owner registry.instrumentId
   request <- lockRequestV2 registry owner amount memo
-  submitLockRequestV2 registries [regularAccountOwner request.sender] request with
+  submitLockRequestV2 registries actors request with
     requestedAt
     inputHoldingCids = inputs
 
