@@ -513,6 +513,15 @@ abstract class StoreTestBase
     )
   }
 
+  protected def fullLockSpecification(kind: governancelockCodegen.GovernanceLockKind) =
+    new governancelockCodegen.governancelockspecification.GLS_FullLock(
+      new governancelockCodegen.FullLockSpecification(
+        kind,
+        // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
+        None.toJava,
+      )
+    )
+
   protected def governanceLock(
       owner: PartyId,
       amount: BigDecimal,
@@ -541,12 +550,10 @@ abstract class StoreTestBase
                 kind,
                 vestingPeriod,
                 endTime,
+                None.toJava,
               )
             )
-          case None =>
-            new governancelockCodegen.governancelockspecification.GLS_FullLock(
-              new governancelockCodegen.FullLockSpecification(kind)
-            )
+          case None => fullLockSpecification(kind)
         },
         Optional.empty(),
         Instant.now().truncatedTo(ChronoUnit.MICROS),
@@ -613,16 +620,18 @@ abstract class StoreTestBase
           sender.toProtoPrimitive,
           // The kind is always an SV lock here: an FA party is not a stakeholder of the
           // transfer itself, so there is nothing extra to test for it.
-          new governancelockCodegen.governancelockspecification.GLS_FullLock(
-            new governancelockCodegen.FullLockSpecification(
-              new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner("sv1")
-            )
+          fullLockSpecification(
+            new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner("sv1")
           ),
         ),
         receiver.toProtoPrimitive,
         BigDecimal(10).bigDecimal,
         Instant.EPOCH,
         expiresAt,
+        // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
+        Optional.empty(),
+        Optional.empty(),
+        Optional.empty(),
       ),
     )
 

@@ -1,0 +1,463 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Tests for governance locks with custom controllers.
+--
+-- A custom controller can only vote through Token Standard v2. The scenarios use the given
+-- `GovernanceLockOperations` to create the locks and the proposal, and `tsv2Operations` for the votes
+-- of the custom controllers.
+module Splice.Scripts.TestGovernanceLockCustomControllers where
+
+import DA.Action (unless, void)
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import DA.List qualified as List
+import DA.Map qualified as Map
+import DA.Optional
+import DA.Time
+import Daml.Script
+
+import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal qualified as Proposal
+import Splice.GovernanceLock.Substitution
+import Splice.GovernanceLock.Unlock
+import Splice.GovernanceLock.Withdraw
+import Splice.Scripts.TestGovernanceLocks
+import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
+import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
+import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
+import Splice.TokenStandard.Utils (toAnyContractId)
+
+setupCustomControllersTest : Script TestEnv
+setupCustomControllersTest = do
+  env@TestEnv{..} <- setupTest
+  forA_ [charlie, provider1, instrId.admin] WalletClientV2.createBatchingUtility
+  pure env
+
+-- Substitution
+---------------
+
+testCustomControllers_substitution_fullLock_tsv1 : Script ()
+testCustomControllers_substitution_fullLock_tsv1 = testCustomControllers_substitution tsv1Operations False False
+
+testCustomControllers_substitution_fullLock_tsv2 : Script ()
+testCustomControllers_substitution_fullLock_tsv2 = testCustomControllers_substitution tsv2Operations False False
+
+testCustomControllers_substitution_vestingLock_tsv1 : Script ()
+testCustomControllers_substitution_vestingLock_tsv1 = testCustomControllers_substitution tsv1Operations False True
+
+testCustomControllers_substitution_vestingLock_tsv2 : Script ()
+testCustomControllers_substitution_vestingLock_tsv2 = testCustomControllers_substitution tsv2Operations False True
+
+testCustomControllers_selfSubstitution_fullLock_tsv1 : Script ()
+testCustomControllers_selfSubstitution_fullLock_tsv1 = testCustomControllers_substitution tsv1Operations True False
+
+testCustomControllers_selfSubstitution_fullLock_tsv2 : Script ()
+testCustomControllers_selfSubstitution_fullLock_tsv2 = testCustomControllers_substitution tsv2Operations True False
+
+testCustomControllers_selfSubstitution_vestingLock_tsv1 : Script ()
+testCustomControllers_selfSubstitution_vestingLock_tsv1 = testCustomControllers_substitution tsv1Operations True True
+
+testCustomControllers_selfSubstitution_vestingLock_tsv2 : Script ()
+testCustomControllers_selfSubstitution_vestingLock_tsv2 = testCustomControllers_substitution tsv2Operations True True
+
+-- | alice proposes to substitute 20000.0 of a lock that needs bob and charlie for substitutions, so the
+-- controllers of the proposal are {alice, bob, charlie}. The target lock is alice's own for a self-substitution,
+-- and provider1's otherwise. The proposal stays pending with bob's vote, and charlie's vote executes it.
+testCustomControllers_substitution : GovernanceLockOperations i r t -> Bool -> Bool -> Script ()
+testCustomControllers_substitution ops selfSubstitution vestingLock = do
+  env@TestEnv{..} <- setupCustomControllersTest
+  requestedAt <- getTime
+
+  let targetOwner = if selfSubstitution then alice else provider1
+      controllers = Some $ makeControllersSpecification [[bob, charlie]]
+      kind = GLK_SuperValidatorRightsOwner "TestSV"
+      newControllers = makeGovernanceLockControllers None None (Some $ makeControllersSpecification [[charlie]])
+      proposeSubstitution target newControllers =
+        ops.proposeSubstitution (testEnvRegistries env) alice LockSubstitutionArgs with
+          target = key target
+          amount = 20000.0
+          requestedAt = Some requestedAt
+          extraMemoEntries = encodeGovernanceLockNewCustomControllersMemoEntries newControllers
+
+  (fullLockCid, fullLock) <- lockWithSpec ops env targetOwner 50000.0 $ GLS_FullLock FullLockSpecification with
+    kind
+    controllers = makeGovernanceLockControllers
+      None
+      (if vestingLock then None else controllers)
+      (if vestingLock then controllers else None)
+  (_, target) <- if vestingLock
+    then vestingLockFor ops env targetOwner fullLockCid 50000.0
+    else pure (fullLockCid, fullLock)
+  unless selfSubstitution $ void $ AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 50000.0
+
+  substitutionTransferCid <- ops.expectPendingTransfer =<< expectSuccess (proposeSubstitution target newControllers)
+  let substitutionCid = coerceContractId @_ @GovernanceLockSubstitution substitutionTransferCid
+  Some substitution <- queryContractId alice substitutionCid
+
+  pendingCid <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId substitutionCid) bob)
+  tsv2Operations.expectCompletedTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
+
+  let expectedSpecification = setNewGovernanceLockControllers target.specification newControllers
+      checkLocks newLockAttrs remainingLockAmount = do
+        newLocks <- queryFilter @GovernanceLock alice \l -> l.owner == alice && l.specification == expectedSpecification
+        length newLocks === length newLockAttrs
+        let newLocksSorted = List.sortOn (.originalLockCid) (fmap snd newLocks)
+            newLockAttrsSorted = List.sortOn (Some . toAnyContractId . snd) newLockAttrs
+        forA (zip newLocksSorted newLockAttrsSorted) \(newLock, (amount, substitutionCid)) -> newLock === GovernanceLock with
+          dso = target.dso
+          owner = alice
+          amount
+          lockedAmulet = newLock.lockedAmulet
+          specification = expectedSpecification
+          originalLockCid = Some (toAnyContractId substitutionCid)
+          requestedAt
+
+        [(_, remainingLock)] <- queryFilter @GovernanceLock targetOwner \l -> l.owner == targetOwner && l.specification == target.specification
+        remainingLock === GovernanceLock with
+          dso = target.dso
+          owner = targetOwner
+          amount = remainingLockAmount
+          lockedAmulet = remainingLock.lockedAmulet
+          specification = target.specification
+          originalLockCid = Some (toAnyContractId fullLockCid)
+          requestedAt = target.requestedAt
+
+  checkLocks [(20000.0, substitutionCid)] 30000.0
+
+  -- A substitution with `votes = None` can still be approved
+  -- There's no way to create this type of substitution through `proposeSubstitution`, so we create one manually
+  newSubstitutionCid <- submit (actAs target.dso <> actAs alice) $ createCmd substitution with votes = None
+  pendingCid <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId newSubstitutionCid) bob)
+  tsv2Operations.expectCompletedTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
+
+  checkLocks [(20000.0, substitutionCid), (20000.0, newSubstitutionCid)] 10000.0
+
+  -- Failures
+  -----------
+
+  -- new controllers can't be empty
+  let testEmptyNewControllers' kind set errorSuffix controllers = do
+        expectFailureContaining (kind <> "Controllers must not " <> errorSuffix) =<<
+          proposeSubstitution target (Some (set (fromSome newControllers) (Some $ makeControllersSpecification controllers)))
+      testEmptyNewControllers kind set = do
+        testEmptyNewControllers' kind set "be empty" []
+        testEmptyNewControllers' kind set "contain an empty controller set" [[]]
+
+  unless vestingLock do
+    testEmptyNewControllers "unlock" \controllers unlockControllers -> controllers with unlockControllers
+    testEmptyNewControllers "substitution" \controllers substitutionControllers -> controllers with substitutionControllers
+  testEmptyNewControllers "vesting" \controllers vestingControllers -> controllers with vestingControllers
+
+-- Unlock
+---------
+
+testCustomControllers_unlock_tsv1 : Script ()
+testCustomControllers_unlock_tsv1 = testCustomControllers_unlock tsv1Operations
+
+testCustomControllers_unlock_tsv2 : Script ()
+testCustomControllers_unlock_tsv2 = testCustomControllers_unlock tsv2Operations
+
+testCustomControllers_unlock : GovernanceLockOperations i r t -> Script ()
+testCustomControllers_unlock ops = do
+  env@TestEnv{..} <- setupCustomControllersTest
+
+  let kind = GLK_FeaturedApp alice
+      vestingPeriod = vestingDurationFor kind None
+      unlockControllers = Some $ makeControllersSpecification [[alice, bob, charlie]]
+      vestingControllers = Some $ makeControllersSpecification [[bob, charlie, provider1]]
+      fullSpec = FullLockSpecification with
+        kind
+        controllers = makeGovernanceLockControllers unlockControllers None vestingControllers
+      proposeUnlock lockCid proposer vestingStartTime extraMemoEntries = do
+        result <- ops.optGovernanceUnlock (testEnvRegistries env) lockCid proposer (unlockMemo 20000.0 vestingStartTime <> extraMemoEntries)
+        -- the helper types the pending instruction as a lock, but it's the unlock proposal
+        pure $ fmap (fmap (coerceContractId @GovernanceLock @UnlockProposal)) result
+
+  -- Happy path
+  -------------
+
+  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 (GLS_FullLock fullSpec)
+  vestingStartTime <- (`addRelTime` hours 1) <$> getTime
+  Some unlockCid <- expectSuccess $ proposeUnlock lockCid bob vestingStartTime (targetLockOwnerMemoEntries $ key lock)
+  Some unlock <- queryContractId bob unlockCid
+  unlock === UnlockProposal with
+    specification = UnlockProposalSpecification with
+      dso = lock.dso
+      owner = lock.owner
+      fullSpec
+      amount = 20000.0
+      vestingStartTime
+    proposers = [bob]
+    votes = Map.singleton bob Proposal.PV_Accept
+    requestedAt = unlock.requestedAt
+    expiresAt = unlock.expiresAt
+    originalProposalCid = None
+  checkLockUntouched alice lockCid lock
+
+  pendingCid <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId unlockCid) alice)
+  tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
+
+  ([(_, vestingLock)], [(_, remainingLock)]) <- partition (isVestingLock . snd) <$> query @GovernanceLock alice
+
+  vestingLock === GovernanceLock with
+    dso = lock.dso
+    owner = alice
+    amount = 20000.0
+    lockedAmulet = vestingLock.lockedAmulet
+    specification = GLS_VestingLock VestingLockSpecification with
+      kind
+      vestingPeriod
+      endTime = vestingStartTime `addRelTime` vestingPeriod
+      vestingControllers
+    originalLockCid = Some (toAnyContractId unlockCid)
+    requestedAt = vestingStartTime
+
+  remainingLock === GovernanceLock with
+    dso = lock.dso
+    owner = alice
+    amount = 30000.0
+    lockedAmulet = remainingLock.lockedAmulet
+    specification = GLS_FullLock fullSpec
+    originalLockCid = Some (toAnyContractId lockCid)
+    requestedAt = lock.requestedAt
+
+  -- Failures
+  -----------
+
+  now <- getTime
+  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 (GLS_FullLock fullSpec)
+
+  -- target-lock-owner is required when the lock has custom controllers, regardless of whether the proposer is the lock owner
+  expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeUnlock lockCid alice vestingStartTime []
+  expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeUnlock lockCid bob vestingStartTime []
+
+  -- vestingStartTime must be within the next 90 days
+  expectFailureContaining "Ledger time is at or past deadline 'vestingStartTime'" =<<
+    proposeUnlock lockCid bob (now `addRelTime` hours (-1)) (targetLockOwnerMemoEntries $ key lock)
+  expectFailureContaining "Ledger time is strictly before deadline 'vestingStartTime - 90 days'" =<<
+    proposeUnlock lockCid bob (now `addRelTime` days 91) (targetLockOwnerMemoEntries $ key lock)
+
+  -- acceptance fails after vestingStartTime/expiresAt
+  Some unlockCid <- expectSuccess $ proposeUnlock lockCid bob vestingStartTime (targetLockOwnerMemoEntries $ key lock)
+  setTime $ vestingStartTime `addRelTime` seconds 1
+  expectFailureContaining "Ledger time is at or past deadline 'expiresAt'" =<<
+    tsv2Operations.acceptInstruction env (coerceContractId unlockCid) alice
+
+-- Withdraw
+-----------
+
+testCustomControllers_withdraw_tsv1 : Script ()
+testCustomControllers_withdraw_tsv1 = testCustomControllers_withdraw tsv1Operations
+
+testCustomControllers_withdraw_tsv2 : Script ()
+testCustomControllers_withdraw_tsv2 = testCustomControllers_withdraw tsv2Operations
+
+testCustomControllers_withdraw : GovernanceLockOperations i r t -> Script ()
+testCustomControllers_withdraw ops = do
+  env@TestEnv{..} <- setupCustomControllersTest
+
+  let fullSpec controllers = GLS_FullLock FullLockSpecification with
+        kind = GLK_FeaturedApp alice
+        controllers = makeGovernanceLockControllers None None (Some $ makeControllersSpecification controllers)
+      setupLock controllers = do
+        (fullLockCid, _) <- lockWithSpec ops env alice 60000.0 (fullSpec controllers)
+        (vestingLockCid, vestingLock) <- vestingLockFor ops env alice fullLockCid 60000.0
+        -- vestingLockFor sets unlockAt to 1 hour in the future
+        -- We calculate vestedUntilTime as that time + 20 days, which is 1/3 of the way into the vesting period (60 days)
+        passTime (days 20 + hours 1 + seconds 1)
+        vestedUntilTime <- (`addRelTime` seconds (-1)) <$> getTime
+        pure (fullLockCid, vestingLockCid, vestingLock, vestedUntilTime)
+      proposeWithdraw lockCid proposer vestedUntilTime extraMemoEntries = do
+        result <- ops.vestingWithdraw env lockCid proposer (withdrawMemo vestedUntilTime <> extraMemoEntries)
+        -- the helper types the pending instruction as a lock, but it's the withdrawal proposal
+        pure $ fmap (fmap (coerceContractId @GovernanceLock @WithdrawVestedFundsProposal)) result
+
+  -- Happy path
+  -------------
+
+  (fullLockCid, vestingLockCid, vestingLock, vestedUntilTime) <- setupLock [[alice, bob, charlie]]
+  vestingSpec <- requireVestingLock vestingLock.specification
+
+  Some withdrawCid <- expectSuccess $ proposeWithdraw vestingLockCid alice vestedUntilTime (targetLockOwnerMemoEntries $ key vestingLock)
+  Some withdraw <- queryContractId alice withdrawCid
+  withdraw === WithdrawVestedFundsProposal with
+    specification = WithdrawVestedFundsSpecification with
+      dso = vestingLock.dso
+      owner = vestingLock.owner
+      vestingSpec
+      vestedUntilTime
+    proposers = [alice]
+    votes = Map.singleton alice Proposal.PV_Accept
+    requestedAt = withdraw.requestedAt
+    expiresAt = withdraw.expiresAt
+    originalProposalCid = None
+  checkLockUntouched alice vestingLockCid vestingLock
+
+  pendingCid <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId withdrawCid) bob)
+  tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
+
+  let checkRemainingLock fullLockCid vestingLock = do
+        vestingSpec <- requireVestingLock vestingLock.specification
+        [(remainingLockCid, remainingLock)] <- query @GovernanceLock alice
+        remainingLock === GovernanceLock with
+          dso = vestingLock.dso
+          owner = alice
+          amount = 40000.0
+          lockedAmulet = remainingLock.lockedAmulet
+          specification = GLS_VestingLock vestingSpec with vestingPeriod = days 40
+          originalLockCid = Some (toAnyContractId fullLockCid)
+          requestedAt = vestingLock.requestedAt
+        -- archive the remaining lock so later tests don't see it
+        submit (actAs remainingLock.dso <> actAs alice) $ archiveCmd remainingLockCid
+
+  checkRemainingLock fullLockCid vestingLock
+
+  -- A non-owner proposer can withdraw in a single step
+  (fullLockCid, vestingLockCid, vestingLock, vestedUntilTime) <- setupLock [[alice, bob], [charlie]]
+  expectSuccess $ proposeWithdraw vestingLockCid charlie vestedUntilTime (targetLockOwnerMemoEntries $ key vestingLock)
+  checkRemainingLock fullLockCid vestingLock
+
+  -- Failures
+  -----------
+
+  (_, vestingLockCid, vestingLock, vestedUntilTime) <- setupLock [[alice, bob], [charlie]]
+
+  -- target-lock-owner is required when the lock has custom controllers, regardless of whether the proposer is the lock owner
+  expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeWithdraw vestingLockCid alice vestedUntilTime []
+  expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeWithdraw vestingLockCid bob vestedUntilTime []
+
+  -- vestedUntilTime must be in the past on acceptance
+  expectFailureContaining "Ledger time is strictly before deadline 'vestedUntilTime'" =<<
+    proposeWithdraw vestingLockCid charlie (vestedUntilTime `addRelTime` seconds 2) (targetLockOwnerMemoEntries $ key vestingLock)
+
+  -- An old withdrawal executed after a newer one fails since vesting time has advanced
+  vestedUntilTime <- (`addRelTime` seconds (-1)) <$> getTime
+  Some oldWithdrawCid <- expectSuccess $ proposeWithdraw vestingLockCid alice vestedUntilTime (targetLockOwnerMemoEntries $ key vestingLock)
+  passTime (days 1)
+  Some newWithdrawCid <- expectSuccess $ proposeWithdraw vestingLockCid alice (vestedUntilTime `addRelTime` days 1) (targetLockOwnerMemoEntries $ key vestingLock)
+  tsv2Operations.expectPendingTransfer =<< expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId newWithdrawCid) charlie)
+  expectFailureContaining "Failed to find lock with key" =<<
+    tryFailureStatus (tsv2Operations.acceptInstruction env (coerceContractId oldWithdrawCid) charlie)
+
+-- Transfer
+-----------
+
+testCustomControllers_transfer_fullLock_tsv1 : Script ()
+testCustomControllers_transfer_fullLock_tsv1 = testCustomControllers_transfer tsv1Operations False
+
+testCustomControllers_transfer_fullLock_tsv2 : Script ()
+testCustomControllers_transfer_fullLock_tsv2 = testCustomControllers_transfer tsv2Operations False
+
+testCustomControllers_transfer_vestingLock_tsv1 : Script ()
+testCustomControllers_transfer_vestingLock_tsv1 = testCustomControllers_transfer tsv1Operations True
+
+testCustomControllers_transfer_vestingLock_tsv2 : Script ()
+testCustomControllers_transfer_vestingLock_tsv2 = testCustomControllers_transfer tsv2Operations True
+
+testCustomControllers_transfer : GovernanceLockOperations i r t -> Bool -> Script ()
+testCustomControllers_transfer ops vestingLock = do
+  env@TestEnv{..} <- setupCustomControllersTest
+
+  requestedAt <- getTime
+  let controllers = Some $ makeControllersSpecification [[bob, charlie]]
+      fullSpec = GLS_FullLock FullLockSpecification with
+        kind = GLK_SuperValidatorRightsOwner "TestSV"
+        controllers = makeGovernanceLockControllers
+          None
+          (if vestingLock then None else controllers)
+          (if vestingLock then controllers else None)
+      newControllers = makeGovernanceLockControllers None None (Some $ makeControllersSpecification [[charlie]])
+      setupLock = do
+        (fullLockCid, fullLock) <- lockWithSpec ops env alice 50000.0 fullSpec
+        (_, source) <- if vestingLock
+          then vestingLockFor ops env alice fullLockCid 50000.0
+          else pure (fullLockCid, fullLock)
+        pure (fullLockCid, source)
+      proposeTransfer source receiver amount newControllers =
+        ops.proposeTransfer (testEnvRegistries env) alice LockTransferArgs with
+          source = key source
+          receiver
+          amount
+          requestedAt
+          extraMemoEntries = encodeGovernanceLockNewCustomControllersMemoEntries newControllers
+
+  -- Happy path
+  -------------
+
+  (fullLockCid, source) <- setupLock
+  transferCid <- expectSuccess $ proposeTransfer source bob 20000.0 newControllers
+  Some transfer <- queryContractId alice transferCid
+
+  pendingCid <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId transferCid) bob)
+  tsv2Operations.expectCompletedTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
+
+  let checkLocks newLockAttrs remainingLockAmount = do
+        newLocks <- queryFilter @GovernanceLock bob \l -> l.owner == bob
+        length newLocks === length newLockAttrs
+        let newLocksSorted = List.sortOn (.originalLockCid) (fmap snd newLocks)
+            newLockAttrsSorted = List.sortOn (Some . toAnyContractId . snd) newLockAttrs
+        forA (zip newLocksSorted newLockAttrsSorted) \(newLock, (amount, transferCid)) -> newLock === GovernanceLock with
+          dso = source.dso
+          owner = bob
+          amount
+          lockedAmulet = newLock.lockedAmulet
+          specification = setNewGovernanceLockControllers source.specification newControllers
+          originalLockCid = Some (toAnyContractId transferCid)
+          requestedAt
+        [(_, remainingLock)] <- queryFilter @GovernanceLock alice \l -> l.owner == alice
+        remainingLock === GovernanceLock with
+          dso = source.dso
+          owner = alice
+          amount = remainingLockAmount
+          lockedAmulet = remainingLock.lockedAmulet
+          specification = source.specification
+          originalLockCid = Some (toAnyContractId fullLockCid)
+          requestedAt = source.requestedAt
+
+  checkLocks [(20000.0, transferCid)] 30000.0
+
+  -- A transfer with `votes = None` can still be approved
+  -- There's no way to create this type of transfer through `proposeTransfer`, so we create one manually
+  newTransferCid <- submit (actAs source.dso <> actAs alice) $ createCmd transfer with votes = None
+  pendingCid <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId newTransferCid) bob)
+  tsv2Operations.expectCompletedTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
+
+  checkLocks [(20000.0, transferCid), (20000.0, newTransferCid)] 10000.0
+
+  -- Failures
+  -----------
+
+  (_, source) <- setupLock
+
+  -- receiver can't be source lock owner
+  expectFailureContaining "'receiver' is equal to 'sender'" =<< proposeTransfer source alice 20000.0 newControllers
+
+  -- amount can't be 0
+  expectFailureContaining "'amount' is not greater than 'zero'" =<< proposeTransfer source bob 0.0 newControllers
+
+  -- new controllers can't be empty
+  let testEmptyNewControllers' kind set errorSuffix controllers = do
+        expectFailureContaining (kind <> "Controllers must not " <> errorSuffix) =<<
+          proposeTransfer source bob 20000.0 (Some (set (fromSome newControllers) (Some $ makeControllersSpecification controllers)))
+      testEmptyNewControllers kind set = do
+        testEmptyNewControllers' kind set "be empty" []
+        testEmptyNewControllers' kind set "contain an empty controller set" [[]]
+
+  unless vestingLock do
+    testEmptyNewControllers "unlock" \controllers unlockControllers -> controllers with unlockControllers
+    testEmptyNewControllers "substitution" \controllers substitutionControllers -> controllers with substitutionControllers
+  testEmptyNewControllers "vesting" \controllers vestingControllers -> controllers with vestingControllers
