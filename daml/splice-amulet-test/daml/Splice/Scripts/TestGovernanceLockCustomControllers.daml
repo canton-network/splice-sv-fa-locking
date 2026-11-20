@@ -300,9 +300,9 @@ testCustomControllers_withdraw ops = do
   expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeWithdraw vestingLockCid alice vestedUntilTime []
   expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeWithdraw vestingLockCid bob vestedUntilTime []
 
-  -- vestedUntilTime must be in the past
+  -- vestedUntilTime must be in the past on acceptance
   expectFailureContaining "Ledger time is strictly before deadline 'vestedUntilTime'" =<<
-    proposeWithdraw vestingLockCid bob (vestedUntilTime `addRelTime` seconds 2) (targetLockOwnerMemoEntries $ key vestingLock)
+    proposeWithdraw vestingLockCid charlie (vestedUntilTime `addRelTime` seconds 2) (targetLockOwnerMemoEntries $ key vestingLock)
 
   -- An old withdrawal executed after a newer one fails since vesting time has advanced
   vestedUntilTime <- (`addRelTime` seconds (-1)) <$> getTime

@@ -118,7 +118,6 @@ data VestingLockProposeWithdrawArgs = VestingLockProposeWithdrawArgs with
 -- | Proposes to withdraw from a vesting lock.
 vestingLock_proposeWithdraw : VestingLockProposeWithdrawArgs -> Update (Proposal.ProposalUpdateResult WithdrawVestedFundsProposal GovernanceLock_DsoWithdrawResult)
 vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
-  assertDeadlineExceeded "vestedUntilTime" vestedUntilTime
   let lock = merged.lock
   vestingSpec <- requireVestingLock lock.specification
 
