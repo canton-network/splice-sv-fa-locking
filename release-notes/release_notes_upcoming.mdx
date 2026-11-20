@@ -33,6 +33,9 @@
     - SV app automation now archives a suspended featured app right once its underlock grace period
       has passed, while `featuredAppUnderlockEnforcementEnabled` is true.
 
+    - SV app automation now executes `RevokeFeaturedAppRightInstruction`s, archiving the provider's
+      featured app right, and archives the instructions that expire before they are executed.
+
   - Deployment
 
     - SV onboarding snapshots are kept in `canton.sv-apps.sv.onboarding-snapshots.directory`, a new required setting
