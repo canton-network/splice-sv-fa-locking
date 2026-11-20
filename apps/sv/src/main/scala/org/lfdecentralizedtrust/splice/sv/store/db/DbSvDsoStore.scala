@@ -1006,7 +1006,7 @@ class DbSvDsoStore private (
                  and acs.template_id_qualified_name = ${QualifiedName(
               RevokeFeaturedAppRightInstruction.TEMPLATE_ID_WITH_PACKAGE_ID
             )}
-               limit 1000
+               limit greatest(1000, ${10 * sqlLimit(limit)})
              ) sample
              order by random()
              limit ${sqlLimit(limit)}
