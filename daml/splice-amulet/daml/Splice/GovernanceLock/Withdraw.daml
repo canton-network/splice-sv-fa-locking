@@ -1,0 +1,182 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Proposals to unlock some or all of the vested funds of a vesting `GovernanceLock`,
+-- approved by its vesting controllers.
+module Splice.GovernanceLock.Withdraw (
+  -- * Templates and choices
+  WithdrawVestedFundsProposal(..),
+  WithdrawVestedFundsSpecification(..),
+  WithdrawVestedFunds_DsoExpire(..),
+  WithdrawVestedFunds_DsoExpireResult(..),
+
+  -- * State and operations
+  VestingLockProposeWithdrawArgs(..),
+  vestingLock_proposeWithdraw,
+  withdrawVestedFundsProposalTarget,
+  calculateUnvestedAmount,
+) where
+
+import DA.Assert (assertDeadlineExceeded)
+import DA.List qualified as List
+import DA.Map qualified as Map
+import DA.Time
+
+import Splice.AmuletConfig (getTokenStandardMaxTTL)
+import Splice.AmuletRules
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.TransferInstructionV1 qualified as V1
+import Splice.Api.Token.TransferInstructionV2 qualified as V2
+import Splice.ExternalPartyConfigState
+import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal qualified as Proposal
+import Splice.TokenStandard.Utils
+import Splice.Types
+import Splice.Util
+
+data WithdrawVestedFundsSpecification = WithdrawVestedFundsSpecification with
+    dso : Party
+    owner : Party
+    vestingSpec : VestingLockSpecification
+    vestedUntilTime : Time -- ^ Time at which the vested amount is computed.
+  deriving (Eq, Show, Serializable)
+
+template WithdrawVestedFundsProposal
+  with
+    specification : WithdrawVestedFundsSpecification
+    proposers : [Party]
+    votes : Proposal.ProposalVotes -- ^ Votes recorded so far.
+    requestedAt : Time -- ^ Time of the request to create the proposal.
+    expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
+    originalProposalCid : Optional (ContractId WithdrawVestedFundsProposal)
+      -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
+  where
+    signatory specification.dso, proposers
+    observer specification.owner, governanceLockObservers (GLS_VestingLock specification.vestingSpec),
+             allControllers (withdrawVestedFundsProposalControllers specification)
+    ensure (not $ null proposers)
+
+    choice WithdrawVestedFunds_DsoExpire : WithdrawVestedFunds_DsoExpireResult
+      controller specification.dso
+      do
+        assertDeadlineExceeded "expiresAt" expiresAt
+        pure WithdrawVestedFunds_DsoExpireResult
+
+    interface instance V1.TransferInstruction for WithdrawVestedFundsProposal where
+      view = Proposal.transferInstructionViewV1 "withdrawal" this
+      transferInstruction_acceptImpl _ _ = fail "Transfers representing withdrawal proposals cannot be accepted through Token Standard v1"
+      transferInstruction_rejectImpl _ _ = fail "Transfers representing withdrawal proposals cannot be rejected through Token Standard v1"
+      transferInstruction_updateImpl _ _ = fail "Transfers representing withdrawal proposals cannot be updated"
+      transferInstruction_withdrawImpl = Proposal.transferInstructionV1_withdrawImpl this
+
+    interface instance V2.TransferInstruction for WithdrawVestedFundsProposal where
+      view = Proposal.transferInstructionViewV2 lockManagerParty this
+      transferInstruction_acceptImpl = Proposal.transferInstructionV2_acceptImpl this
+      transferInstruction_rejectImpl = Proposal.transferInstructionV2_rejectImpl this
+      transferInstruction_withdrawImpl = Proposal.transferInstructionV2_withdrawImpl this
+      transferInstruction_acceptExtraObservers _ = observer this
+      transferInstruction_rejectExtraObservers _ = observer this
+      transferInstruction_withdrawExtraObservers _ = observer this
+
+data WithdrawVestedFunds_DsoExpireResult = WithdrawVestedFunds_DsoExpireResult {}
+  deriving (Serializable)
+
+withdrawVestedFundsProposalTarget : WithdrawVestedFundsSpecification -> GovernanceLockKey
+withdrawVestedFundsProposalTarget (WithdrawVestedFundsSpecification dso owner vestingSpec _vestedUntilTime) =
+  GovernanceLockKey with
+    dso
+    owner
+    specification = GLS_VestingLock vestingSpec
+
+withdrawVestedFundsProposalControllers : WithdrawVestedFundsSpecification -> ControllersSpecification
+withdrawVestedFundsProposalControllers (WithdrawVestedFundsSpecification _dso owner spec _vestedUntilTime) =
+  makeControllersSpecification $ optional [[owner]] (.controllers) spec.vestingControllers
+
+withdrawVestedFundsProposalMetadata : VestingLockSpecification -> Metadata
+withdrawVestedFundsProposalMetadata = encodeGovernanceLockMetadataWithRequest "accept-to-withdraw-vested-funds" . GLS_VestingLock
+
+vestingLock_withdrawResultToTransferInstructionResult : GovernanceLock_DsoWithdrawResult -> V2.TransferInstructionResult
+vestingLock_withdrawResultToTransferInstructionResult GovernanceLock_DsoWithdrawResult{..} =
+  V2.TransferInstructionResult with
+    output = case vestingLock of
+      Some v -> V2.TransferInstructionResult_Pending with transferInstructionCid = toInterfaceContractId v
+      None -> V2.TransferInstructionResult_Completed with receiverHoldingCids = []
+    -- Final approval may not come from the funds owner, but we include this to enable chaining
+    senderChangeCids = [upcast vested]
+    meta = emptyMetadata
+
+data VestingLockProposeWithdrawArgs = VestingLockProposeWithdrawArgs with
+  merged : GovernanceLock_DsoMergeResult
+  vestedUntilTime : Time
+  actors : [Party]
+  context : ExternalPartyTransferContext
+  state : ExternalPartyConfigState
+  reason : Text
+  requestedAt : Time
+
+-- | Proposes to withdraw from a vesting lock.
+vestingLock_proposeWithdraw : VestingLockProposeWithdrawArgs -> Update (Proposal.ProposalUpdateResult WithdrawVestedFundsProposal GovernanceLock_DsoWithdrawResult)
+vestingLock_proposeWithdraw VestingLockProposeWithdrawArgs{..} = do
+  let lock = merged.lock
+  vestingSpec <- requireVestingLock lock.specification
+
+  let specification = WithdrawVestedFundsSpecification with
+        dso = lock.dso
+        owner = lock.owner
+        vestingSpec
+        vestedUntilTime
+      proposers = List.dedupSort actors
+      emptyVotes = Map.empty
+
+  Proposal.create Proposal.ProposalUpdateArgs with
+    proposalCid = None
+    proposal = WithdrawVestedFundsProposal with
+      specification
+      proposers
+      votes = emptyVotes
+      requestedAt
+      expiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
+      originalProposalCid = None
+    actors = proposers
+    reason
+    getContext = pure (context, state)
+
+-- | Withdraws the funds of a vesting lock that vested until `vestedUntilTime`.
+--
+-- Note: the fact that we only accept and use a single `vestedUntilTime` is an accepted departure from CIP-0127.
+-- The CIP specifies that each controller may specify its own `vestedUntilTime`, but instead we opt to have all
+-- controllers review and accept a single timepoint, which is then used on execution.
+vestingLock_executeWithdraw : Proposal.ProposalExecuteArgs WithdrawVestedFundsProposal -> Update GovernanceLock_DsoWithdrawResult
+vestingLock_executeWithdraw Proposal.ProposalExecuteArgs{..} = exercise merged.lockCid GovernanceLock_DsoWithdraw with
+  vestedUntilTime = proposal.specification.vestedUntilTime
+  reason
+  context
+
+-- Instances
+------------
+
+instance HasCheckedFetch WithdrawVestedFundsProposal ForDso where
+  contractGroupId WithdrawVestedFundsProposal{..} = ForDso with dso = specification.dso
+
+instance Proposal.ProposalOperations WithdrawVestedFundsProposal GovernanceLock_DsoWithdrawResult where
+  mkProposalView WithdrawVestedFundsProposal{..} = Proposal.ProposalView with
+    lockKey = withdrawVestedFundsProposalTarget specification
+    proposers
+    controllers = withdrawVestedFundsProposalControllers specification
+    votes
+    amount = 0.0
+    lockedAmulet = None
+    requestedAt
+    expiresAt
+    originalProposalCid
+    meta = withdrawVestedFundsProposalMetadata specification.vestingSpec
+
+  recreateProposal votes originalProposalCid proposal =
+    let updatedProposal = proposal with votes; originalProposalCid
+    in (, updatedProposal) <$> create updatedProposal
+
+  executeProposal = vestingLock_executeWithdraw
+  mkCompletedProposalResult = vestingLock_withdrawResultToTransferInstructionResult
+
+  rejectProposal = Proposal.defaultRejectProposal

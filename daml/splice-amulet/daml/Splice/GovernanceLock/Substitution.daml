@@ -78,7 +78,7 @@ data GovernanceLockSubstitution_DsoExpireResult = GovernanceLockSubstitution_Dso
   deriving (Serializable)
 
 governanceLockSubstitutionControllers : GovernanceLockSubstitution -> ControllersSpecification
-governanceLockSubstitutionControllers GovernanceLockSubstitution{target, owner} =
+governanceLockSubstitutionControllers (GovernanceLockSubstitution target owner _amount _lockedAmulet _requestedAt _expiresAt _originalSubstitutionCid _newControllers _votes) =
   let optControllers = case target.specification of
         GLS_FullLock spec -> spec.controllers >>= (.substitutionControllers)
         GLS_VestingLock spec -> spec.vestingControllers
@@ -87,7 +87,7 @@ governanceLockSubstitutionControllers GovernanceLockSubstitution{target, owner} 
 
 -- | Memo of a substitution proposal of a `GovernanceLock`: the memo of the new lock plus the accept request.
 governanceLockSubstitutionMetadata : GovernanceLockSubstitution -> Metadata
-governanceLockSubstitutionMetadata GovernanceLockSubstitution{..} =
+governanceLockSubstitutionMetadata (GovernanceLockSubstitution target _owner _amount _lockedAmulet _requestedAt _expiresAt _originalSubstitutionCid newControllers _votes) =
   encodeGovernanceLockMetadataWithRequest'
     (<> encodeGovernanceLockNewCustomControllersMemoEntries newControllers)
     "accept-to-substitute-lock"
@@ -103,7 +103,7 @@ data GovernanceLock_SubstitutionResult_Completed = GovernanceLock_SubstitutionRe
 type GovernanceLock_SubstitutionResult = Proposal.ProposalUpdateResult GovernanceLockSubstitution GovernanceLock_SubstitutionResult_Completed
 
 governanceLock_substitutionResult_completedToTransferInstructionResult : GovernanceLock_SubstitutionResult_Completed -> V2.TransferInstructionResult
-governanceLock_substitutionResult_completedToTransferInstructionResult GovernanceLock_SubstitutionResult_Completed{..} =
+governanceLock_substitutionResult_completedToTransferInstructionResult (GovernanceLock_SubstitutionResult_Completed _lockCid _remainingLockCid unlockedAmulet) =
   V2.TransferInstructionResult with
     output = V2.TransferInstructionResult_Completed with
       receiverHoldingCids = toInterfaceContractId <$> optionalToList unlockedAmulet
@@ -142,7 +142,7 @@ governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs {..} = 
   let maxExpiresAt = requestedAt `addRelTime` getTokenStandardMaxTTL state.transferConfig
   expiresAt <- case target.specification of
     GLS_FullLock _ -> pure maxExpiresAt
-    GLS_VestingLock VestingLockSpecification{endTime} -> do
+    GLS_VestingLock (VestingLockSpecification _kind _vestingPeriod endTime _vestingControllers) -> do
       assertWithinDeadline "target lock endTime" endTime
       pure $ min maxExpiresAt endTime
 

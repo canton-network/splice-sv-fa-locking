@@ -43,7 +43,6 @@ module Splice.GovernanceLock (
   -- * Lock operations
   governanceLock_lockForGovernance_impl,
   fetchAndMergeGovernanceLocks,
-  vestingLock_withdrawImpl,
   governanceLock_dsoTransferImpl,
 
   -- * Lock memo
@@ -563,14 +562,6 @@ fetchAndMergeGovernanceLocks key context state reason = do
   -- `changeHolding` should always be `None` since no new funds are passed
   result@GovernanceLock_DsoMergeResult{changeHolding = None} <- fetchAndMergeGovernanceLocks' None key context state reason
   pure result
-
-vestingLock_withdrawImpl : ContractId GovernanceLock -> GovernanceLock -> Time -> [Party] -> ExternalPartyTransferContext -> Text -> Update GovernanceLock_DsoWithdrawResult
-vestingLock_withdrawImpl self GovernanceLock{..} vestedUntilTime actors context reason = do
-  checkActors actors [[owner]]
-  exercise self GovernanceLock_DsoWithdraw with
-    vestedUntilTime
-    reason
-    context
 
 -- | Uses `None` to represent that no amount remains.
 calculateUnvestedAmount : Time -> Decimal -> VestingLockSpecification -> Optional Decimal

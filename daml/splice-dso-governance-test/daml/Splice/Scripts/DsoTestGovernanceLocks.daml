@@ -11,12 +11,14 @@ import DA.Time
 import Daml.Script
 
 import Splice.Amulet (Amulet, FeaturedAppRight(..), LockedAmulet, LockedAmulet_OwnerExpireLockV2(..))
-import Splice.DsoRules (DsoRules, DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(..), DsoRules_GovernanceLockSubstitution_DsoExpire(..), DsoRules_GovernanceLockTransfer_DsoExpire(..), DsoRules_GovernanceLock_DsoExpire(..), DsoRules_UnlockProposal_DsoExpire(..))
+import Splice.DsoRules (DsoRules, DsoRules_GovernanceLock_ConvertProvisionalFeaturedAppLock(..), DsoRules_GovernanceLockSubstitution_DsoExpire(..), DsoRules_GovernanceLockTransfer_DsoExpire(..), DsoRules_GovernanceLock_DsoExpire(..), DsoRules_UnlockProposal_DsoExpire(..), DsoRules_WithdrawVestedFunds_DsoExpire(..))
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers (makeControllersSpecification, makeGovernanceLockControllers)
+import Splice.GovernanceLock.Request (GovernanceLockRequestTag(..))
 import Splice.GovernanceLock.Substitution
 import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock (UnlockProposal(..))
+import Splice.GovernanceLock.Withdraw (WithdrawVestedFundsProposal(..))
 import Splice.Scripts.DsoTestUtils (initDevNet)
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.Util
@@ -768,3 +770,84 @@ testDsoRulesExpireUnlockProposalNotYetExpired = do
 
   optProposal <- queryContractId env.app.dso env.proposalCid
   assertMsg "the unlock proposal is still live" (isSome optProposal)
+
+-- | A DsoRules test environment holding a single withdrawal proposal made by alice
+-- against her own vesting lock, which bob must also approve.
+data WithdrawProposalEnv = WithdrawProposalEnv with
+  app : AmuletApp
+  sv1 : Party
+  dsoRulesCid : ContractId DsoRules
+  proposalCid : ContractId WithdrawVestedFundsProposal
+  proposal : WithdrawVestedFundsProposal
+
+setupWithdrawProposal : Script WithdrawProposalEnv
+setupWithdrawProposal = do
+  -- Custom vesting controllers make the withdrawal a pending proposal instead of an immediate withdrawal.
+  SharedLockEnv{..} <- setupSharedLockWithSpec \alice -> do
+    bob <- allocateParty "bob"
+    pure $ GLS_FullLock FullLockSpecification with
+      kind = testLockKind
+      controllers = makeGovernanceLockControllers None None (Some $ makeControllersSpecification [[alice.primaryParty, bob]])
+
+  -- The unlock has no custom controllers, so it creates the vesting lock immediately.
+  unlockAt <- (`addRelTime` hours 1) <$> getTime
+  vestingLockCid <- expectSuccess $
+    tsv1Operations.governanceUnlock (TestEnvRegistries registries registry) governanceLockCid alice.primaryParty (unlockMemo testVestingAmount unlockAt)
+  Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
+  times <- requireVestingLock vestingLock.specification
+
+  passTime (days 1)
+  vestedUntilTime <- (`addRelTime` seconds (-1)) <$> getTime
+  request <- lockRequestV1 registry alice.primaryParty 0.0 $
+    tsv1RequestMemo' GLRT_WithdrawVestedFunds vestingLock.specification
+      (vestingLockMemoEntries times.vestingPeriod times.endTime
+        <> withdrawMemo vestedUntilTime
+        <> [(targetLockOwnerMemoKey, partyToText alice.primaryParty)])
+  result <- expectSuccess $ submitLockRequestV1' registries alice.primaryParty request
+  Some pendingCid <- pure $ tsv1Operations.extractPendingTransfer result
+  let proposalCid = fromInterfaceContractId @WithdrawVestedFundsProposal pendingCid
+  Some proposal <- queryContractId app.dso proposalCid
+
+  -- `expiresAt` is `requestedAt + tokenStandardMaxTTL`. The test config leaves
+  -- `tokenStandardMaxTTL` unset, so `getTokenStandardMaxTTL` falls back to 90 days.
+  proposal.expiresAt === proposal.requestedAt `addRelTime` days 90
+
+  pure WithdrawProposalEnv with ..
+
+-- | Happy path: an SV expires a withdrawal proposal that was not accepted in time.
+testDsoRulesExpireWithdrawProposal : Script ()
+testDsoRulesExpireWithdrawProposal = do
+  env <- setupWithdrawProposal
+
+  setTime (env.proposal.expiresAt `addRelTime` seconds 1)
+
+  submit (actAs env.sv1 <> readAs env.app.dso) $
+    exerciseCmd env.dsoRulesCid DsoRules_WithdrawVestedFunds_DsoExpire with
+      proposalCid = env.proposalCid
+      sv = env.sv1
+
+  optProposal <- queryContractId env.app.dso env.proposalCid
+  assertMsg "the withdrawal proposal has been expired" (isNone optProposal)
+
+-- | Negative: the proposal has not expired yet, so there is nothing to collect.
+testDsoRulesExpireWithdrawProposalNotYetExpired : Script ()
+testDsoRulesExpireWithdrawProposalNotYetExpired = do
+  env <- setupWithdrawProposal
+
+  let expireAsSv1 = do
+        r <- trySubmit (actAs env.sv1 <> readAs env.app.dso) $
+          exerciseCmd env.dsoRulesCid DsoRules_WithdrawVestedFunds_DsoExpire with
+            proposalCid = env.proposalCid
+            sv = env.sv1
+        pure (() <$ r)
+
+  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'expiresAt'")
+    expireAsSv1
+
+  -- One second early is still early.
+  setTime (env.proposal.expiresAt `addRelTime` seconds (-1))
+  actionMustFail (expectMessageContains "Ledger time is strictly before deadline 'expiresAt'")
+    expireAsSv1
+
+  optProposal <- queryContractId env.app.dso env.proposalCid
+  assertMsg "the withdrawal proposal is still live" (isSome optProposal)

@@ -19,6 +19,7 @@ import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Proposal qualified as Proposal
 import Splice.GovernanceLock.Unlock
+import Splice.GovernanceLock.Withdraw
 import Splice.Scripts.TestGovernanceLocks
 import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
 import Splice.Testing.Registries.AmuletRegistryV2 qualified as AmuletRegistryV2
@@ -134,7 +135,7 @@ testCustomControllers_unlock ops = do
       vestingPeriod = vestingDurationFor kind None
       unlockControllers = Some $ makeControllersSpecification [[alice, bob, charlie]]
       vestingControllers = Some $ makeControllersSpecification [[bob, charlie, provider1]]
-      fullSpec = GLS_FullLock FullLockSpecification with
+      fullSpec = FullLockSpecification with
         kind
         controllers = makeGovernanceLockControllers unlockControllers None vestingControllers
       proposeUnlock lockCid proposer vestingStartTime extraMemoEntries = do
@@ -145,13 +146,15 @@ testCustomControllers_unlock ops = do
   -- Happy path
   -------------
 
-  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 fullSpec
+  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 (GLS_FullLock fullSpec)
   vestingStartTime <- (`addRelTime` hours 1) <$> getTime
   Some unlockCid <- expectSuccess $ proposeUnlock lockCid bob vestingStartTime (targetLockOwnerMemoEntries $ key lock)
   Some unlock <- queryContractId bob unlockCid
   unlock === UnlockProposal with
     specification = UnlockProposalSpecification with
-      target = key lock
+      dso = lock.dso
+      owner = lock.owner
+      fullSpec
       amount = 20000.0
       vestingStartTime
     proposers = [bob]
@@ -186,7 +189,7 @@ testCustomControllers_unlock ops = do
     owner = alice
     amount = 30000.0
     lockedAmulet = remainingLock.lockedAmulet
-    specification = fullSpec
+    specification = GLS_FullLock fullSpec
     originalLockCid = Some (toAnyContractId lockCid)
     requestedAt = lock.requestedAt
 
@@ -194,7 +197,7 @@ testCustomControllers_unlock ops = do
   -----------
 
   now <- getTime
-  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 fullSpec
+  (lockCid, lock) <- lockWithSpec ops env alice 50000.0 (GLS_FullLock fullSpec)
 
   -- target-lock-owner is required when the lock has custom controllers, regardless of whether the proposer is the lock owner
   expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeUnlock lockCid alice vestingStartTime []
@@ -211,3 +214,101 @@ testCustomControllers_unlock ops = do
   setTime $ vestingStartTime `addRelTime` seconds 1
   expectFailureContaining "Ledger time is at or past deadline 'expiresAt'" =<<
     tsv2Operations.acceptInstruction env (coerceContractId unlockCid) alice
+
+-- Withdraw
+-----------
+
+testCustomControllers_withdraw_tsv1 : Script ()
+testCustomControllers_withdraw_tsv1 = testCustomControllers_withdraw tsv1Operations
+
+testCustomControllers_withdraw_tsv2 : Script ()
+testCustomControllers_withdraw_tsv2 = testCustomControllers_withdraw tsv2Operations
+
+testCustomControllers_withdraw : GovernanceLockOperations i r t -> Script ()
+testCustomControllers_withdraw ops = do
+  env@TestEnv{..} <- setupCustomControllersTest
+
+  let fullSpec controllers = GLS_FullLock FullLockSpecification with
+        kind = GLK_FeaturedApp alice
+        controllers = makeGovernanceLockControllers None None (Some $ makeControllersSpecification controllers)
+      setupLock controllers = do
+        (fullLockCid, _) <- lockWithSpec ops env alice 60000.0 (fullSpec controllers)
+        (vestingLockCid, vestingLock) <- vestingLockFor ops env alice fullLockCid 60000.0
+        -- vestingLockFor sets unlockAt to 1 hour in the future
+        -- We calculate vestedUntilTime as that time + 20 days, which is 1/3 of the way into the vesting period (60 days)
+        passTime (days 20 + hours 1 + seconds 1)
+        vestedUntilTime <- (`addRelTime` seconds (-1)) <$> getTime
+        pure (fullLockCid, vestingLockCid, vestingLock, vestedUntilTime)
+      proposeWithdraw lockCid proposer vestedUntilTime extraMemoEntries = do
+        result <- ops.vestingWithdraw env lockCid proposer (withdrawMemo vestedUntilTime <> extraMemoEntries)
+        -- the helper types the pending instruction as a lock, but it's the withdrawal proposal
+        pure $ fmap (fmap (coerceContractId @GovernanceLock @WithdrawVestedFundsProposal)) result
+
+  -- Happy path
+  -------------
+
+  (fullLockCid, vestingLockCid, vestingLock, vestedUntilTime) <- setupLock [[alice, bob, charlie]]
+  vestingSpec <- requireVestingLock vestingLock.specification
+
+  Some withdrawCid <- expectSuccess $ proposeWithdraw vestingLockCid alice vestedUntilTime (targetLockOwnerMemoEntries $ key vestingLock)
+  Some withdraw <- queryContractId alice withdrawCid
+  withdraw === WithdrawVestedFundsProposal with
+    specification = WithdrawVestedFundsSpecification with
+      dso = vestingLock.dso
+      owner = vestingLock.owner
+      vestingSpec
+      vestedUntilTime
+    proposers = [alice]
+    votes = Map.singleton alice Proposal.PV_Accept
+    requestedAt = withdraw.requestedAt
+    expiresAt = withdraw.expiresAt
+    originalProposalCid = None
+  checkLockUntouched alice vestingLockCid vestingLock
+
+  pendingCid <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId withdrawCid) bob)
+  _ <- tsv2Operations.expectPendingTransfer =<<
+    expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
+
+  let checkRemainingLock fullLockCid vestingLock = do
+        vestingSpec <- requireVestingLock vestingLock.specification
+        [(remainingLockCid, remainingLock)] <- query @GovernanceLock alice
+        remainingLock === GovernanceLock with
+          dso = vestingLock.dso
+          owner = alice
+          amount = 40000.0
+          lockedAmulet = remainingLock.lockedAmulet
+          specification = GLS_VestingLock vestingSpec with vestingPeriod = days 40
+          originalLockCid = Some (toAnyContractId fullLockCid)
+          requestedAt = vestingLock.requestedAt
+        -- archive the remaining lock so later tests don't see it
+        submit (actAs remainingLock.dso <> actAs alice) $ archiveCmd remainingLockCid
+
+  checkRemainingLock fullLockCid vestingLock
+
+  -- A non-owner proposer can withdraw in a single step
+  (fullLockCid, vestingLockCid, vestingLock, vestedUntilTime) <- setupLock [[alice, bob], [charlie]]
+  expectSuccess $ proposeWithdraw vestingLockCid charlie vestedUntilTime (targetLockOwnerMemoEntries $ key vestingLock)
+  checkRemainingLock fullLockCid vestingLock
+
+  -- Failures
+  -----------
+
+  (_, vestingLockCid, vestingLock, vestedUntilTime) <- setupLock [[alice, bob], [charlie]]
+
+  -- target-lock-owner is required when the lock has custom controllers, regardless of whether the proposer is the lock owner
+  expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeWithdraw vestingLockCid alice vestedUntilTime []
+  expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeWithdraw vestingLockCid bob vestedUntilTime []
+
+  -- vestedUntilTime must be in the past on acceptance
+  expectFailureContaining "Ledger time is strictly before deadline 'vestedUntilTime'" =<<
+    proposeWithdraw vestingLockCid charlie (vestedUntilTime `addRelTime` seconds 2) (targetLockOwnerMemoEntries $ key vestingLock)
+
+  -- An old withdrawal executed after a newer one fails since vesting time has advanced
+  vestedUntilTime <- (`addRelTime` seconds (-1)) <$> getTime
+  Some oldWithdrawCid <- expectSuccess $ proposeWithdraw vestingLockCid alice vestedUntilTime (targetLockOwnerMemoEntries $ key vestingLock)
+  passTime (days 1)
+  Some newWithdrawCid <- expectSuccess $ proposeWithdraw vestingLockCid alice (vestedUntilTime `addRelTime` days 1) (targetLockOwnerMemoEntries $ key vestingLock)
+  tsv2Operations.expectPendingTransfer =<< expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId newWithdrawCid) charlie)
+  expectFailureContaining "Failed to find lock with key" =<<
+    tryFailureStatus (tsv2Operations.acceptInstruction env (coerceContractId oldWithdrawCid) charlie)
