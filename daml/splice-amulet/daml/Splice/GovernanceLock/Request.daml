@@ -115,8 +115,7 @@ governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_
     GLR_WithdrawVestingLock target vestedUntilTime ->
       governanceLock_transferFactoryV1_withdrawVestedFundsImpl actors arg target vestedUntilTime context state
     GLR_SubstituteLock target newControllers -> do
-      checkActors actors [[transfer.sender]]
-      governanceLock_transferFactoryV1_substituteImpl dso arg target newControllers context state
+      governanceLock_transferFactoryV1_substituteImpl actors arg target newControllers context state
 
 governanceLock_transferFactoryV1_lockImpl
   :  Party
@@ -226,18 +225,18 @@ governanceLock_transferFactoryV1_withdrawVestedFundsImpl actors V1.TransferFacto
   pure $ downcast $ proposalUpdateResultToTransferInstructionResult None result
 
 governanceLock_transferFactoryV1_substituteImpl
-  :  Party
+  :  [Party]
   -> V1.TransferFactory_Transfer
   -> GovernanceLockKey
   -> Optional GovernanceLockControllers
   -> ExternalPartyTransferContext
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_substituteImpl dso V1.TransferFactory_Transfer{..} target newControllers context state = do
+governanceLock_transferFactoryV1_substituteImpl actors V1.TransferFactory_Transfer{..} target newControllers context state = do
   (result, changeCid) <- governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs with
-    dso
     target
     owner = transfer.sender
+    proposers = actors
     newControllers
     amount = transfer.amount
     inputHoldingCids = transfer.inputHoldingCids

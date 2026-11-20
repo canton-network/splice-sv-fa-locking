@@ -12,7 +12,9 @@ module Splice.GovernanceLock.Substitution (
   governanceLock_proposeSubstitution,
 ) where
 
+import DA.Action (when)
 import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
+import DA.List qualified as List
 import DA.Map qualified as Map
 import DA.Optional
 import DA.Time
@@ -28,28 +30,31 @@ import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Proposal qualified as Proposal
-import Splice.TokenStandard.Utils
+import Splice.TokenStandard.Utils hiding (require, require')
 import Splice.Types
 import Splice.Util
 
 -- | A proposal for a substitution of a governance lock.
 template GovernanceLockSubstitution with
     target : GovernanceLockKey
-    owner : Party -- ^ Party that proposed the substitution
+    owner : Party -- ^ Party that proposed the substitution and the owner of the funds that back the substitution.
     amount : Decimal -- ^ Amount being substituted
     lockedAmulet : Optional (ContractId LockedAmulet)
     requestedAt : Time -- ^ Time of the request to create the proposal.
     expiresAt : Time -- ^ Time after which the DSO party may withdraw the proposal.
     originalSubstitutionCid : Optional (ContractId GovernanceLockSubstitution)
       -- ^ Contract id of the first proposal of this workflow. `None` for the first proposal itself.
+    proposers : Optional [Party]
+      -- ^ Parties that proposed the substitution.
+      -- When present, the `owner` is guaranteed to be a member of the `proposers`.
+      -- When absent, the `owner` is the sole proposer.
     newControllers : Optional GovernanceLockControllers -- ^ New custom controllers of the substituted lock.
     votes : Optional Proposal.ProposalVotes -- ^ Votes recorded so far.
   where
-    signatory target.dso, owner
+    signatory target.dso, governanceLockSubstitutionProposers this
     observer target.owner, governanceLockObservers target.specification, allControllers (governanceLockSubstitutionControllers this)
     -- A proposal by the target lock owner is funded by the target lock, not by `lockedAmulet`
-    ensure (if owner == target.owner then isNone lockedAmulet else True) &&
-      validationSucceeds (validateNewGovernanceLockControllers target.specification newControllers)
+    ensure validationSucceeds (validateGovernanceLockSubstitution this)
 
     choice GovernanceLockSubstitution_DsoExpire : GovernanceLockSubstitution_DsoExpireResult
       controller target.dso
@@ -77,8 +82,25 @@ template GovernanceLockSubstitution with
 data GovernanceLockSubstitution_DsoExpireResult = GovernanceLockSubstitution_DsoExpireResult {}
   deriving (Serializable)
 
+validateGovernanceLockSubstitution : CanAssert m => GovernanceLockSubstitution -> m ()
+validateGovernanceLockSubstitution substitution@GovernanceLockSubstitution{..} = do
+  require "non-empty proposers" (not $ null $ governanceLockSubstitutionProposers substitution)
+  require' ("owner", owner) isMemberR ("proposers", governanceLockSubstitutionProposers substitution)
+  when (owner == target.owner) $ require "no lockedAmulet for self-substitution" (isNone lockedAmulet)
+  validateNewGovernanceLockControllers target.specification newControllers
+
+governanceLockSubstitutionProposers : GovernanceLockSubstitution -> [Party]
+governanceLockSubstitutionProposers substitution = fromOptional [substitution.owner] substitution.proposers
+
+governanceLockSubstitutionVotes : GovernanceLockSubstitution -> Proposal.ProposalVotes
+governanceLockSubstitutionVotes substitution =
+  -- Substitutions created before custom controllers were added will have `votes = None`.
+  -- In this case we must provide the proposers' acceptance, the same way it's provided on newly created substitutions,
+  -- otherwise a pre-existing substitution is stuck and can never be approved.
+  fromOptional (Map.fromList $ fmap (, Proposal.PV_Accept) (governanceLockSubstitutionProposers substitution)) substitution.votes
+
 governanceLockSubstitutionControllers : GovernanceLockSubstitution -> ControllersSpecification
-governanceLockSubstitutionControllers (GovernanceLockSubstitution target owner _amount _lockedAmulet _requestedAt _expiresAt _originalSubstitutionCid _newControllers _votes) =
+governanceLockSubstitutionControllers (GovernanceLockSubstitution target owner _amount _lockedAmulet _requestedAt _expiresAt _originalSubstitutionCid _proposers _newControllers _votes) =
   let optControllers = case target.specification of
         GLS_FullLock spec -> spec.controllers >>= (.substitutionControllers)
         GLS_VestingLock spec -> spec.vestingControllers
@@ -87,7 +109,7 @@ governanceLockSubstitutionControllers (GovernanceLockSubstitution target owner _
 
 -- | Memo of a substitution proposal of a `GovernanceLock`: the memo of the new lock plus the accept request.
 governanceLockSubstitutionMetadata : GovernanceLockSubstitution -> Metadata
-governanceLockSubstitutionMetadata (GovernanceLockSubstitution target _owner _amount _lockedAmulet _requestedAt _expiresAt _originalSubstitutionCid newControllers _votes) =
+governanceLockSubstitutionMetadata (GovernanceLockSubstitution target _owner _amount _lockedAmulet _requestedAt _expiresAt _originalSubstitutionCid _proposers newControllers _votes) =
   encodeGovernanceLockMetadataWithRequest'
     (<> encodeGovernanceLockNewCustomControllersMemoEntries newControllers)
     "accept-to-substitute-lock"
@@ -112,9 +134,9 @@ governanceLock_substitutionResult_completedToTransferInstructionResult (Governan
 
 -- | Type to simplify passing in all the arguments required to create a substitution proposal.
 data GovernanceLockProposeSubstitutionArgs = GovernanceLockProposeSubstitutionArgs with
-  dso : Party
   target : GovernanceLockKey
-  owner : Party -- ^ Party that proposed the substitution
+  owner : Party -- ^ The proposer and owner of the funds that back the substitution.
+  proposers : [Party] -- ^ Parties that proposed the substitution.
   newControllers : Optional GovernanceLockControllers -- ^ New custom controllers of the substituted lock.
   amount : Decimal -- ^ Amount being substituted
   inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
@@ -127,13 +149,15 @@ data GovernanceLockProposeSubstitutionArgs = GovernanceLockProposeSubstitutionAr
 governanceLock_proposeSubstitution : GovernanceLockProposeSubstitutionArgs -> Update (GovernanceLock_SubstitutionResult, Optional (ContractId Amulet))
 governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs {..} = do
   assertInPast24Hours "requestedAt" requestedAt
+  checkActor owner proposers
+
   -- A substitution proposed by the owner of the target lock is funded by the target lock on acceptance,
   -- so it locks no funds and ignores `inputHoldingCids`
   (lockedAmulet, changeHolding) <- if target.owner == owner
     then pure (None, None)
     else do
       ([lockedAmulet], changeHolding) <- lockAmulet
-        (ForOwner with dso; owner)
+        (ForOwner with dso = target.dso; owner)
         [(amount, governanceLockExpiresAt target.specification)]
         inputHoldingCids
         context
@@ -146,21 +170,25 @@ governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs {..} = 
       assertWithinDeadline "target lock endTime" endTime
       pure $ min maxExpiresAt endTime
 
-  validateNewGovernanceLockControllers target.specification newControllers
+  let sortedProposers = List.dedupSort proposers
+      substitution = GovernanceLockSubstitution with
+        target
+        owner
+        amount
+        lockedAmulet
+        requestedAt
+        expiresAt
+        originalSubstitutionCid = None
+        proposers = Some sortedProposers
+        newControllers
+        votes = Some Map.empty
+
+  validateGovernanceLockSubstitution substitution
 
   result <- Proposal.create Proposal.ProposalUpdateArgs with
     proposalCid = None
-    proposal = GovernanceLockSubstitution with
-      target
-      owner
-      newControllers
-      amount
-      lockedAmulet
-      votes = Some Map.empty
-      requestedAt
-      expiresAt
-      originalSubstitutionCid = None
-    actors = [owner]
+    proposal = substitution
+    actors = sortedProposers
     reason
     getContext = pure (context, state)
 
@@ -228,12 +256,9 @@ instance HasCheckedFetch GovernanceLockSubstitution ForDso where
 instance Proposal.ProposalOperations GovernanceLockSubstitution GovernanceLock_SubstitutionResult_Completed where
   mkProposalView proposal@GovernanceLockSubstitution{..} = Proposal.ProposalView with
     lockKey = target
-    proposers = [owner]
+    proposers = governanceLockSubstitutionProposers proposal
     controllers = governanceLockSubstitutionControllers proposal
-    -- Substitutions created before custom controllers were added will have `votes = None`.
-    -- In this case we must provide the proposer's acceptance, the same way it's provided on newly created substitutions,
-    -- otherwise a pre-existing substitution is stuck and can never be approved.
-    votes = fromOptional (Map.singleton owner Proposal.PV_Accept) votes
+    votes = governanceLockSubstitutionVotes proposal
     amount
     lockedAmulet
     requestedAt
