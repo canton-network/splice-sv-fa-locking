@@ -2,15 +2,20 @@ package org.lfdecentralizedtrust.splice.integration.tests
 
 import com.digitalasset.canton.config.NonNegativeFiniteDuration
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms
+import org.lfdecentralizedtrust.splice.config.ConfigTransforms.{
+  ConfigurableApp,
+  updateAutomationConfig,
+}
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.IntegrationTest
+import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.FeaturedAppPermanentUnderlockTrigger
 import org.lfdecentralizedtrust.splice.util.*
 
 import scala.concurrent.duration.*
 
 @org.lfdecentralizedtrust.splice.util.scalatesttags.SpliceDsoGovernance_0_1_32
-class FeaturedAppUnderlockStatusUpdateIntegrationTest
+class FeaturedAppUnderlockIntegrationTest
     extends IntegrationTest
     with WalletTestUtil
     with GovernanceLockTest
@@ -23,13 +28,22 @@ class FeaturedAppUnderlockStatusUpdateIntegrationTest
     EnvironmentDefinition
       .simpleTopology1Sv(this.getClass.getSimpleName)
       .addConfigTransforms((_, config) =>
-        withFeaturedAppUnderlockEnforcement(basicLockThreshold = Some(basicLockThreshold))(config)
+        withFeaturedAppUnderlockEnforcement(
+          basicLockThreshold = Some(basicLockThreshold),
+          gracePeriod = Some(NonNegativeFiniteDuration.ofSeconds(5)),
+        )(config)
       )
       .addConfigTransforms((_, config) =>
         ConfigTransforms.updateAllSvAppConfigs_(
           _.copy(
             featuredAppUnderlockStatusUpdateInterval = NonNegativeFiniteDuration.ofSeconds(1)
           )
+        )(config)
+      )
+      // Otherwise it archives charlie's suspended right before charlie locks enough
+      .addConfigTransforms((_, config) =>
+        updateAutomationConfig(ConfigurableApp.Sv)(
+          _.withPausedTrigger[FeaturedAppPermanentUnderlockTrigger]
         )(config)
       )
 
@@ -102,5 +116,29 @@ class FeaturedAppUnderlockStatusUpdateIntegrationTest
         isSuspended(charlie) shouldBe false
       },
     )
+  }
+
+  "archive a suspended featured app right once its grace period has passed" in { implicit env =>
+    val provider = bobValidatorBackend.getValidatorPartyId()
+    val trigger =
+      sv1Backend.dsoDelegateBasedAutomation.trigger[FeaturedAppPermanentUnderlockTrigger]
+
+    actAndCheck(
+      "bob's validator grants itself a FeaturedAppRight without locking anything",
+      eventuallySucceeds() {
+        bobValidatorWalletClient.selfGrantFeaturedAppRight()
+      },
+    )(
+      "the right is suspended",
+      _ => {
+        executeInstructionsFor(provider)
+        isSuspended(provider) shouldBe true
+      },
+    )
+
+    clue("the trigger archives the right once its grace period has passed") {
+      eventually()(trigger.runOnce().futureValue shouldBe true)
+      eventually()(featuredAppRightsFor(provider) shouldBe empty)
+    }
   }
 }
