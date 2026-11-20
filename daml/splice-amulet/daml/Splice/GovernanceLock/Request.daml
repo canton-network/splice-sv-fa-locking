@@ -42,6 +42,7 @@ import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock
 import Splice.GovernanceLock.Withdraw
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
+import Splice.Util (assertInPast24Hours)
 import Splice.Util.Memo
 import Splice.Util.Parser
 

@@ -29,11 +29,17 @@ module Splice.Util
   patchListAsScalar,
   patchListAsSet,
 
-  deprecatedChoice
+  deprecatedChoice,
+
+  assertInPastPeriod,
+  assertInPast24Hours,
+  assertInNextPeriod,
+  assertInNext24Hours,
 ) where
 
 import DA.Action (unless)
-import DA.Time (RelTime)
+import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
+import DA.Time (addRelTime, days, RelTime)
 import DA.Set (Set, difference, union)
 import qualified DA.Set as Set
 import DA.Map (Map)
@@ -269,3 +275,26 @@ instance Patchable a => Patchable (Optional a) where
 deprecatedChoice : Text -> Text -> Text -> Update a
 deprecatedChoice package version choice =
   abort ("Choice " <> show choice <> " is no longer supported since " <> show package <> "-" <> show version)
+
+-- Time utilities
+-----------------
+
+-- | Assert that the given time is in the past, but no further in the past than the given period.
+assertInPastPeriod : Text -> RelTime -> Text -> Time -> Update ()
+assertInPastPeriod periodDesc period desc time = do
+  assertDeadlineExceeded desc time
+  assertWithinDeadline (desc <> " + " <> periodDesc) (time `addRelTime` period)
+
+-- | Assert that the given time is within the past 24 hours
+assertInPast24Hours : Text -> Time -> Update ()
+assertInPast24Hours = assertInPastPeriod "1 day" (days 1)
+
+-- | Assert that the given time is in the future, but no further in the future than the given period.
+assertInNextPeriod : Text -> RelTime -> Text -> Time -> Update ()
+assertInNextPeriod periodDesc period desc time = do
+  assertWithinDeadline desc time
+  assertDeadlineExceeded (desc <> " - " <> periodDesc) (time `addRelTime` (negate period))
+
+-- | Assert that the given time is within the next 24 hours
+assertInNext24Hours : Text -> Time -> Update ()
+assertInNext24Hours = assertInNextPeriod "1 day" (days 1)
