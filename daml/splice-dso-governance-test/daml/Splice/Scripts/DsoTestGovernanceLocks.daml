@@ -589,7 +589,7 @@ setupGovernanceLockTransfer = do
   bob <- setupUser app "bob" app.dso
 
   now <- getTime
-  transferCid <- errorIfLeft =<< tsv1Operations.proposeTransfer (TestEnvRegistries registries registry) alice.primaryParty LockTransferArgs with
+  transferCid <- errorIfLeft =<< tsv1Operations.proposeTransfer (TestEnvRegistries registries registry) [alice.primaryParty] LockTransferArgs with
     source = GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty
@@ -611,7 +611,7 @@ setupVestingLockTransfer = do
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
 
   now <- getTime
-  transferCid <- errorIfLeft =<< tsv1Operations.proposeTransfer (TestEnvRegistries registries registry) alice.primaryParty LockTransferArgs with
+  transferCid <- errorIfLeft =<< tsv1Operations.proposeTransfer (TestEnvRegistries registries registry) [alice.primaryParty] LockTransferArgs with
     source = GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty

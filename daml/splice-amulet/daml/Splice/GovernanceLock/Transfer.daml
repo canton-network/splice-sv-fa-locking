@@ -16,6 +16,7 @@ module Splice.GovernanceLock.Transfer (
 ) where
 
 import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
+import DA.List qualified as List
 import DA.Map qualified as Map
 import DA.Optional
 import DA.Time
@@ -30,7 +31,7 @@ import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Proposal qualified as Proposal
-import Splice.TokenStandard.Utils hiding (require)
+import Splice.TokenStandard.Utils hiding (require, require')
 import Splice.Types
 import Splice.Util
 
@@ -42,25 +43,27 @@ template GovernanceLockTransfer with
     amount : Decimal
       -- ^ Amount moved out of the source locks.
     requestedAt : Time
-      -- ^ When the sender requested the transfer.
+      -- ^ When the proposers requested the transfer.
     expiresAt : Time
       -- ^ When the transfer proposal expires.
+    proposers : Optional [Party]
+      -- ^ The parties that proposed the transfer.
     newControllers : Optional GovernanceLockControllers
       -- ^ New custom controllers of the transferred lock.
-      -- Note: the new controllers are specified by the sender of the transfer, rather than the receiver.
+      -- Note: the new controllers are specified by the proposers of the transfer, rather than the receiver.
       -- This is an accepted departure from CIP-0127.
     votes : Optional Proposal.ProposalVotes
       -- ^ Votes recorded so far.
     originalProposalCid : Optional (ContractId GovernanceLockTransfer)
   where
-    signatory source.dso, source.owner,
+    signatory source.dso, governanceLockTransferProposers this,
               -- Make the receiver a signatory once they've approved the transfer
               -- This is necessary for `governanceLock_executeTransfer` to have the authority of the receiver when locking amulet
               (if Map.lookup receiver (governanceLockTransferVotes this) == Some Proposal.PV_Accept
                 then [receiver]
                 else [])
     observer receiver, allControllers (governanceLockTransferControllers this)
-    ensure governanceLockTransferIsValid this
+    ensure validationSucceeds (validateGovernanceLockTransfer this)
 
     interface instance V1.TransferInstruction for GovernanceLockTransfer where
       view = Proposal.transferInstructionViewV1 "transfer" this
@@ -89,15 +92,16 @@ data GovernanceLockTransfer_DsoExpireResult = GovernanceLockTransfer_DsoExpireRe
   deriving (Serializable)
 
 -- | Invariants of lock transfer proposals.
--- To be used in the `GovernanceLockTransfer` template to `ensure` basic invariants on direct create.
--- `governanceLock_proposeTransfer` checks all of this with clearer messages.
-governanceLockTransferIsValid : GovernanceLockTransfer -> Bool
-governanceLockTransferIsValid GovernanceLockTransfer{..} =
-  let validEndTime = case source.specification of
-        GLS_FullLock _ -> True
-        GLS_VestingLock v -> expiresAt <= v.endTime
-  in amount > 0.0 && receiver /= source.owner && validEndTime &&
-    validationSucceeds (validateNewGovernanceLockControllers source.specification newControllers)
+-- To be used in the `GovernanceLockTransfer` template and in `governanceLock_proposeTransfer` to check invariants on creation.
+validateGovernanceLockTransfer : CanAssert m => GovernanceLockTransfer -> m ()
+validateGovernanceLockTransfer transfer@GovernanceLockTransfer{..} = do
+  require' ("receiver", receiver) (notR isEqualR) ("lock owner", source.owner)
+  require' ("amount", amount) isGreaterR ("zero", 0.0)
+  require "non-empty proposers" (not $ null $ governanceLockTransferProposers transfer)
+  validateNewGovernanceLockControllers source.specification newControllers
+  case source.specification of
+    GLS_FullLock _ -> pure ()
+    GLS_VestingLock v -> require' ("expiresAt", expiresAt) isLessOrEqualR ("vesting end time", v.endTime)
 
 governanceLockTransferControllers : GovernanceLockTransfer -> ControllersSpecification
 governanceLockTransferControllers GovernanceLockTransfer{source, receiver} =
@@ -107,8 +111,15 @@ governanceLockTransferControllers GovernanceLockTransfer{source, receiver} =
       controllerSets = optional [[]] (.controllers) optControllers
   in makeControllersSpecification $ fmap (\s -> source.owner :: receiver :: s) controllerSets
 
+governanceLockTransferProposers : GovernanceLockTransfer -> [Party]
+governanceLockTransferProposers transfer = fromOptional [transfer.source.owner] transfer.proposers
+
 governanceLockTransferVotes : GovernanceLockTransfer -> Proposal.ProposalVotes
-governanceLockTransferVotes transfer = fromOptional (Map.singleton transfer.source.owner Proposal.PV_Accept) transfer.votes
+governanceLockTransferVotes transfer =
+  -- Transfers created before custom controllers were added will have `votes = None`.
+  -- In this case we must provide the proposers' acceptance, the same way it's provided on newly created transfers,
+  -- otherwise a pre-existing transfer is stuck and can never be approved.
+  fromOptional (Map.fromList $ fmap (, Proposal.PV_Accept) (governanceLockTransferProposers transfer)) transfer.votes
 
 governanceLockTransferMetadata : GovernanceLockTransfer -> Metadata
 governanceLockTransferMetadata GovernanceLockTransfer{..} =
@@ -134,6 +145,7 @@ governanceLock_transferResult_completedToTransferInstructionResult _ =
 
 data GovernanceLockProposeTransferArgs = GovernanceLockProposeTransferArgs with
   source : GovernanceLockKey
+  proposers : [Party]
   receiver : Party
   newControllers : Optional GovernanceLockControllers
   amount : Decimal
@@ -152,15 +164,26 @@ governanceLock_proposeTransfer GovernanceLockProposeTransferArgs{..} = do
       pure $ min maxExpiresAt endTime
 
   assertInPast24Hours "requestedAt" requestedAt
-  require' ("receiver", receiver) (notR isEqualR) ("sender", source.owner)
-  require' ("amount", amount) isGreaterR ("zero", 0.0)
 
-  validateNewGovernanceLockControllers source.specification newControllers
+  let sortedProposers = List.dedupSort proposers
+      transfer = GovernanceLockTransfer with
+        source
+        proposers = Some sortedProposers
+        receiver
+        newControllers
+        amount
+        votes = Some Map.empty
+        requestedAt
+        expiresAt
+        originalProposalCid = None
+
+  validateGovernanceLockTransfer transfer
 
   Proposal.create Proposal.ProposalUpdateArgs with
     proposalCid = None
     proposal = GovernanceLockTransfer with
       source
+      proposers = Some sortedProposers
       receiver
       newControllers
       amount
@@ -168,7 +191,7 @@ governanceLock_proposeTransfer GovernanceLockProposeTransferArgs{..} = do
       requestedAt
       expiresAt
       originalProposalCid = None
-    actors = [source.owner]
+    actors = sortedProposers
     reason
     getContext = pure (context, state)
 
@@ -212,11 +235,8 @@ instance HasCheckedFetch GovernanceLockTransfer ForDso where
 instance Proposal.ProposalOperations GovernanceLockTransfer GovernanceLock_TransferResult_Completed where
   mkProposalView proposal@GovernanceLockTransfer{..} = Proposal.ProposalView with
     lockKey = source
-    proposers = [source.owner]
+    proposers = fromOptional [source.owner] proposers
     controllers = governanceLockTransferControllers proposal
-    -- Transfers created before custom controllers were added will have `votes = None`.
-    -- In this case we must provide the proposer's acceptance, the same way it's provided on newly created transfers,
-    -- otherwise a pre-existing transfer is stuck and can never be approved.
     votes = governanceLockTransferVotes proposal
     amount
     lockedAmulet = None

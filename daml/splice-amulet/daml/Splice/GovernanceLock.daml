@@ -116,7 +116,7 @@ import Splice.Expiry hiding (maxTime)
 import Splice.ExternalPartyConfigState
 import Splice.Fees (relTimeToDays, relTimeToSeconds)
 import Splice.GovernanceLock.Controllers
-import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
+import Splice.TokenStandard.Utils hiding (require, require', reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
 import Splice.Types
 import Splice.Util
