@@ -130,6 +130,7 @@
       - Add custom controllers to governance locks, as specified in
         [CIP-127](https://github.com/canton-foundation/cips/blob/main/cip-0127/cip-0127.md).
         A lock can name custom controllers for unlocks, substitutions and vesting, instead of the lock owner alone.
+        Each of these three actions has its own optional controllers specification.
         A controllers specification is a list of party sets. An action is approved once all parties
         of any one set approve it.
 
@@ -137,17 +138,20 @@
           unlocks and vested fund withdrawals execute immediately, and transfers and substitutions need
           the same approvals as before.
 
+        - For each action that has custom controllers, these controllers replace the owner.
+          The owner can no longer do that action alone, unless the owner forms a controller set alone.
+          A transfer always needs the approval of the owner as well.
+
         - Unlocks, vested fund withdrawals, transfers, and substitutions of governance locks with custom controllers
           are now proposals that the controllers of the lock approve. A proposal executes as soon as all parties of one
           controller set accept it. If the parties that create the proposal already form a controller set,
-          the proposal executes immediately. This is the case for unlocks and withdrawals of a lock without
-          custom controllers, and is possible for substitutions. A transfer never executes immediately,
-          because it always needs the approval of the receiver.
+          the proposal executes immediately.
 
         - While a proposal is pending, the parties vote on it with the Token Standard V2
           `TransferInstruction_Accept`, `TransferInstruction_Reject` and `TransferInstruction_Withdraw` choices.
           Each choice takes a list of actors, so several parties can vote jointly in a single choice exercise.
           The parties that created the proposal (the proposers) count as accepting it.
+          Who can exercise each choice:
 
           - `TransferInstruction_Accept`: any controller that has not accepted yet. This includes a controller
             that rejected earlier, and a proposer that withdrew earlier.
@@ -155,8 +159,9 @@
             and is not a proposer. Proposers cannot use this choice.
           - `TransferInstruction_Withdraw`: any proposer that currently accepts the proposal.
             It records a rejection for that proposer.
-          - A proposal is rejected and archived once all proposers withdraw it,
-            or once every controller set contains a rejection.
+
+          A proposal is rejected and archived once all proposers withdraw it,
+          or once every controller set contains a rejection.
 
         - Each proposal expires after the `tokenStandardMaxTTL` of the transfer config (default 90 days),
           counted from its `requestedAt` time. An unlock proposal expires earlier at its `vestingStartTime`,
@@ -172,7 +177,8 @@
           - The `vestedUntilTime` of a withdrawal can be in the future when the proposal is created.
             It must be in the past when the proposal executes.
 
-        - The sender of a transfer sets the custom controllers of the new lock that the receiver owns.
+        - The proposers of a governance lock transfer set the custom controllers of the new lock
+          that the transfer creates for the receiver.
           Receivers are expected to review these new controllers before they accept the transfer.
 
         Implementation details:
@@ -188,14 +194,18 @@
           `new-vesting-controllers` memo keys. The values are JSON lists of lists of parties.
           A vesting lock accepts only vesting controllers.
 
+        - Unlock, withdrawal and transfer requests on a lock with custom controllers name the lock owner
+          with the `target-lock-owner` memo key, so that a controller other than the owner can send the request.
+          Substitution requests always name the owner of the target lock with this key.
+
         - The proposal templates and their controllers:
 
           - An unlock request creates an `UnlockProposal`, controlled by the unlock controllers.
           - A withdrawal request creates a `WithdrawVestedFundsProposal`, controlled by the vesting controllers.
           - A `GovernanceLockTransfer` needs the approval of the source lock owner, the receiver and one set of
             the substitution controllers (vesting controllers for a vesting lock).
-          - A `GovernanceLockSubstitution` needs the approval of the party that proposes it, and of the owner of the
-            target lock or one set of its substitution controllers (vesting controllers for a vesting lock).
+          - A `GovernanceLockSubstitution` needs the approval of the party whose funds back the substitution,
+            who must be one of the proposers, and of the owner of the target lock or one set of its substitution controllers (vesting controllers for a vesting lock).
 
         - Each proposal implements the `TransferInstruction` V1 and V2 interfaces.
           `UnlockProposal` and `WithdrawVestedFundsProposal` do not support the V1 accept and reject choices.
