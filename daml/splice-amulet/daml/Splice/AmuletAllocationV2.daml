@@ -32,7 +32,7 @@ import Splice.Amulet.TokenApiUtils
 import Splice.Expiry (TimeLock(..))
 import Splice.Fees (expiringAmount)
 import Splice.Types
-import Splice.Util
+import Splice.Util hiding (require')
 
 
 -- | V2 amulet allocation created using the `V2.AllocationFactory_Allocate`

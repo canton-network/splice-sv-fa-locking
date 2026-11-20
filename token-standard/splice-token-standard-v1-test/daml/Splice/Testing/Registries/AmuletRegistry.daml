@@ -260,11 +260,7 @@ registryApi_getTransferFactory registry arg = do
         Left _ -> None
         Right (GLR_CreateGovernanceLock _fullSpec) -> None
         Right (GLR_UnlockGovernanceLock target _unlockAmount _vestingStartTime) -> Some target
-        Right (GLR_TransferLock specification _newOwner _newControllers _transferAmount) ->
-          Some GovernanceLockKey with
-            dso = registry.dso
-            owner = arg.transfer.sender
-            specification
+        Right (GLR_TransferLock source _newOwner _newControllers _transferAmount) -> Some source
         Right (GLR_WithdrawVestingLock target _vestedUntilTime) -> Some target
         Right (GLR_SubstituteLock target _newControllers) -> Some target
   tryGovernanceLockC <- forA governanceLockTarget (registryApi_tryGovernanceLockDisclosures registry)

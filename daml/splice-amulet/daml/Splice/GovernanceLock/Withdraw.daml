@@ -162,6 +162,7 @@ instance HasCheckedFetch WithdrawVestedFundsProposal ForDso where
 instance Proposal.ProposalOperations WithdrawVestedFundsProposal GovernanceLock_DsoWithdrawResult where
   mkProposalView WithdrawVestedFundsProposal{..} = Proposal.ProposalView with
     lockKey = withdrawVestedFundsProposalTarget specification
+    sender = List.head proposers
     proposers
     controllers = withdrawVestedFundsProposalControllers specification
     votes

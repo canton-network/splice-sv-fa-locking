@@ -87,8 +87,6 @@ module Splice.GovernanceLock (
   lockAmulet,
   lockAmuletFor,
   unlockAmulet,
-  assertInPast24Hours,
-  assertInNextPeriod,
 ) where
 
 import Prelude hiding (forA)
@@ -118,7 +116,7 @@ import Splice.Expiry hiding (maxTime)
 import Splice.ExternalPartyConfigState
 import Splice.Fees (relTimeToDays, relTimeToSeconds)
 import Splice.GovernanceLock.Controllers
-import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
+import Splice.TokenStandard.Utils hiding (require, require', reasonMetaKey)
 import Splice.TokenStandard.Utils.Internal.Conversions (encodeRelTime, encodeTime)
 import Splice.Types
 import Splice.Util
@@ -739,16 +737,6 @@ vestingDurationFor (GLK_SuperValidatorRightsOwner _) config = governanceLockSupe
 requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
 requireMinimumLock context amount = do
   require' ("locked amount", amount) isGreaterOrEqualR ("minimum governance lock amount", governanceLockMinimumLockAmount context.governanceLockConfig)
-
-assertInPast24Hours : Text -> Time -> Update ()
-assertInPast24Hours desc time = do
-  assertDeadlineExceeded desc time
-  assertWithinDeadline (desc <> " + 1 day") (time `addRelTime` days 1)
-
-assertInNextPeriod : Text -> RelTime -> Text -> Time -> Update ()
-assertInNextPeriod periodDesc period desc time = do
-  assertWithinDeadline desc time
-  assertDeadlineExceeded (desc <> " - " <> periodDesc) (time `addRelTime` (negate period))
 
 unfeaturedPaymentContextAndConfigFromChoiceContext : Party -> ChoiceContext -> Update (ExternalPartyTransferContext, ExternalPartyConfigState)
 unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
