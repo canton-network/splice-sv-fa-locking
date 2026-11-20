@@ -16,7 +16,6 @@ import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock as gl
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.console.{
   ParticipantClientReference,
-  ValidatorAppReference,
   ValidatorAppBackendReference,
   WalletAppClientReference,
 }
@@ -150,6 +149,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
             BigDecimal,
             Option[RelTime],
             Option[Instant],
+            Option[PartyId],
             LockControllers,
             LockControllers,
         )
@@ -162,6 +162,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
                 transferAmount,
                 vestingPeriod,
                 vestingEndTime,
+                targetLockOwner,
                 sourceControllers,
                 newControllers,
               ) =>
@@ -172,6 +173,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
             ) ++
               vestingPeriod.map(t => (lockVestingDurationMemoKey, t.microseconds.toString)) ++
               vestingEndTime.map(t => (lockVestingEndTimeMemoKey, instantToMicros(t).toString)) ++
+              targetLockOwner.map(p => (targetLockOwnerMemoKey, p.toProtoPrimitive)) ++
               sourceControllers.memoEntries ++
               newControllers.memoEntriesWithPrefix("new-")
         },
@@ -243,7 +245,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     def receiver(transfer: View): String
     def amount(transfer: View): BigDecimal
     def meta(transfer: View): metadatav1.Metadata
-    def pendingActions(transfer: View): Map[tiv2.TransferInstructionAction, List[String]]
+    def pendingActions(transfer: View): Map[tiv2.TransferInstructionAction, Set[String]]
     def originalInstructionCid(transfer: View): Option[CId]
   }
 
@@ -264,9 +266,9 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
             case p: tiv1.transferinstructionstatus.TransferPendingInternalWorkflow =>
               p.pendingActions.asScala.toList.foldMap { case (party, actions) =>
                 actions.split(';').toList.foldMap {
-                  case a if a.contains("accept") => Map(tiaAccept -> List(party))
-                  case a if a.contains("reject") => Map(tiaReject -> List(party))
-                  case a if a.contains("withdraw") => Map(tiaWithdraw -> List(party))
+                  case a if a.contains("accept") => Map(tiaAccept -> Set(party))
+                  case a if a.contains("reject") => Map(tiaReject -> Set(party))
+                  case a if a.contains("withdraw") => Map(tiaWithdraw -> Set(party))
                   case _ => Map.empty
                 }
               }
@@ -289,7 +291,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
           transfer.transfer.meta
         def pendingActions(transfer: tiv2.TransferInstructionView) =
           transfer.availableActions.asScala.toMap.map { case (action, parties) =>
-            (action, parties.asScala.toList.flatMap(_.asScala.toList).distinct)
+            (action, parties.asScala.toList.flatMap(_.asScala.toList).toSet)
           }
         def originalInstructionCid(transfer: tiv2.TransferInstructionView) =
           transfer.originalInstructionCid.toScala
@@ -550,6 +552,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
           lockKind: LockKind,
           lockSubject: String,
           newLockOwner: PartyId,
+          targetLockOwner: Option[PartyId],
           transferAmount: BigDecimal,
           sourceControllers: LockControllers,
           newControllers: LockControllers,
@@ -570,6 +573,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
               transferAmount,
               vestingPeriod,
               vestingEndTime,
+              targetLockOwner,
               sourceControllers,
               newControllers,
             )
@@ -731,32 +735,25 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
   }
 
   object customControllers {
-    case class Parties(
-        alice: RichPartyId,
-        bob: RichPartyId,
-        charlie: RichPartyId,
-        sv1: RichPartyId,
-    ) {
+    case class Party(richPartyId: RichPartyId, participant: ParticipantClientReference) {
+      final val partyId: PartyId = richPartyId.partyId
+    }
+    case class Parties(alice: Party, bob: Party, charlie: Party, sv1: Party) {
       final val all = List(alice, bob, charlie, sv1)
     }
 
     private def makeParty(
         walletAppClient: WalletAppClientReference,
-        validator: ValidatorAppReference,
-    ): RichPartyId = RichPartyId.local(onboardWalletUser(walletAppClient, validator))
+        validator: ValidatorAppBackendReference,
+    ): Party =
+      Party(
+        RichPartyId.local(onboardWalletUser(walletAppClient, validator)),
+        validator.participantClientWithAdminToken,
+      )
 
-    type Propose[CId, View] = (
-        Parties,
-        ParticipantClientReference,
-        NonEmptyList[RichPartyId],
-        RichPartyId,
-        LockControllers,
-    ) => (CId, View)
-
-    private def setupLockAndProposal[
+    def testProposal[
         ICId <: ContractId[?],
         IView,
-        ACId,
         TCId <: ContractId[T],
         TC <: Contract[TCId, T],
         T <: Template,
@@ -764,412 +761,305 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
         ops: TokenStandardOps[ICId, IView],
         proposalCompanion: ContractCompanion[TC, TCId, T],
     )(
-        makeControllers: List[List[PartyId]] => LockControllers,
-        setupLock: (RichPartyId, LockControllers) => gl.GovernanceLock.ContractId,
-        makeProposers: Parties => NonEmptyList[RichPartyId],
-        proposalValidator: ValidatorAppBackendReference,
-        propose: Propose[ICId, IView],
+        // The custom controllers to use when testing the proposal
+        makeControllers: Parties => List[List[Party]],
+        // How to set the custom controllers in the `LockControllers`
+        makeLockControllers: List[List[PartyId]] => LockControllers,
+        // Create the lock; return its owner and its contract id
+        setupLock: (Parties, LockControllers) => (Party, gl.GovernanceLock.ContractId),
+        // The set of parties who propose the proposal when testing acceptance
+        makeAcceptProposers: Parties => NonEmptyList[Party],
+        // The set of parties who accept the proposal when testing acceptance
+        makeAcceptors: Parties => NonEmptyList[Party],
+        // The set of parties who propose the proposal when testing rejection
+        makeRejectProposers: Parties => NonEmptyList[Party],
+        // The set of parties who reject the proposal when testing rejection
+        makeRejectors: Parties => NonEmptyList[Party],
+        // The set of parties who propose the proposal when testing withdrawal
+        makeWithdrawProposers: Parties => NonEmptyList[Party],
+        // Create the proposal; return its contract id and transfer instruction view
+        propose: (
+            Parties,
+            ParticipantClientReference,
+            NonEmptyList[RichPartyId],
+            LockControllers,
+        ) => (ICId, IView),
+        // The amount expected to be reported on the proposal's transfer instruction view
         expectedAmount: BigDecimal,
-        expectedReceiver: (Parties, RichPartyId) => PartyId,
-    )(implicit env: SpliceTestConsoleEnvironment) = {
+        // The receiver expected to be reported on the proposal's transfer instruction view
+        expectedReceiver: Parties => PartyId,
+        // The set of parties that are expected to own locks after the proposal is accepted
+        makeUpdatedLockOwners: Parties => List[Party],
+        // A function to check the updated set of locks after the proposal is accepted
+        checkUpdatedLocks: (Parties, Seq[(ICId, IView, gl.GovernanceLock.Contract)]) => Unit,
+    )(implicit env: SpliceTestConsoleEnvironment): Seq[gl.GovernanceLock.Contract] = {
+      // Lock and proposal setup
+      // -----------------------
+
       val parties = Parties(
         alice = makeParty(aliceWalletClient, aliceValidatorBackend),
         bob = makeParty(bobWalletClient, bobValidatorBackend),
         charlie = makeParty(charlieWalletClient, aliceValidatorBackend),
         sv1 = makeParty(sv1WalletClient, sv1ValidatorBackend),
       )
-      val controllers = makeControllers(
-        List(
-          List(parties.alice, parties.bob, parties.charlie),
-          List(parties.bob, parties.charlie, parties.sv1),
-        ).map(_.map(_.partyId))
-      )
-      val proposers0 = makeProposers(parties)
-      val proposers = ops match {
-        // TSv1 can only have one proposer
-        case `tsv1Operations` => NonEmptyList.one(proposers0.head)
-        case `tsv2Operations` => proposers0.sortBy(_.partyId.toProtoPrimitive)
-      }
-      val proposersSet = proposers.toList.toSet
-      val nonProposers = parties.all.filterNot(proposersSet.contains)
-      val lockCid = setupLock(parties.alice, controllers)
+      val controllers = makeLockControllers(makeControllers(parties).map(_.map(_.partyId)))
+      val (lockOwner, origLockCid) = setupLock(parties, controllers)
 
-      // the proposers initiate the proposal
-      val (proposalCid, proposalView) = propose(
-        parties,
-        proposalValidator.participantClientWithAdminToken,
-        proposers,
-        parties.alice,
-        controllers,
-      )
-      // Prove that proposalCid is the correct proposal type
-      val _ = proposalValidator.participantClientWithAdminToken.ledger_api_extensions.acs
-        .filterJava(proposalCompanion)(
-          parties.bob.partyId,
-          predicate = _.id.contractId == proposalCid.contractId,
-        )
-        .loneElement
-
-      ops.transferValues.sender(proposalView) shouldBe proposers.head.partyId.toProtoPrimitive
-      ops.transferValues.receiver(proposalView) shouldBe
-        expectedReceiver(parties, parties.alice).toProtoPrimitive
-      ops.transferValues.amount(proposalView) shouldBe expectedAmount
-      ops.transferValues.pendingActions(proposalView) shouldBe
-        Map(
-          tiaAccept -> nonProposers.map(_.partyId.toProtoPrimitive),
-          tiaReject -> nonProposers.map(_.partyId.toProtoPrimitive),
-          tiaWithdraw -> proposers.toList.map(_.partyId.toProtoPrimitive),
-        )
-
-      (parties, lockCid, proposalCid)
-    }
-
-    def testProposalAccept[
-        ICId <: ContractId[?],
-        IView,
-        ACId,
-        TCId <: ContractId[T],
-        TC <: Contract[TCId, T],
-        T <: Template,
-    ](
-        ops: TokenStandardOps[ICId, IView],
-        proposalCompanion: ContractCompanion[TC, TCId, T],
-    )(
-        makeControllers: List[List[PartyId]] => LockControllers,
-        setupLock: (RichPartyId, LockControllers) => gl.GovernanceLock.ContractId,
-        makeProposers: Parties => NonEmptyList[RichPartyId],
-        proposalValidator: ValidatorAppBackendReference,
-        propose: Propose[ICId, IView],
-        expectedAmount: BigDecimal,
-        expectedReceiver: (Parties, RichPartyId) => PartyId,
-        checkUpdatedLocks: (Parties, Seq[(ICId, IView, gl.GovernanceLock.Contract)]) => Unit,
-    )(implicit env: SpliceTestConsoleEnvironment): Seq[gl.GovernanceLock.Contract] = {
-      // bob proposes the proposal
-      val (parties, _, proposalCid) = setupLockAndProposal(ops, proposalCompanion)(
-        makeControllers,
-        setupLock,
-        makeProposers,
-        proposalValidator,
-        propose,
-        expectedAmount,
-        expectedReceiver,
-      )
-
-      clue("Scan serves an accept choice context for the proposal") {
-        ops.getAcceptContext(proposalCid).disclosedContracts should not be empty
-      }
-
-      // alice accepts the proposal, it remains pending
-      tsv2Operations.acceptTransfer(
-        aliceValidatorBackend.participantClientWithAdminToken,
-        parties.alice,
-        tsv2Operations.makeCId(proposalCid.contractId),
-      )
-      val (stillPendingProposalCid, stillPendingProposalView) = ops
-        .listTransfers(bobValidatorBackend.participantClientWithAdminToken, parties.bob.partyId)
-        .filter { case (_, view) =>
-          ops.transferValues.originalInstructionCid(view) == Some(proposalCid)
+      def setupProposal(
+          makeProposers: Parties => NonEmptyList[Party]
+      ): (ICId, NonEmptyList[Party], List[Party]) = {
+        val proposers = ops match {
+          // TSv1 can only have one proposer
+          case `tsv1Operations` => NonEmptyList.one(makeProposers(parties).head)
+          case `tsv2Operations` => makeProposers(parties).sortBy(_.partyId.toProtoPrimitive)
         }
-        .loneElement
-      val stillPendingProposal =
-        bobValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
+        val firstProposer = proposers.head
+
+        // all proposers must be hosted on the same validator
+        proposers.map(_.participant.name).toList.toSet.size shouldBe 1
+
+        val proposersSet = proposers.toList.map(_.partyId).toSet
+        val nonProposers = parties.all.filterNot(p => proposersSet.contains(p.partyId))
+
+        // the proposers initiate the proposal
+        val (proposalCid, proposalView) = propose(
+          parties,
+          firstProposer.participant,
+          proposers.map(_.richPartyId),
+          controllers,
+        )
+        // Prove that proposalCid is the correct proposal type
+        val _ = firstProposer.participant.ledger_api_extensions.acs
           .filterJava(proposalCompanion)(
-            parties.bob.partyId,
-            predicate = _.id.contractId == stillPendingProposalCid.contractId,
+            firstProposer.partyId,
+            predicate = _.id.contractId == proposalCid.contractId,
           )
           .loneElement
 
-      ops.transferValues.sender(stillPendingProposalView) shouldBe
-        parties.bob.partyId.toProtoPrimitive
-      ops.transferValues.receiver(stillPendingProposalView) shouldBe
-        expectedReceiver(parties, parties.alice).toProtoPrimitive
-      ops.transferValues.amount(stillPendingProposalView) shouldBe expectedAmount
-      ops.transferValues.pendingActions(stillPendingProposalView) shouldBe
-        Map(
-          tiaAccept -> List(parties.charlie, parties.sv1).map(_.partyId.toProtoPrimitive),
-          tiaReject ->
-            List(parties.alice, parties.charlie, parties.sv1).map(_.partyId.toProtoPrimitive),
-          tiaWithdraw -> List(parties.bob).map(_.partyId.toProtoPrimitive),
-        )
+        ops.transferValues.sender(proposalView) shouldBe firstProposer.partyId.toProtoPrimitive
+        ops.transferValues.receiver(proposalView) shouldBe
+          expectedReceiver(parties).toProtoPrimitive
+        ops.transferValues.amount(proposalView) shouldBe expectedAmount
+        ops.transferValues.pendingActions(proposalView) shouldBe
+          Map(
+            tiaAccept -> nonProposers.map(_.partyId.toProtoPrimitive).toSet,
+            tiaReject -> nonProposers.map(_.partyId.toProtoPrimitive).toSet,
+            tiaWithdraw -> proposers.toList.map(_.partyId.toProtoPrimitive).toSet,
+          )
 
-      // charlie accepts the proposal, it executes
-      tsv2Operations.acceptTransfer(
-        aliceValidatorBackend.participantClientWithAdminToken,
-        parties.charlie,
-        tsv2Operations.makeCId(stillPendingProposal.id.contractId),
-      )
+        (proposalCid, proposers, nonProposers)
+      }
 
-      val locks = ops
-        .listTransfers(bobValidatorBackend.participantClientWithAdminToken, parties.bob.partyId)
-        .map { case (lockCid, lockView) =>
-          ops.transferValues.receiver(lockView) shouldBe
-            GovernanceLockUtil.lockManagerParty.toProtoPrimitive
+      // Proposal rejection
+      // ------------------
 
-          val lock = aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-            .filterJava(gl.GovernanceLock.COMPANION)(
-              parties.bob.partyId,
-              predicate = _.id.contractId == lockCid.contractId,
-            )
-            .loneElement
-
-          (lockCid, lockView, lock)
-        }
-
-      checkUpdatedLocks(parties, locks)
-      locks.map(_._3)
-    }
-
-    def testProposalReject[
-        ICId <: ContractId[?],
-        IView,
-        RCId,
-        TCId <: ContractId[T],
-        TC <: Contract[TCId, T],
-        T <: Template,
-    ](
-        ops: TokenStandardOps[ICId, IView],
-        proposalCompanion: ContractCompanion[TC, TCId, T],
-    )(
-        makeControllers: List[List[PartyId]] => LockControllers,
-        setupLock: (RichPartyId, LockControllers) => gl.GovernanceLock.ContractId,
-        makeProposers: Parties => NonEmptyList[RichPartyId],
-        proposalValidator: ValidatorAppBackendReference,
-        propose: Propose[ICId, IView],
-        expectedAmount: BigDecimal,
-        expectedReceiver: (Parties, RichPartyId) => PartyId,
-    )(implicit env: SpliceTestConsoleEnvironment): gl.GovernanceLock.Contract = {
-      // bob proposes the proposal
-      val (parties, origLockCid, proposalCid) = setupLockAndProposal(ops, proposalCompanion)(
-        makeControllers,
-        setupLock,
-        makeProposers,
-        proposalValidator,
-        propose,
-        expectedAmount,
-        expectedReceiver,
-      )
+      val (proposalBeforeRejectCid, rejectProposers, rejectNonProposers) =
+        setupProposal(makeRejectProposers)
 
       clue("Scan serves a reject choice context for the proposal") {
-        ops.getRejectContext(proposalCid).disclosedContracts should not be empty
+        ops.getRejectContext(proposalBeforeRejectCid).disclosedContracts should not be empty
       }
 
-      // alice rejects the proposal, it remains pending
-      tsv2Operations.rejectTransfer(
-        aliceValidatorBackend.participantClientWithAdminToken,
-        parties.alice,
-        tsv2Operations.makeCId(proposalCid.contractId),
-      )
-      val (stillPendingProposalCid, stillPendingProposalView) = ops
-        .listTransfers(bobValidatorBackend.participantClientWithAdminToken, parties.bob.partyId)
-        .filter { case (_, view) =>
-          ops.transferValues.originalInstructionCid(view) == Some(proposalCid)
-        }
-        .loneElement
-      val stillPendingProposal =
-        bobValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-          .filterJava(proposalCompanion)(
-            parties.bob.partyId,
-            predicate = _.id.contractId == stillPendingProposalCid.contractId,
+      val rejectors = makeRejectors(parties)
+      rejectors.zipWithIndex.foldLeft((proposalBeforeRejectCid, Set.empty[PartyId])) {
+        case ((accProposalCid, accRejectors), (rejector, idx)) =>
+          tsv2Operations.rejectTransfer(
+            rejector.participant,
+            rejector.richPartyId,
+            tsv2Operations.makeCId(accProposalCid.contractId),
           )
-          .loneElement
 
-      ops.transferValues.sender(stillPendingProposalView) shouldBe
-        parties.bob.partyId.toProtoPrimitive
-      ops.transferValues.receiver(stillPendingProposalView) shouldBe
-        expectedReceiver(parties, parties.alice).toProtoPrimitive
-      ops.transferValues.amount(stillPendingProposalView) shouldBe expectedAmount
-      ops.transferValues.pendingActions(stillPendingProposalView) shouldBe
-        Map(
-          tiaAccept ->
-            List(parties.alice, parties.charlie, parties.sv1).map(_.partyId.toProtoPrimitive),
-          tiaReject -> List(parties.charlie, parties.sv1).map(_.partyId.toProtoPrimitive),
-          tiaWithdraw -> List(parties.bob).map(_.partyId.toProtoPrimitive),
-        )
+          if (idx == rejectors.length - 1) {
+            // the final rejection archives the proposal and leaves the lock unchanged
+            val (lockAfterRejectCid, _) =
+              ops.listTransfers(lockOwner.participant, lockOwner.partyId).loneElement
+            lockAfterRejectCid.contractId shouldBe origLockCid.contractId
 
-      // charlie rejects the proposal, it's archived and the lock is unchanged
-      tsv2Operations.rejectTransfer(
-        aliceValidatorBackend.participantClientWithAdminToken,
-        parties.charlie,
-        tsv2Operations.makeCId(stillPendingProposal.id.contractId),
-      )
-      val (lockCid, lockView) = ops
-        .listTransfers(bobValidatorBackend.participantClientWithAdminToken, parties.bob.partyId)
-        .loneElement
-      val lock = aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-        .filterJava(gl.GovernanceLock.COMPANION)(
-          parties.bob.partyId,
-          predicate = _.id.contractId == lockCid.contractId,
-        )
-        .loneElement
-
-      lock.id shouldBe origLockCid
-      ops.transferValues.sender(lockView) shouldBe parties.alice.partyId.toProtoPrimitive
-      ops.transferValues.receiver(lockView) shouldBe
-        GovernanceLockUtil.lockManagerParty.toProtoPrimitive
-
-      lock
-    }
-
-    def testProposalWithdraw[
-        ICId <: ContractId[?],
-        IView,
-        TCId <: ContractId[T],
-        TC <: Contract[TCId, T],
-        T <: Template,
-    ](
-        ops: TokenStandardOps[ICId, IView],
-        proposalCompanion: ContractCompanion[TC, TCId, T],
-    )(
-        makeControllers: List[List[PartyId]] => LockControllers,
-        setupLock: (RichPartyId, LockControllers) => gl.GovernanceLock.ContractId,
-        makeProposers: Parties => NonEmptyList[RichPartyId],
-        proposalValidator: ValidatorAppBackendReference,
-        propose: Propose[ICId, IView],
-        expectedAmount: BigDecimal,
-        expectedReceiver: (Parties, RichPartyId) => PartyId,
-    )(implicit env: SpliceTestConsoleEnvironment): gl.GovernanceLock.Contract = {
-      val (parties, origLockCid, proposalCid) = setupLockAndProposal(ops, proposalCompanion)(
-        makeControllers,
-        setupLock,
-        makeProposers,
-        proposalValidator,
-        propose,
-        expectedAmount,
-        expectedReceiver,
-      )
-      val proposers = makeProposers(parties)
-
-      clue("Scan serves a withdraw choice context for the proposal") {
-        ops.getWithdrawContext(proposalCid).disclosedContracts should not be empty
-      }
-
-      val (stillPendingProposalCid, _): (ICId, List[RichPartyId]) = ops match {
-        // TSv1 can only have one proposer, so we can't test that a withdrawal keeps it pending
-        case `tsv1Operations` => (proposalCid, Nil)
-        case `tsv2Operations` =>
-          proposers.tail.foldRight((proposalCid, List.empty[RichPartyId])) {
-            case (proposer, (accProposalCid, accProposers)) =>
-              // alice withdraws the proposal, it remains pending
-              ops.withdrawTransfer(
-                proposalValidator.participantClientWithAdminToken,
-                proposer,
-                accProposalCid,
-              )
-              val (stillPendingProposalCid, stillPendingProposalView) = ops
-                .listTransfers(
-                  proposalValidator.participantClientWithAdminToken,
-                  proposer.partyId,
+            (lockAfterRejectCid, accRejectors)
+          } else {
+            // the proposal remains pending after rejection
+            val updRejectors = accRejectors + rejector.partyId
+            val (stillPendingProposalCid, stillPendingProposalView) = ops
+              .listTransfers(rejectProposers.head.participant, rejectProposers.head.partyId)
+              .filter { case (_, view) =>
+                ops.transferValues.originalInstructionCid(view) == Some(proposalBeforeRejectCid)
+              }
+              .loneElement
+            // prove that the proposal is the correct type
+            val _ =
+              rejectProposers.head.participant.ledger_api_extensions.acs
+                .filterJava(proposalCompanion)(
+                  rejectProposers.head.partyId,
+                  predicate = _.id.contractId == stillPendingProposalCid.contractId,
                 )
-                .filter { case (_, view) =>
-                  ops.transferValues.originalInstructionCid(view) == Some(proposalCid)
-                }
                 .loneElement
-              val _ =
-                proposalValidator.participantClientWithAdminToken.ledger_api_extensions.acs
-                  .filterJava(proposalCompanion)(
-                    proposer.partyId,
-                    predicate = _.id.contractId == stillPendingProposalCid.contractId,
-                  )
-                  .loneElement
 
-              ops.transferValues.sender(stillPendingProposalView) shouldBe
-                parties.alice.partyId.toProtoPrimitive
-              ops.transferValues.receiver(stillPendingProposalView) shouldBe
-                expectedReceiver(parties, parties.alice).toProtoPrimitive
-              ops.transferValues.amount(stillPendingProposalView) shouldBe expectedAmount
-              ops.transferValues.pendingActions(stillPendingProposalView) shouldBe
-                Map(
-                  tiaAccept -> (List(proposer) ++ accProposers ++ List(parties.bob, parties.sv1))
-                    .map(_.partyId.toProtoPrimitive),
-                  tiaReject -> List(parties.bob, parties.sv1).map(_.partyId.toProtoPrimitive),
-                  tiaWithdraw -> List(parties.charlie).map(_.partyId.toProtoPrimitive),
-                )
+            ops.transferValues.sender(stillPendingProposalView) shouldBe
+              rejectProposers.head.partyId.toProtoPrimitive
+            ops.transferValues.receiver(stillPendingProposalView) shouldBe
+              expectedReceiver(parties).toProtoPrimitive
+            ops.transferValues.amount(stillPendingProposalView) shouldBe expectedAmount
+            ops.transferValues.pendingActions(stillPendingProposalView) shouldBe
+              Map(
+                tiaAccept -> rejectNonProposers.map(_.partyId.toProtoPrimitive).toSet,
+                tiaReject -> rejectNonProposers
+                  .filterNot(p => updRejectors.contains(p.partyId))
+                  .map(_.partyId.toProtoPrimitive)
+                  .toSet,
+                tiaWithdraw -> rejectProposers.toList.map(_.partyId.toProtoPrimitive).toSet,
+              )
 
-              (stillPendingProposalCid, proposer :: accProposers)
+            (stillPendingProposalCid, updRejectors)
           }
       }
 
-      // the first proposer withdraws the proposal, it's archived and the lock is unchanged
-      ops.withdrawTransfer(
-        proposalValidator.participantClientWithAdminToken,
-        proposers.head,
-        stillPendingProposalCid,
-      )
-      val (lockCid, lockView) = ops
-        .listTransfers(proposalValidator.participantClientWithAdminToken, parties.bob.partyId)
-        .loneElement
-      val lock = proposalValidator.participantClientWithAdminToken.ledger_api_extensions.acs
-        .filterJava(gl.GovernanceLock.COMPANION)(
-          parties.alice.partyId,
-          predicate = _.id.contractId == lockCid.contractId,
+      // Proposal withdrawal
+      // -------------------
+
+      val (proposalBeforeWithdrawCid, withdrawProposers, withdrawNonProposers) =
+        setupProposal(makeWithdrawProposers)
+
+      clue("Scan serves a withdraw choice context for the proposal") {
+        ops.getWithdrawContext(proposalBeforeWithdrawCid).disclosedContracts should not be empty
+      }
+
+      withdrawProposers.zipWithIndex.foldLeft((proposalBeforeWithdrawCid, Set.empty[PartyId])) {
+        case ((accProposalCid, accWithdrawers), (proposer, idx)) =>
+          ops.withdrawTransfer(proposer.participant, proposer.richPartyId, accProposalCid)
+
+          if (idx == withdrawProposers.length - 1) {
+            // the final withdrawal archives the proposal and leaves to lock unchanged
+            val (lockAfterWithdrawCid, _) =
+              ops.listTransfers(lockOwner.participant, lockOwner.partyId).loneElement
+            lockAfterWithdrawCid.contractId shouldBe origLockCid.contractId
+
+            (lockAfterWithdrawCid, accWithdrawers)
+          } else {
+            // the proposal remains pending after withdrawal
+            val updWithdrawers = accWithdrawers + proposer.partyId
+            val (stillPendingProposalCid, stillPendingProposalView) = ops
+              .listTransfers(proposer.participant, proposer.partyId)
+              .filter { case (_, view) =>
+                ops.transferValues.originalInstructionCid(view) == Some(proposalBeforeWithdrawCid)
+              }
+              .loneElement
+            // prove that the proposal is the correct type
+            val _ =
+              proposer.participant.ledger_api_extensions.acs
+                .filterJava(proposalCompanion)(
+                  proposer.partyId,
+                  predicate = _.id.contractId == stillPendingProposalCid.contractId,
+                )
+                .loneElement
+
+            ops.transferValues.sender(stillPendingProposalView) shouldBe
+              withdrawProposers.head.partyId.toProtoPrimitive
+            ops.transferValues.receiver(stillPendingProposalView) shouldBe
+              expectedReceiver(parties).toProtoPrimitive
+            ops.transferValues.amount(stillPendingProposalView) shouldBe expectedAmount
+            ops.transferValues.pendingActions(stillPendingProposalView) shouldBe
+              Map(
+                tiaAccept ->
+                  (accWithdrawers + proposer.partyId ++ withdrawNonProposers.map(_.partyId))
+                    .map(_.toProtoPrimitive)
+                    .toSet,
+                tiaReject -> withdrawNonProposers.map(_.partyId.toProtoPrimitive).toSet,
+                tiaWithdraw -> withdrawProposers
+                  .filterNot(p => updWithdrawers.contains(p.partyId))
+                  .map(_.partyId.toProtoPrimitive)
+                  .toSet,
+              )
+
+            (stillPendingProposalCid, updWithdrawers)
+          }
+      }
+
+      // Proposal acceptance
+      // -------------------
+
+      val (proposalBeforeAcceptCid, acceptProposers, acceptNonProposers) =
+        setupProposal(makeAcceptProposers)
+
+      clue("Scan serves an accept choice context for the proposal") {
+        ops.getAcceptContext(proposalBeforeAcceptCid).disclosedContracts should not be empty
+      }
+
+      val acceptors = makeAcceptors(parties)
+      val (_, _, locks) = acceptors.zipWithIndex.foldLeft(
+        (
+          proposalBeforeAcceptCid,
+          Set.empty[PartyId],
+          Seq.empty[gl.GovernanceLock.Contract],
         )
-        .loneElement
+      ) { case ((accProposalCid, accAcceptors, accLocks), (acceptor, idx)) =>
+        tsv2Operations.acceptTransfer(
+          acceptor.participant,
+          acceptor.richPartyId,
+          tsv2Operations.makeCId(accProposalCid.contractId),
+        )
 
-      lock.id shouldBe origLockCid
-      ops.transferValues.sender(lockView) shouldBe parties.alice.partyId.toProtoPrimitive
-      ops.transferValues.receiver(lockView) shouldBe
-        GovernanceLockUtil.lockManagerParty.toProtoPrimitive
+        if (idx == acceptors.length - 1) {
+          // the final acceptance triggers execution of the proposal
+          val locks = makeUpdatedLockOwners(parties)
+            .flatMap { lockHolder =>
+              val transferCidToView: Map[String, (ICId, IView)] =
+                ops
+                  .listTransfers(lockHolder.participant, lockHolder.partyId)
+                  .map { case (cid, view) => (cid.contractId, (cid, view)) }
+                  .toMap
 
-      lock
-    }
+              lockHolder.participant.ledger_api_extensions.acs
+                .filterJava(gl.GovernanceLock.COMPANION)(
+                  lockHolder.partyId,
+                  predicate = l => transferCidToView.contains(l.id.contractId),
+                )
+                .map { lock =>
+                  val (cid, view) = transferCidToView(lock.id.contractId)
+                  (cid, view, lock)
+                }
+            }
+            .distinctBy(_._1.contractId)
 
-    def testProposal[
-        ICId <: ContractId[?],
-        IView,
-        ARCId,
-        TCId <: ContractId[T],
-        TC <: Contract[TCId, T],
-        T <: Template,
-    ](
-        ops: TokenStandardOps[ICId, IView],
-        proposalCompanion: ContractCompanion[TC, TCId, T],
-    )(
-        makeControllers: List[List[PartyId]] => LockControllers,
-        setupLock: (RichPartyId, LockControllers) => gl.GovernanceLock.ContractId,
-        propose: Propose[ICId, IView],
-        expectedAmount: BigDecimal,
-        expectedReceiver: (Parties, RichPartyId) => PartyId,
-        checkUpdatedLocks: (Parties, Seq[(ICId, IView, gl.GovernanceLock.Contract)]) => Unit,
-        makeAcceptProposers: Parties => NonEmptyList[RichPartyId] = parties =>
-          NonEmptyList.one(parties.bob),
-        acceptProposalValidator: Option[ValidatorAppBackendReference] = None,
-        makeRejectProposers: Parties => NonEmptyList[RichPartyId] = parties =>
-          NonEmptyList.one(parties.bob),
-        rejectProposalValidator: Option[ValidatorAppBackendReference] = None,
-        makeWithdrawProposers: Parties => NonEmptyList[RichPartyId] = parties =>
-          NonEmptyList.of(parties.charlie, parties.alice),
-        withdrawProposalValidator: Option[ValidatorAppBackendReference] = None,
-    )(implicit env: SpliceTestConsoleEnvironment): Seq[gl.GovernanceLock.Contract] = {
-      val origLock = testProposalReject(ops, proposalCompanion)(
-        makeControllers,
-        setupLock,
-        makeRejectProposers,
-        rejectProposalValidator.getOrElse(bobValidatorBackend),
-        propose,
-        expectedAmount,
-        expectedReceiver,
-      )
+          checkUpdatedLocks(parties, locks)
+          (accProposalCid, accAcceptors, locks.map(_._3))
+        } else {
+          // the proposal remains pending after acceptance
+          val updAcceptors = accAcceptors + acceptor.partyId
+          val (stillPendingProposalCid, stillPendingProposalView) = ops
+            .listTransfers(acceptProposers.head.participant, acceptProposers.head.partyId)
+            .filter { case (_, view) =>
+              ops.transferValues.originalInstructionCid(view) == Some(proposalBeforeAcceptCid)
+            }
+            .loneElement
+          // prove that the proposal is the correct type
+          val _ =
+            acceptProposers.head.participant.ledger_api_extensions.acs
+              .filterJava(proposalCompanion)(
+                acceptProposers.head.partyId,
+                predicate = _.id.contractId == stillPendingProposalCid.contractId,
+              )
+              .loneElement
 
-      customControllers.testProposalWithdraw(ops, proposalCompanion)(
-        makeControllers,
-        (_, _) => origLock.id, // lock is already setup by reject above
-        makeWithdrawProposers,
-        withdrawProposalValidator.getOrElse(aliceValidatorBackend),
-        propose,
-        expectedAmount,
-        expectedReceiver,
-      )
+          ops.transferValues.sender(stillPendingProposalView) shouldBe
+            acceptProposers.head.partyId.toProtoPrimitive
+          ops.transferValues.receiver(stillPendingProposalView) shouldBe
+            expectedReceiver(parties).toProtoPrimitive
+          ops.transferValues.amount(stillPendingProposalView) shouldBe expectedAmount
+          ops.transferValues.pendingActions(stillPendingProposalView) shouldBe
+            Map(
+              tiaAccept -> acceptNonProposers
+                .filterNot(p => updAcceptors.contains(p.partyId))
+                .map(_.partyId.toProtoPrimitive)
+                .toSet,
+              tiaReject -> acceptNonProposers.map(_.partyId.toProtoPrimitive).toSet,
+              tiaWithdraw -> acceptProposers.toList.map(_.partyId.toProtoPrimitive).toSet,
+            )
 
-      customControllers.testProposalAccept(ops, proposalCompanion)(
-        makeControllers,
-        (_, _) => origLock.id, // lock is already setup by reject above
-        makeAcceptProposers,
-        acceptProposalValidator.getOrElse(bobValidatorBackend),
-        propose,
-        expectedAmount,
-        expectedReceiver,
-        checkUpdatedLocks,
-      )
+          (stillPendingProposalCid, updAcceptors, accLocks)
+        }
+      }
+
+      locks
     }
   }
 }

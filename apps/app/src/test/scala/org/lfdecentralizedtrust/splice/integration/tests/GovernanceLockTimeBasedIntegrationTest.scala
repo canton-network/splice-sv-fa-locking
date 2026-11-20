@@ -350,7 +350,12 @@ class GovernanceLockTimeBasedIntegrationTest
     // Unlock and withdraw tests are grouped together because testing withdrawal requires a vesting
     // lock, which is created by unlocking a full lock
     s"TSv${ops.version} unlock and withdraw with custom controllers" in { implicit env =>
-      def makeControllers(controllers: List[List[PartyId]]): LockControllers =
+      val makeControllers = (parties: customControllers.Parties) =>
+        List(
+          List(parties.alice, parties.bob, parties.charlie),
+          List(parties.bob, parties.charlie, parties.sv1),
+        )
+      val makeLockControllers = (controllers: List[List[PartyId]]) =>
         LockControllers(unlockControllers = controllers, vestingControllers = controllers)
 
       val vestingStartTime = getLedgerTime.plusSeconds(1).toInstant
@@ -358,26 +363,35 @@ class GovernanceLockTimeBasedIntegrationTest
       val vestingLock = customControllers
         .testProposal(ops, gl.unlock.UnlockProposal.COMPANION)(
           makeControllers,
-          (owner, controllers) => {
-            val (_, _, cid) = createLock(owner, controllers)
-            new gl.GovernanceLock.ContractId(cid.contractId)
+          makeLockControllers,
+          setupLock = (parties, controllers) => {
+            val cid = new gl.GovernanceLock.ContractId(
+              createLock(parties.alice.richPartyId, controllers)._3.contractId
+            )
+            (parties.alice, cid)
           },
-          (_, participant, proposer, targetLockOwner, controllers) =>
+          makeAcceptProposers = parties => NonEmptyList.one(parties.bob),
+          makeAcceptors = parties => NonEmptyList.of(parties.alice, parties.charlie),
+          makeRejectProposers = parties => NonEmptyList.one(parties.bob),
+          makeRejectors = parties => NonEmptyList.of(parties.alice, parties.charlie),
+          makeWithdrawProposers = parties => NonEmptyList.of(parties.alice, parties.charlie),
+          propose = (parties, participant, proposers, controllers) =>
             ops
               .unlockGovernanceLock(
                 participant,
-                proposer,
+                proposers,
                 lockKind,
                 lockSubject,
                 lockAmount,
                 vestingStartTime,
-                Some(targetLockOwner.partyId),
+                Some(parties.alice.partyId),
                 controllers,
               )
               .value,
-          lockAmount,
-          (_, _) => GovernanceLockUtil.lockManagerParty,
-          (parties, vestingLocks) => {
+          expectedAmount = lockAmount,
+          expectedReceiver = _ => GovernanceLockUtil.lockManagerParty,
+          makeUpdatedLockOwners = parties => List(parties.alice),
+          checkUpdatedLocks = (parties, vestingLocks) => {
             val (_, vestingLockView, vestingLock) = vestingLocks.loneElement
             ops.transferValues
               .sender(vestingLockView) shouldBe parties.alice.partyId.toProtoPrimitive
@@ -395,23 +409,31 @@ class GovernanceLockTimeBasedIntegrationTest
 
       customControllers.testProposal(ops, gl.withdraw.WithdrawVestedFundsProposal.COMPANION)(
         makeControllers,
-        (_, _) => vestingLock.id, // lock is already setup by unlock above
-        (_, participant, proposer, targetLockOwner, controllers) =>
+        makeLockControllers,
+        setupLock =
+          (parties, _) => (parties.alice, vestingLock.id), // lock is already setup by unlock above
+        makeAcceptProposers = parties => NonEmptyList.one(parties.bob),
+        makeAcceptors = parties => NonEmptyList.of(parties.alice, parties.charlie),
+        makeRejectProposers = parties => NonEmptyList.one(parties.bob),
+        makeRejectors = parties => NonEmptyList.of(parties.alice, parties.charlie),
+        makeWithdrawProposers = parties => NonEmptyList.of(parties.alice, parties.charlie),
+        propose = (parties, participant, proposers, controllers) =>
           ops
             .withdrawVestingLock(
               participant,
-              proposer,
+              proposers,
               lockKind,
               lockSubject,
               vestingLock.data,
               vestedUntilTime,
-              Some(targetLockOwner.partyId),
+              Some(parties.alice.partyId),
               controllers,
             )
             .value,
-        lockAmount - expectedRemainingLockAmount,
-        (_, _) => GovernanceLockUtil.lockManagerParty,
-        (parties, vestingLocks) => {
+        expectedAmount = 0,
+        expectedReceiver = _ => GovernanceLockUtil.lockManagerParty,
+        makeUpdatedLockOwners = parties => List(parties.alice),
+        checkUpdatedLocks = (parties, vestingLocks) => {
           val (_, vestingLockView, vestingLock) = vestingLocks.loneElement
           ops.transferValues.sender(vestingLockView) shouldBe parties.alice.partyId.toProtoPrimitive
           ops.transferValues.amount(vestingLockView) shouldBe expectedRemainingLockAmount
@@ -518,6 +540,7 @@ class GovernanceLockTimeBasedIntegrationTest
           lockKind,
           lockSubject,
           newLockOwner,
+          targetLockOwner = None,
           1000,
           LockControllers(),
           LockControllers(),
@@ -727,6 +750,7 @@ class GovernanceLockTimeBasedIntegrationTest
         lockKind,
         lockSubject,
         bobParty,
+        targetLockOwner = None,
         transferAmount = lockTransferAmount,
         LockControllers(),
         LockControllers(),
@@ -800,6 +824,7 @@ class GovernanceLockTimeBasedIntegrationTest
               lockTransferAmount,
               None,
               None,
+              None,
               LockControllers(),
               LockControllers(),
             )
@@ -820,6 +845,7 @@ class GovernanceLockTimeBasedIntegrationTest
         lockKind,
         lockSubject,
         charlieParty,
+        targetLockOwner = None,
         transferAmount = onwardTransferAmount,
         LockControllers(),
         LockControllers(),
@@ -915,6 +941,7 @@ class GovernanceLockTimeBasedIntegrationTest
           lockKind,
           lockSubject,
           bobParty,
+          targetLockOwner = None,
           transferAmount = initialLockAmount,
           LockControllers(),
           LockControllers(),
@@ -970,6 +997,7 @@ class GovernanceLockTimeBasedIntegrationTest
         lockKind,
         lockSubject,
         bobParty,
+        targetLockOwner = None,
         transferAmount = vestingTransferAmount,
         LockControllers(),
         LockControllers(),
