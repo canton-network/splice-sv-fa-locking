@@ -6,6 +6,7 @@ module Splice.Util
 (
   -- * Better assertion messages
   require,
+  require',
 
   -- * Fetching contracts
   requireMatchingContract,
@@ -45,6 +46,7 @@ import qualified DA.Set as Set
 import DA.Map (Map)
 import qualified DA.Map as Map
 import DA.List()
+import DA.Text qualified as T
 import DA.TextMap (TextMap)
 import DA.TextMap qualified as TextMap
 
@@ -61,6 +63,26 @@ requireMatchingContract cid expectedCo = do
 require : CanAssert m => Text -> Bool -> m ()
 require msg invariant =
   assertMsg ("The requirement '" <> msg <> "' was not met.") invariant
+
+-- | Improved variant of 'require' that checks a requirement and raises a
+-- user-friendly error in case the requirement is not met.
+-- This is equivalent to `require'` from `Splice.TokenStandard.Utils`, but is generic on `m`.
+require'
+  : (CanAssert m, Show a, Show b)
+  => (Text, a)
+     -- ^ Left-hand side with description.
+  -> (Text, a -> b -> Bool)
+     -- ^ Predicate to check
+  -> (Text, b)
+     -- ^ Right-hand side with description.
+  -> m ()
+require' (desc1, v1) (descFailure, predicate) (desc2, v2)
+  | predicate v1 v2 = pure ()
+  | otherwise = assertFail $ T.unlines
+      [ "'" <> desc1 <> "' " <> descFailure <> " '" <> desc2 <> "'."
+      , desc1 <> ": " <> show v1
+      , desc2 <> ": " <> show v2
+      ]
 
 -- | Contracts typically come in groups. For example, all contracts managed by a specific DSO party.
 --
