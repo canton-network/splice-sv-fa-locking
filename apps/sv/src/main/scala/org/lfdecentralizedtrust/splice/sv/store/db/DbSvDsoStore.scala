@@ -969,8 +969,6 @@ class DbSvDsoStore private (
       )
     }
 
-  // `featured_app_right_provider is not null` lets the planner use the partial index
-  // dso_acs_store_sid_mid_pn_tid_farp.
   override def listRevokeFeaturedAppRightInstructionSample(limit: Limit)(implicit
       tc: TraceContext
   ): Future[Seq[SvDsoStore.RevokeFeaturedAppRightInstructionWithRight]] =
@@ -996,7 +994,6 @@ class DbSvDsoStore private (
                    and r.template_id_qualified_name = ${QualifiedName(
               FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID
             )}
-                   and r.featured_app_right_provider is not null
                    and r.featured_app_right_provider = acs.featured_app_right_provider
                  limit 1
                ) fa_right

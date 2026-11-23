@@ -9,10 +9,6 @@ import org.lfdecentralizedtrust.splice.config.ConfigTransforms.{
   ConfigurableApp,
   updateAutomationConfig,
 }
-import org.lfdecentralizedtrust.splice.console.{
-  ValidatorAppBackendReference,
-  WalletAppClientReference,
-}
 import org.lfdecentralizedtrust.splice.integration.EnvironmentDefinition
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.{
   IntegrationTest,
@@ -42,7 +38,8 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
 
   "ExecuteRevokeFeaturedAppRightInstructionTrigger revokes the provider's featured app right" in {
     implicit env =>
-      val providerParty = setupProviderWithFeaturedAppRight(bobWalletClient, bobValidatorBackend)
+      val providerParty = onboardWalletUser(bobWalletClient, bobValidatorBackend)
+      grantFeaturedAppRight(bobWalletClient)
       createRevokeInstruction(providerParty)
 
       actAndCheck(
@@ -62,8 +59,8 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
 
   "ExpireRevokeFeaturedAppRightInstructionTrigger expires an unexecuted instruction" in {
     implicit env =>
-      val providerParty =
-        setupProviderWithFeaturedAppRight(aliceWalletClient, aliceValidatorBackend)
+      val providerParty = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
+      grantFeaturedAppRight(aliceWalletClient)
       createRevokeInstruction(providerParty)
 
       advanceTime(
@@ -81,8 +78,8 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
       )(
         "the instruction is archived and the featured app right is kept",
         _ => {
-          revokeInstructions() shouldBe empty
           sv1ScanBackend.lookupFeaturedAppRight(providerParty) should not be empty
+          revokeInstructions() shouldBe empty
         },
       )
   }
@@ -91,21 +88,6 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
     sv1Backend.appState.dsoStore.multiDomainAcsStore
       .listContracts(RevokeFeaturedAppRightInstruction.COMPANION)
       .futureValue
-
-  private def setupProviderWithFeaturedAppRight(
-      walletClient: WalletAppClientReference,
-      validatorBackend: ValidatorAppBackendReference,
-  )(implicit env: SpliceTestConsoleEnvironment): PartyId = {
-    val providerParty = onboardWalletUser(walletClient, validatorBackend)
-    actAndCheck(
-      "the provider grants itself a FeaturedAppRight",
-      eventuallySucceeds() { walletClient.selfGrantFeaturedAppRight() },
-    )(
-      "the provider's featured app right is visible in scan",
-      _ => sv1ScanBackend.lookupFeaturedAppRight(providerParty) should not be empty,
-    )
-    providerParty
-  }
 
   private def createRevokeInstruction(providerParty: PartyId)(implicit
       env: SpliceTestConsoleEnvironment
