@@ -93,7 +93,7 @@ class GovernanceLockTimeBasedIntegrationTest
 
   private val lockAmount = BigDecimal(10000)
   private val expectedRemainingLockAmount = lockAmount / 4 * 3
-  private val lockKind = SuperValidatorLock
+  private val lockKind = GovernanceLockUtil.LockKind.SuperValidator
   private val lockSubject = "sv1"
 
   private def checkLockKind(kind: gl.GovernanceLockKind): Assertion =
@@ -209,7 +209,7 @@ class GovernanceLockTimeBasedIntegrationTest
         ops.transferValues.amount(view) shouldBe lockAmount
         compareLockMemo(
           ops.transferValues.meta(view).values.get(TokenStandardMetadata.reasonMetaKey),
-          makeOutputLockMemo(lockKind, lockSubject, Locked),
+          makeOutputLockMemo(lockKind, lockSubject, GovernanceLockUtil.LockStatus.Locked),
         )
       }
 
@@ -823,7 +823,7 @@ class GovernanceLockTimeBasedIntegrationTest
           entry.description,
           makeInputLockMemo(TransferLock, lockKind, lockSubject)(
             (
-              Locked,
+              GovernanceLockUtil.LockStatus.Locked,
               bobParty,
               lockTransferAmount,
               None,

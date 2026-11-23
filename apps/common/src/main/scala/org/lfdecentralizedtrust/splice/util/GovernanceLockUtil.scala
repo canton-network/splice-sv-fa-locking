@@ -3,20 +3,42 @@
 
 package org.lfdecentralizedtrust.splice.util
 
+import cats.syntax.either.*
+import cats.syntax.show.*
+import cats.syntax.traverse.*
 import com.digitalasset.canton.topology.PartyId
+import io.circe.parser.decode
 import io.grpc.Status
+import org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock as gl
 
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.Optional
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
 object GovernanceLockUtil {
+  val cipPrefix = "cip-127"
+  val memoPrefix = s"$cipPrefix/memo:"
 
   /** Receiver of all governance lock requests, mirroring `lockManagerParty` in `Splice.GovernanceLock`. */
   val lockManagerParty = PartyId.tryFromProtoPrimitive(
     "cip-127_lock-manager::1220000000000000000000000000000000000000000000000000000000000000abcd"
   )
+
+  sealed abstract class LockKind(val kind: String)
+  object LockKind {
+    case object SuperValidator extends LockKind("sv-lock")
+    case object FeaturedApp extends LockKind("fa-lock")
+    case object ProvisionalFeaturedApp extends LockKind("provisional-fa-lock")
+  }
+
+  sealed abstract class LockStatus(val status: String)
+  object LockStatus {
+    case object Locked extends LockStatus("locked")
+    case object Vesting extends LockStatus("vesting")
+  }
 
   def foldSpecification[A](specification: gl.GovernanceLockSpecification)(
       onFull: gl.FullLockSpecification => A,
@@ -168,4 +190,220 @@ object GovernanceLockUtil {
 
   def governanceLockTypeAndSubject(lock: gl.GovernanceLock): (StoreTypeAndKind, String) =
     specificationTypeAndSubject(lock.specification)
+
+  object Memo {
+    type Fields = Map[String, String]
+
+    // Request types
+    val createLockRequest = "create-lock"
+    val unlockRequest = "unlock-and-start-vesting"
+    val transferRequest = "transfer-lock"
+    val withdrawRequest = "withdraw-vested-funds"
+    val substituteRequest = "substitute-lock"
+
+    // Memo keys
+    val requestKey = "request"
+    val lockKindKey = "lock-kind"
+    val lockStatusKey = "lock-status"
+    val lockSubjectKey = "lock-subject"
+    val targetLockOwnerKey = "target-lock-owner"
+    val vestingDurationKey = "lock-vesting-duration-micros"
+    val vestingEndTimeKey = "lock-vesting-end-time-micros"
+    val unlockControllersKey = "unlock-controllers"
+    val substitutionControllersKey = "substitution-controllers"
+    val vestingControllersKey = "vesting-controllers"
+
+    def parseFields(memo: String): Either[String, Fields] =
+      memo
+        .stripPrefix(memoPrefix)
+        .split('&')
+        .toList
+        .traverse(field =>
+          field.split('=') match {
+            case Array(k, v) => Right((k, v))
+            case _ => Left(s"Expected `key=value`, got: $field")
+          }
+        )
+        .map(_.toMap)
+
+    private def parseRequiredField[A](fields: Fields, key: String)(
+        parse: String => Either[String, A]
+    ): Either[String, A] =
+      fields.get(key) match {
+        case Some(s) => parse(s)
+        case None => Left(s"Missing required memo key: '$key'")
+      }
+
+    private def parseRequiredLongField[A](fields: Fields, key: String)(
+        map: Long => A
+    ): Either[String, A] =
+      parseRequiredField(fields, key)(s =>
+        s.toLongOption match {
+          case Some(l) => Right(map(l))
+          case None => Left(s"Failed to parse memo key '$key' as Long: '$s'")
+        }
+      )
+
+    private def parseGovernanceLockKind(fields: Fields): Either[String, gl.GovernanceLockKind] =
+      for {
+        subject <- parseRequiredField(fields, lockSubjectKey)(Right(_))
+        kind <- parseRequiredField(fields, lockKindKey) {
+          case LockKind.SuperValidator.kind =>
+            Right(new gl.governancelockkind.GLK_SuperValidatorRightsOwner(subject))
+          case LockKind.FeaturedApp.kind =>
+            Right(new gl.governancelockkind.GLK_FeaturedApp(subject))
+          case LockKind.ProvisionalFeaturedApp.kind =>
+            Right(new gl.governancelockkind.GLK_ProvisionalFeaturedApp(subject))
+          case kind => Left(s"Unknown lock kind: '$kind'")
+        }
+      } yield kind
+
+    private def parseControllersSpecification(
+        fields: Fields,
+        key: String,
+    ): Either[String, Option[gl.controllers.ControllersSpecification]] =
+      fields.get(key) match {
+        case Some(s) =>
+          decode[List[List[String]]](s).bimap(
+            error => show"Error in memo key '$key': $error",
+            controllers =>
+              Some(
+                new gl.controllers.ControllersSpecification(
+                  controllers
+                    .map(_.distinct.sorted)
+                    .distinct
+                    .sorted(Ordering.Implicits.seqOrdering[List, String])
+                    .map(_.asJava)
+                    .asJava
+                )
+              ),
+          )
+        case None => Right(None)
+      }
+
+    private def parseGovernanceLockControllers(
+        fields: Fields
+    ): Either[String, Option[gl.controllers.GovernanceLockControllers]] =
+      for {
+        unlockControllers <- parseControllersSpecification(fields, unlockControllersKey)
+        substitutionControllers <- parseControllersSpecification(fields, substitutionControllersKey)
+        vestingControllers <- parseControllersSpecification(fields, vestingControllersKey)
+      } yield (unlockControllers, substitutionControllers, vestingControllers) match {
+        case (None, None, None) => None
+        case _ =>
+          Some(
+            new gl.controllers.GovernanceLockControllers(
+              unlockControllers.toJava,
+              substitutionControllers.toJava,
+              vestingControllers.toJava,
+            )
+          )
+      }
+
+    private def parseFullLockSpecification(
+        fields: Fields
+    ): Either[String, gl.FullLockSpecification] =
+      for {
+        kind <- parseGovernanceLockKind(fields)
+        controllers <- parseGovernanceLockControllers(fields)
+      } yield new gl.FullLockSpecification(kind, controllers.toJava)
+
+    private def parseVestingPeriod(fields: Fields): Either[String, RelTime] =
+      parseRequiredLongField(fields, vestingDurationKey)(new RelTime(_))
+
+    private def parseVestingEndTime(fields: Fields): Either[String, Instant] =
+      parseRequiredLongField(fields, vestingEndTimeKey)(Instant.EPOCH.plus(_, ChronoUnit.MICROS))
+
+    private def parseVestingLockSpecification(
+        fields: Fields
+    ): Either[String, gl.VestingLockSpecification] =
+      for {
+        kind <- parseGovernanceLockKind(fields)
+        vestingPeriod <- parseVestingPeriod(fields)
+        vestingEndTime <- parseVestingEndTime(fields)
+        vestingControllers <- parseControllersSpecification(fields, vestingControllersKey)
+      } yield new gl.VestingLockSpecification(
+        kind,
+        vestingPeriod,
+        vestingEndTime,
+        vestingControllers.toJava,
+      )
+
+    private def parseGovernanceLockSpecification(
+        fields: Fields
+    ): Either[String, gl.GovernanceLockSpecification] =
+      fields.getOrElse(lockStatusKey, LockStatus.Locked.status) match {
+        case LockStatus.Locked.status =>
+          parseFullLockSpecification(fields)
+            .map(new gl.governancelockspecification.GLS_FullLock(_))
+        case LockStatus.Vesting.status =>
+          parseVestingLockSpecification(fields)
+            .map(new gl.governancelockspecification.GLS_VestingLock(_))
+        case status => Left(s"Unknown lock status: '$status'")
+      }
+
+    private def parseUnlockTarget(
+        dso: PartyId,
+        sender: PartyId,
+        fields: Fields,
+    ): Either[String, gl.GovernanceLockKey] =
+      for {
+        specification <- parseFullLockSpecification(fields)
+        owner = fields.getOrElse(targetLockOwnerKey, sender.toProtoPrimitive)
+      } yield new gl.GovernanceLockKey(
+        dso.toProtoPrimitive,
+        owner,
+        new gl.governancelockspecification.GLS_FullLock(specification),
+      )
+
+    private def parseTransferTarget(
+        dso: PartyId,
+        sender: PartyId,
+        fields: Fields,
+    ): Either[String, gl.GovernanceLockKey] =
+      for {
+        specification <- parseGovernanceLockSpecification(fields)
+        owner = fields.getOrElse(targetLockOwnerKey, sender.toProtoPrimitive)
+      } yield new gl.GovernanceLockKey(dso.toProtoPrimitive, owner, specification)
+
+    private def parseWithdrawTarget(
+        dso: PartyId,
+        sender: PartyId,
+        fields: Fields,
+    ): Either[String, gl.GovernanceLockKey] =
+      for {
+        specification <- parseVestingLockSpecification(fields)
+        owner = fields.getOrElse(targetLockOwnerKey, sender.toProtoPrimitive)
+      } yield new gl.GovernanceLockKey(
+        dso.toProtoPrimitive,
+        owner,
+        new gl.governancelockspecification.GLS_VestingLock(specification),
+      )
+
+    private def parseSubstitutionTarget(
+        dso: PartyId,
+        fields: Fields,
+    ): Either[String, gl.GovernanceLockKey] =
+      for {
+        specification <- parseGovernanceLockSpecification(fields)
+        owner <- parseRequiredField(fields, targetLockOwnerKey)(Right(_))
+      } yield new gl.GovernanceLockKey(dso.toProtoPrimitive, owner, specification)
+
+    def parseTarget(
+        dso: PartyId,
+        sender: PartyId,
+        memo: String,
+    ): Either[String, Option[gl.GovernanceLockKey]] =
+      for {
+        fields <- parseFields(memo)
+        result <- parseRequiredField(fields, requestKey) {
+          case `createLockRequest` => Right(Option.empty[gl.GovernanceLockKey])
+          case `unlockRequest` => parseUnlockTarget(dso, sender, fields).map(Some(_))
+          case `transferRequest` => parseTransferTarget(dso, sender, fields).map(Some(_))
+          case `withdrawRequest` => parseWithdrawTarget(dso, sender, fields).map(Some(_))
+          case `substituteRequest` => parseSubstitutionTarget(dso, fields).map(Some(_))
+          case request => Left(s"Unknown request type: '$request'")
+        }
+      } yield result
+  }
 }

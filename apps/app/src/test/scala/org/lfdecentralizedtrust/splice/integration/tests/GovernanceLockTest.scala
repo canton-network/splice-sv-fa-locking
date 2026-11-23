@@ -41,11 +41,6 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
   // Same as `defaultGovernanceLockMinimumLockAmount` in Daml.
   protected val minimumLockAmount = BigDecimal(10000.0)
 
-  private val lockStatusMemoKey = "lock-status"
-  private val lockVestingDurationMemoKey = "lock-vesting-duration-micros"
-  private val lockVestingEndTimeMemoKey = "lock-vesting-end-time-micros"
-  private val targetLockOwnerMemoKey = "target-lock-owner"
-
   protected val tiaAccept = new tiv2.transferinstructionaction.TIA_Accept(DamlUnit.getInstance)
   protected val tiaReject = new tiv2.transferinstructionaction.TIA_Reject(DamlUnit.getInstance)
   protected val tiaWithdraw = new tiv2.transferinstructionaction.TIA_Withdraw(DamlUnit.getInstance)
@@ -58,14 +53,6 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
   private def formatInstant(i: Instant): String =
     DateTimeFormatter.ISO_INSTANT.format(i.truncatedTo(ChronoUnit.MICROS))
 
-  sealed abstract class LockKind(val kind: String)
-  case object SuperValidatorLock extends LockKind("sv-lock")
-  case object ProvisionalFeaturedAppLock extends LockKind("provisional-fa-lock")
-
-  sealed abstract class LockStatus(val status: String)
-  case object Locked extends LockStatus("locked")
-  case object Vesting extends LockStatus("vesting")
-
   case class LockControllers(
       unlockControllers: List[List[PartyId]] = Nil,
       substitutionControllers: List[List[PartyId]] = Nil,
@@ -73,9 +60,9 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
   ) {
     final def memoEntriesWithPrefix(prefix: String) =
       List(
-        (prefix ++ "unlock-controllers") -> unlockControllers,
-        (prefix ++ "substitution-controllers") -> substitutionControllers,
-        (prefix ++ "vesting-controllers") -> vestingControllers,
+        (prefix ++ GovernanceLockUtil.Memo.unlockControllersKey) -> unlockControllers,
+        (prefix ++ GovernanceLockUtil.Memo.substitutionControllersKey) -> substitutionControllers,
+        (prefix ++ GovernanceLockUtil.Memo.vestingControllersKey) -> vestingControllers,
       )
         .filter { case (_, controllers) => controllers.nonEmpty }
         .map { case (key, controllers) =>
@@ -89,38 +76,50 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
       val request: String,
       val memoEntries: A => List[(String, String)],
   )
-  case object CreateLock extends LockRequest[LockControllers]("create-lock", _.memoEntries)
+  case object CreateLock
+      extends LockRequest[LockControllers](GovernanceLockUtil.Memo.createLockRequest, _.memoEntries)
   case object UnlockAndStartVesting
       extends LockRequest[(BigDecimal, Instant, Option[PartyId], LockControllers)](
-        "unlock-and-start-vesting",
+        GovernanceLockUtil.Memo.unlockRequest,
         { case (unlockAmount, vestingStartTime, targetLockOwner, controllers) =>
           List(
             "unlock-amount" -> unlockAmount.toString,
             "vesting-start-time" -> formatInstant(vestingStartTime),
           ) ++
-            targetLockOwner.map(p => (targetLockOwnerMemoKey, p.toProtoPrimitive)) ++
+            targetLockOwner.map(p =>
+              (GovernanceLockUtil.Memo.targetLockOwnerKey, p.toProtoPrimitive)
+            ) ++
             controllers.memoEntries
         },
       )
   case object WithdrawVestedFunds
       extends LockRequest[(Instant, RelTime, Instant, Option[PartyId], LockControllers)](
-        "withdraw-vested-funds",
+        GovernanceLockUtil.Memo.withdrawRequest,
         { case (vestedUntilTime, vestingPeriod, vestingEndTime, targetLockOwner, controllers) =>
           List(
             "vested-until-time" -> formatInstant(vestedUntilTime),
-            lockVestingDurationMemoKey -> vestingPeriod.microseconds.toString,
-            lockVestingEndTimeMemoKey -> instantToMicros(vestingEndTime).toString,
+            GovernanceLockUtil.Memo.vestingDurationKey -> vestingPeriod.microseconds.toString,
+            GovernanceLockUtil.Memo.vestingEndTimeKey -> instantToMicros(vestingEndTime).toString,
           ) ++
-            targetLockOwner.map(p => (targetLockOwnerMemoKey, p.toProtoPrimitive)) ++
+            targetLockOwner.map(p =>
+              (GovernanceLockUtil.Memo.targetLockOwnerKey, p.toProtoPrimitive)
+            ) ++
             controllers.memoEntries
         },
       )
 
   case object SubstituteLock
       extends LockRequest[
-        (LockStatus, PartyId, Option[RelTime], Option[Instant], LockControllers, LockControllers)
+        (
+            GovernanceLockUtil.LockStatus,
+            PartyId,
+            Option[RelTime],
+            Option[Instant],
+            LockControllers,
+            LockControllers,
+        )
       ](
-        "substitute-lock",
+        GovernanceLockUtil.Memo.substituteRequest,
         {
           case (
                 lockStatus,
@@ -131,11 +130,15 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
                 newControllers,
               ) =>
             List(
-              lockStatusMemoKey -> lockStatus.status,
-              targetLockOwnerMemoKey -> targetLockOwner.toProtoPrimitive,
+              GovernanceLockUtil.Memo.lockStatusKey -> lockStatus.status,
+              GovernanceLockUtil.Memo.targetLockOwnerKey -> targetLockOwner.toProtoPrimitive,
             ) ++
-              vestingPeriod.map(t => (lockVestingDurationMemoKey, t.microseconds.toString)) ++
-              vestingEndTime.map(t => (lockVestingEndTimeMemoKey, instantToMicros(t).toString)) ++
+              vestingPeriod.map(t =>
+                (GovernanceLockUtil.Memo.vestingDurationKey, t.microseconds.toString)
+              ) ++
+              vestingEndTime.map(t =>
+                (GovernanceLockUtil.Memo.vestingEndTimeKey, instantToMicros(t).toString)
+              ) ++
               targetControllers.memoEntries ++
               newControllers.memoEntriesWithPrefix("new-")
         },
@@ -144,7 +147,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
   case object TransferLock
       extends LockRequest[
         (
-            LockStatus,
+            GovernanceLockUtil.LockStatus,
             PartyId,
             BigDecimal,
             Option[RelTime],
@@ -154,7 +157,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
             LockControllers,
         )
       ](
-        "transfer-lock",
+        GovernanceLockUtil.Memo.transferRequest,
         {
           case (
                 lockStatus,
@@ -167,13 +170,19 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
                 newControllers,
               ) =>
             List(
-              lockStatusMemoKey -> lockStatus.status,
+              GovernanceLockUtil.Memo.lockStatusKey -> lockStatus.status,
               "new-lock-owner" -> newLockOwner.toProtoPrimitive,
               "transfer-amount" -> transferAmount.toString,
             ) ++
-              vestingPeriod.map(t => (lockVestingDurationMemoKey, t.microseconds.toString)) ++
-              vestingEndTime.map(t => (lockVestingEndTimeMemoKey, instantToMicros(t).toString)) ++
-              targetLockOwner.map(p => (targetLockOwnerMemoKey, p.toProtoPrimitive)) ++
+              vestingPeriod.map(t =>
+                (GovernanceLockUtil.Memo.vestingDurationKey, t.microseconds.toString)
+              ) ++
+              vestingEndTime.map(t =>
+                (GovernanceLockUtil.Memo.vestingEndTimeKey, instantToMicros(t).toString)
+              ) ++
+              targetLockOwner.map(p =>
+                (GovernanceLockUtil.Memo.targetLockOwnerKey, p.toProtoPrimitive)
+              ) ++
               sourceControllers.memoEntries ++
               newControllers.memoEntriesWithPrefix("new-")
         },
@@ -183,49 +192,49 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     lockMemoPrefix + entries.map { case (k, v) => s"$k=$v" }.mkString("&")
 
   private def commonLockMemoEntries(
-      lockKind: LockKind,
+      lockKind: GovernanceLockUtil.LockKind,
       lockSubject: String,
-  ): List[(String, String)] = List("lock-kind" -> lockKind.kind, "lock-subject" -> lockSubject)
+  ): List[(String, String)] =
+    List(
+      GovernanceLockUtil.Memo.lockKindKey -> lockKind.kind,
+      GovernanceLockUtil.Memo.lockSubjectKey -> lockSubject,
+    )
 
   def makeInputLockMemo[A](
       lockRequest: LockRequest[A],
-      lockKind: LockKind,
+      lockKind: GovernanceLockUtil.LockKind,
       lockSubject: String,
   )(data: A): String =
     makeLockMemo(
-      List("request" -> lockRequest.request) ++
+      List(GovernanceLockUtil.Memo.requestKey -> lockRequest.request) ++
         commonLockMemoEntries(lockKind, lockSubject) ++
         lockRequest.memoEntries(data)
     )
 
   def makeOutputLockMemo(
-      lockKind: LockKind,
+      lockKind: GovernanceLockUtil.LockKind,
       lockSubject: String,
-      lockStatus: LockStatus,
+      lockStatus: GovernanceLockUtil.LockStatus,
   ): String =
     makeLockMemo(
       commonLockMemoEntries(lockKind, lockSubject) ++
-        Map(lockStatusMemoKey -> lockStatus.status)
+        Map(GovernanceLockUtil.Memo.lockStatusKey -> lockStatus.status)
     )
 
   /** The memo of a pending transfer of a lock that is not vesting */
-  def makeAcceptTransferLockMemo(lockKind: LockKind, lockSubject: String): String =
+  def makeAcceptTransferLockMemo(
+      lockKind: GovernanceLockUtil.LockKind,
+      lockSubject: String,
+  ): String =
     makeLockMemo(
-      List("request" -> "accept-to-transfer-lock") ++
+      List(GovernanceLockUtil.Memo.requestKey -> "accept-to-transfer-lock") ++
         commonLockMemoEntries(lockKind, lockSubject) ++
-        Map(lockStatusMemoKey -> Locked.status)
+        Map(GovernanceLockUtil.Memo.lockStatusKey -> GovernanceLockUtil.LockStatus.Locked.status)
     )
 
   // Using a Map so order doesn't matter when comparing below
   private def extractLockMemoEntries(memo: String): Map[String, String] =
-    memo
-      .stripPrefix(lockMemoPrefix)
-      .split("&")
-      .flatMap(_.split("=", 2) match {
-        case Array(k, v) => Some((k, v))
-        case _ => None
-      })
-      .toMap
+    GovernanceLockUtil.Memo.parseFields(memo).getOrElse(Map.empty)
 
   def isVestingLock(lock: gl.GovernanceLock): Boolean =
     GovernanceLockUtil.getVestingLockSpecification(lock).isDefined
@@ -379,7 +388,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     final def createGovernanceLock(
         participant: ParticipantClientReference,
         owner: RichPartyId,
-        lockKind: LockKind,
+        lockKind: GovernanceLockUtil.LockKind,
         lockSubject: String,
         amount: BigDecimal,
         controllers: LockControllers,
@@ -409,7 +418,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     final def unlockGovernanceLock(
         participant: ParticipantClientReference,
         proposers: NonEmptyList[RichPartyId],
-        lockKind: LockKind,
+        lockKind: GovernanceLockUtil.LockKind,
         lockSubject: String,
         unlockAmount: BigDecimal,
         vestingStartTime: Instant,
@@ -441,7 +450,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     final def withdrawVestingLock(
         participant: ParticipantClientReference,
         proposers: NonEmptyList[RichPartyId],
-        lockKind: LockKind,
+        lockKind: GovernanceLockUtil.LockKind,
         lockSubject: String,
         vestingLock: gl.GovernanceLock,
         vestedUntilTime: Instant,
@@ -474,7 +483,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     }
 
     final class SubstituteLock(
-        lockStatus: LockStatus,
+        lockStatus: GovernanceLockUtil.LockStatus,
         targetLockOwner: PartyId,
         vestingPeriod: Option[RelTime],
         vestingEndTime: Option[Instant],
@@ -482,7 +491,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
       final def apply(
           participant: ParticipantClientReference,
           proposer: RichPartyId,
-          lockKind: LockKind,
+          lockKind: GovernanceLockUtil.LockKind,
           lockSubject: String,
           substitutionAmount: BigDecimal,
           targetControllers: LockControllers,
@@ -517,7 +526,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
 
     /** Propose a substitution of a GovernanceLock with the given owner */
     def substituteGovernanceLock(owner: PartyId): SubstituteLock =
-      new SubstituteLock(Locked, owner, None, None)
+      new SubstituteLock(GovernanceLockUtil.LockStatus.Locked, owner, None, None)
 
     /** Propose a substitution of a GovernanceLock */
     def substituteGovernanceLock(lock: gl.GovernanceLock): SubstituteLock =
@@ -526,7 +535,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     /** Propose a substitution of a vesting GovernanceLock with the given attributes */
     def substituteVestingLock(owner: PartyId, vestingPeriod: Duration, vestingEndTime: Instant) =
       new SubstituteLock(
-        Vesting,
+        GovernanceLockUtil.LockStatus.Vesting,
         owner,
         Some(durationToRelTime(vestingPeriod)),
         Some(vestingEndTime),
@@ -535,21 +544,21 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     /** Propose a substitution of a vesting GovernanceLock */
     def substituteVestingLock(lock: gl.GovernanceLock) =
       new SubstituteLock(
-        Vesting,
+        GovernanceLockUtil.LockStatus.Vesting,
         PartyId.tryFromProtoPrimitive(lock.owner),
         Some(vestingLockSpecification(lock).vestingPeriod),
         Some(vestingLockSpecification(lock).endTime),
       )
 
     final class TransferLock(
-        lockStatus: LockStatus,
+        lockStatus: GovernanceLockUtil.LockStatus,
         vestingPeriod: Option[RelTime],
         vestingEndTime: Option[Instant],
     ) {
       final def apply(
           participant: ParticipantClientReference,
           owner: RichPartyId,
-          lockKind: LockKind,
+          lockKind: GovernanceLockUtil.LockKind,
           lockSubject: String,
           newLockOwner: PartyId,
           targetLockOwner: Option[PartyId],
@@ -586,18 +595,23 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     }
 
     /** Propose a transfer of a GovernanceLock */
-    final val transferGovernanceLock = new TransferLock(Locked, None, None)
+    final val transferGovernanceLock =
+      new TransferLock(GovernanceLockUtil.LockStatus.Locked, None, None)
 
     /** Propose a transfer of a vesting GovernanceLock */
     final def transferVestingLock(vestingPeriod: Duration, vestingEndTime: Instant) =
-      new TransferLock(Vesting, Some(durationToRelTime(vestingPeriod)), Some(vestingEndTime))
+      new TransferLock(
+        GovernanceLockUtil.LockStatus.Vesting,
+        Some(durationToRelTime(vestingPeriod)),
+        Some(vestingEndTime),
+      )
 
     /** Propose a transfer of part of a vesting GovernanceLock, keeping its
       * vesting schedule
       */
     final def transferVestingLock(lock: gl.GovernanceLock) =
       new TransferLock(
-        Vesting,
+        GovernanceLockUtil.LockStatus.Vesting,
         Some(vestingLockSpecification(lock).vestingPeriod),
         Some(vestingLockSpecification(lock).endTime),
       )

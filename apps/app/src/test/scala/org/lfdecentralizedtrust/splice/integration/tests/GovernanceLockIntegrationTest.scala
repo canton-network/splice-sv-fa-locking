@@ -40,7 +40,7 @@ class GovernanceLockIntegrationTest
         )(config)
       )
 
-  private val lockKind = SuperValidatorLock
+  private val lockKind = GovernanceLockUtil.LockKind.SuperValidator
   private val lockSubject = "sv1"
 
   private val targetLockAmount = BigDecimal(20000)
