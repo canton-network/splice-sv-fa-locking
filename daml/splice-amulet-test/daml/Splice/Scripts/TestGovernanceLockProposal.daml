@@ -1,0 +1,365 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Tests for the generic proposal workflow of `Splice.GovernanceLock.Proposal`.
+--
+-- `TestProposal` is a minimal proposal that only implements Token Standard v2, so the tests drive the workflow
+-- through `TestProposer_Propose` and the TSv2 accept, reject and withdraw choices.
+-- An executed `TestProposal` records its execution in a `TestProposalExecution`.
+module Splice.Scripts.TestGovernanceLockProposal where
+
+import DA.Assert ((===))
+import DA.Foldable (forA_)
+import DA.List qualified as List
+import DA.Map qualified as Map
+import DA.Time
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.TransferInstructionV2 qualified as V2
+import Splice.GovernanceLock
+import Splice.GovernanceLock.Controllers
+import Splice.GovernanceLock.Proposal qualified as Proposal
+import Splice.Scripts.TestGovernanceLocks
+import Splice.Scripts.TokenStandard.TestAmuletTokenStandardTestEnv
+import Splice.Testing.TokenStandard.WalletClientV2 qualified as WalletClientV2
+
+-- Test proposal
+----------------
+
+template TestProposal with
+    lockKey : GovernanceLockKey
+    proposers : [Party]
+    controllers : ControllersSpecification
+    votes : Proposal.ProposalVotes
+    requestedAt : Time
+    expiresAt : Time
+    originalProposalCid : Optional (ContractId TestProposal)
+  where
+    signatory lockKey.dso
+    observer allControllers controllers
+
+    interface instance V2.TransferInstruction for TestProposal where
+      view = Proposal.transferInstructionViewV2 lockKey.owner this
+      transferInstruction_acceptImpl = Proposal.transferInstructionV2_acceptImpl this
+      transferInstruction_rejectImpl = Proposal.transferInstructionV2_rejectImpl this
+      transferInstruction_withdrawImpl = Proposal.transferInstructionV2_withdrawImpl this
+      transferInstruction_acceptExtraObservers _ = observer this
+      transferInstruction_rejectExtraObservers _ = observer this
+      transferInstruction_withdrawExtraObservers _ = observer this
+
+-- | Creates a `TestProposal` via `Proposal.create` in a choice, as a script can only run an `Update` through a command.
+-- Only use it with `createAndExerciseCmd`, so that no `TestProposer` remains on the ledger.
+template TestProposer with
+    dso : Party
+  where
+    signatory dso
+
+    choice TestProposer_Propose : Proposal.ProposalUpdateResult TestProposal TestProposalResult
+      with
+        lockKey : GovernanceLockKey
+        proposers : [Party] -- ^ Parties that propose the action, and vote to accept it on creation.
+        controllers : ControllersSpecification
+        votes : Proposal.ProposalVotes -- ^ Votes of the new proposal. `create` requires these to be empty.
+        requestedAt : Time
+        expiresAt : Time
+        reason : Text
+        context : ChoiceContext
+      controller proposers
+      do
+        Proposal.create Proposal.ProposalUpdateArgs with
+          proposalCid = None
+          proposal = TestProposal with
+            lockKey
+            proposers
+            controllers
+            votes
+            requestedAt
+            expiresAt
+            originalProposalCid = None
+          actors = proposers
+          reason
+          getContext = unfeaturedPaymentContextAndConfigFromChoiceContext dso context
+
+-- | Record of an executed `TestProposal`.
+template TestProposalExecution with
+    dso : Party
+    controllers : ControllersSpecification
+    originalProposalCid : Optional (ContractId TestProposal)
+      -- ^ The first proposal of the workflow.
+    executedProposalCid : Optional (ContractId TestProposal)
+      -- ^ The proposal that was executed. `None` when the proposal was executed on creation.
+    mergedLockCid : ContractId GovernanceLock
+      -- ^ The lock returned by `fetchAndMergeGovernanceLocks`.
+  where
+    signatory dso
+    observer allControllers controllers
+
+data TestProposalResult = TestProposalResult with
+    executionCid : ContractId TestProposalExecution
+  deriving (Eq, Show, Serializable)
+
+instance Proposal.ProposalOperations TestProposal TestProposalResult where
+  mkProposalView TestProposal{..} = Proposal.ProposalView with
+    lockKey
+    sender = List.head proposers
+    proposers
+    controllers
+    votes
+    amount = 0.0
+    lockedAmulet = None
+    requestedAt
+    expiresAt
+    originalProposalCid
+    meta = emptyMetadata
+
+  recreateProposal votes originalProposalCid proposal =
+    let newProposal = proposal with votes; originalProposalCid
+    in (, newProposal) <$> create newProposal
+
+  executeProposal Proposal.ProposalExecuteArgs{..} =
+    TestProposalResult <$> create TestProposalExecution with
+      dso = proposal.lockKey.dso
+      controllers = proposal.controllers
+      originalProposalCid = optional proposalCid Some proposal.originalProposalCid
+      executedProposalCid = proposalCid
+      mergedLockCid = merged.lockCid
+
+  mkCompletedProposalResult _ = V2.TransferInstructionResult with
+    output = V2.TransferInstructionResult_Completed with receiverHoldingCids = []
+    senderChangeCids = []
+    meta = emptyMetadata
+
+  rejectProposal = Proposal.defaultRejectProposal
+
+-- Fixture
+----------
+
+-- | alice holds a lock, and alice proposes to act on it. Each controller set needs three approvals:
+-- charlie is in both sets, and bob and provider1 are each in one set only.
+testControllers : TestEnv -> ControllersSpecification
+testControllers TestEnv{..} = makeControllersSpecification [[alice, bob, charlie], [alice, charlie, provider1]]
+
+-- | alice's lock. The controllers of the proposal are its substitution controllers, so that they can see the lock.
+testLockSpecification : TestEnv -> GovernanceLockSpecification
+testLockSpecification env = GLS_FullLock FullLockSpecification with
+  kind = GLK_SuperValidatorRightsOwner "TestSV"
+  controllers = makeGovernanceLockControllers None (Some $ testControllers env) None
+
+testExpiry : RelTime
+testExpiry = days 1
+
+data ProposalTestEnv = ProposalTestEnv with
+    env : TestEnv
+    lockCid : ContractId GovernanceLock
+    lock : GovernanceLock
+
+setupProposalTest : Script ProposalTestEnv
+setupProposalTest = do
+  env@TestEnv{..} <- setupTest
+  forA_ [charlie, provider1, instrId.admin] WalletClientV2.createBatchingUtility
+  (lockCid, lock) <- lockWithSpec tsv2Operations env alice 50000.0 (testLockSpecification env)
+  pure ProposalTestEnv with ..
+
+-- | Proposes a `TestProposal` on alice's lock with the given proposers and initial votes.
+propose
+  :  ProposalTestEnv -> [Party] -> Proposal.ProposalVotes
+  -> Script (Either SubmitError (Proposal.ProposalUpdateResult TestProposal TestProposalResult))
+propose ProposalTestEnv{..} proposers votes = do
+  now <- getTime
+  let dso = lock.dso
+  submitWithTransferContext env.registriesEnv.amuletV2 (actAs (dso :: proposers)) \context ->
+    createAndExerciseCmd (TestProposer dso) TestProposer_Propose with
+      lockKey = key lock
+      proposers
+      controllers = testControllers env
+      votes
+      requestedAt = now
+      expiresAt = now `addRelTime` testExpiry
+      reason = "test proposal"
+      context
+
+-- | `setupProposalTest`, then alice proposes alone. The proposal is pending with alice's vote.
+setupPendingProposal : Script (ProposalTestEnv, ContractId TestProposal)
+setupPendingProposal = do
+  testEnv@ProposalTestEnv{env = TestEnv{..}} <- setupProposalTest
+  result <- expectSuccess $ propose testEnv [alice] Map.empty
+  proposalCid <- case result of
+    Left (proposalCid, _) -> pure proposalCid
+    Right executed -> fail $ "Expected a pending proposal, got " <> show executed
+  pure (testEnv, proposalCid)
+
+accept, reject, withdraw : ProposalTestEnv -> ContractId TestProposal -> Party -> Script (Either SubmitError V2.TransferInstructionResult)
+accept ProposalTestEnv{env} cid = tsv2Operations.acceptInstruction env (toInterfaceContractId cid)
+reject ProposalTestEnv{env} cid = tsv2Operations.rejectInstruction env (toInterfaceContractId cid)
+withdraw ProposalTestEnv{env} cid = tsv2Operations.withdrawInstruction env (toInterfaceContractId cid)
+
+-- | Checks that the result is pending, and that the new proposal has the given votes and original proposal.
+expectPending
+  :  ProposalTestEnv -> ContractId TestProposal -> [(Party, Proposal.ProposalVote)] -> V2.TransferInstructionResult
+  -> Script (ContractId TestProposal)
+expectPending ProposalTestEnv{env = TestEnv{..}} originalCid expectedVotes result = do
+  newCid <- fromInterfaceContractId @TestProposal <$> tsv2Operations.expectPendingTransfer result
+  Some proposal <- queryContractId alice newCid
+  proposal.votes === Map.fromList expectedVotes
+  proposal.originalProposalCid === Some originalCid
+  pure newCid
+
+-- | Checks that the proposal is executed: no proposal is active, and the execution records
+-- the executed proposal and alice's lock, which a single lock leaves unchanged.
+expectExecuted : ProposalTestEnv -> Optional (ContractId TestProposal) -> Optional (ContractId TestProposal) -> Script ()
+expectExecuted ProposalTestEnv{env = env@TestEnv{..}, ..} originalProposalCid executedProposalCid = do
+  [] <- query @TestProposal alice
+  [(_, execution)] <- query @TestProposalExecution alice
+  execution === TestProposalExecution with
+    dso = instrId.admin
+    controllers = testControllers env
+    originalProposalCid
+    executedProposalCid
+    mergedLockCid = lockCid
+  checkLockUntouched alice lockCid lock
+
+-- | Checks that the proposal is rejected: the result is failed, no proposal is active, and the lock is unchanged.
+expectRejected : ProposalTestEnv -> V2.TransferInstructionResult -> Script ()
+expectRejected ProposalTestEnv{env = TestEnv{..}, ..} result = do
+  [] <- tsv2Operations.expectFailedTransfer result
+  [] <- query @TestProposal alice
+  [] <- query @TestProposalExecution alice
+  checkLockUntouched alice lockCid lock
+
+-- Create
+---------
+
+-- | alice proposes alone: the proposal is pending with only alice's vote, and is the first of its workflow.
+test_create_pending : Script ()
+test_create_pending = do
+  (ProposalTestEnv{env = TestEnv{..}}, proposalCid) <- setupPendingProposal
+  Some proposal <- queryContractId alice proposalCid
+  proposal.votes === Map.fromList [(alice, Proposal.PV_Accept)]
+  proposal.proposers === [alice]
+  proposal.originalProposalCid === None
+
+-- | alice, bob and charlie propose together: their votes complete a controller set, so the proposal executes on creation.
+test_create_executed : Script ()
+test_create_executed = do
+  testEnv@ProposalTestEnv{env = TestEnv{..}} <- setupProposalTest
+  result <- expectSuccess $ propose testEnv [alice, bob, charlie] Map.empty
+  case result of
+    Right _ -> pure ()
+    Left pending -> fail $ "Expected an executed proposal, got " <> show pending
+  expectExecuted testEnv None None
+
+-- | A new proposal must not have votes.
+test_create_nonEmptyVotes_fails : Script ()
+test_create_nonEmptyVotes_fails = do
+  testEnv@ProposalTestEnv{env = TestEnv{..}} <- setupProposalTest
+  expectFailureContaining "proposal votes" =<< propose testEnv [alice] (Map.fromList [(bob, Proposal.PV_Accept)])
+
+-- | The proposers must be a subset of the controllers.
+test_create_actorsNotControllers_fails : Script ()
+test_create_actorsNotControllers_fails = do
+  testEnv@ProposalTestEnv{env = TestEnv{..}} <- setupProposalTest
+  expectFailureContaining "'actors' is not a subset of 'controllers'" =<<
+    propose testEnv [alice, instrId.admin] Map.empty
+
+-- Accept
+---------
+
+-- | bob accepts: the first set still needs charlie, so the proposal is recreated with both votes.
+test_accept_pending : Script ()
+test_accept_pending = do
+  (testEnv@ProposalTestEnv{env = TestEnv{..}}, proposalCid) <- setupPendingProposal
+  result <- expectSuccess $ accept testEnv proposalCid bob
+  newCid <- expectPending testEnv proposalCid [(alice, Proposal.PV_Accept), (bob, Proposal.PV_Accept)] result
+  assertMsg "the recreated proposal must have a new contract id" (newCid /= proposalCid)
+  None <- queryContractId alice proposalCid
+  pure ()
+
+-- | bob, then charlie accept: the first set is complete, so the latest pending proposal executes.
+test_accept_executed : Script ()
+test_accept_executed = do
+  (testEnv@ProposalTestEnv{env = TestEnv{..}}, proposalCid) <- setupPendingProposal
+  pendingCid <- expectPending testEnv proposalCid [(alice, Proposal.PV_Accept), (bob, Proposal.PV_Accept)] =<<
+    expectSuccess (accept testEnv proposalCid bob)
+  [] <- tsv2Operations.expectCompletedTransfer =<< expectSuccess (accept testEnv pendingCid charlie)
+  expectExecuted testEnv (Some proposalCid) (Some pendingCid)
+
+-- | bob cannot accept once the proposal expired.
+test_accept_afterExpiry_fails : Script ()
+test_accept_afterExpiry_fails = do
+  (testEnv@ProposalTestEnv{env = TestEnv{..}, ..}, proposalCid) <- setupPendingProposal
+  passTime (testExpiry + seconds 1)
+  expectFailureContaining "expiresAt" =<< accept testEnv proposalCid bob
+  Some _ <- queryContractId alice proposalCid
+  checkLockUntouched alice lockCid lock
+
+-- | The acceptors must be a subset of the controllers.
+test_accept_actorsNotControllers_fails : Script ()
+test_accept_actorsNotControllers_fails = do
+  (testEnv@ProposalTestEnv{env = TestEnv{..}}, proposalCid) <- setupPendingProposal
+  expectFailureContaining "'actors' is not a subset of 'controllers'" =<< accept testEnv proposalCid instrId.admin
+
+-- Reject
+---------
+
+-- | bob rejects: only the first set contains a rejection, so the proposal is still pending.
+test_reject_oneSet_pending : Script ()
+test_reject_oneSet_pending = do
+  (testEnv@ProposalTestEnv{env = TestEnv{..}}, proposalCid) <- setupPendingProposal
+  _ <- expectPending testEnv proposalCid [(alice, Proposal.PV_Accept), (bob, Proposal.PV_Reject)] =<<
+    expectSuccess (reject testEnv proposalCid bob)
+  None <- queryContractId alice proposalCid
+  pure ()
+
+-- | bob, then provider1 reject: every set contains a rejection, so the proposal is rejected.
+test_reject_allSets_rejected : Script ()
+test_reject_allSets_rejected = do
+  (testEnv@ProposalTestEnv{env = TestEnv{..}}, proposalCid) <- setupPendingProposal
+  pendingCid <- expectPending testEnv proposalCid [(alice, Proposal.PV_Accept), (bob, Proposal.PV_Reject)] =<<
+    expectSuccess (reject testEnv proposalCid bob)
+  expectRejected testEnv =<< expectSuccess (reject testEnv pendingCid provider1)
+
+-- | charlie is in both sets, so charlie's rejection alone rejects the proposal.
+test_reject_sharedController_rejected : Script ()
+test_reject_sharedController_rejected = do
+  (testEnv@ProposalTestEnv{env = TestEnv{..}}, proposalCid) <- setupPendingProposal
+  expectRejected testEnv =<< expectSuccess (reject testEnv proposalCid charlie)
+
+-- | bob rejects, then charlie and provider1 accept: the second set is complete, so the proposal executes.
+test_reject_otherSetAccepts_executed : Script ()
+test_reject_otherSetAccepts_executed = do
+  (testEnv@ProposalTestEnv{env = TestEnv{..}}, proposalCid) <- setupPendingProposal
+  rejectedCid <- expectPending testEnv proposalCid [(alice, Proposal.PV_Accept), (bob, Proposal.PV_Reject)] =<<
+    expectSuccess (reject testEnv proposalCid bob)
+  acceptedCid <- expectPending testEnv proposalCid
+    [(alice, Proposal.PV_Accept), (bob, Proposal.PV_Reject), (charlie, Proposal.PV_Accept)] =<<
+    expectSuccess (accept testEnv rejectedCid charlie)
+  [] <- tsv2Operations.expectCompletedTransfer =<< expectSuccess (accept testEnv acceptedCid provider1)
+  expectExecuted testEnv (Some proposalCid) (Some acceptedCid)
+
+-- | The rejectors must be a subset of the controllers.
+test_reject_actorsNotControllers_fails : Script ()
+test_reject_actorsNotControllers_fails = do
+  (testEnv@ProposalTestEnv{env = TestEnv{..}}, proposalCid) <- setupPendingProposal
+  expectFailureContaining "'actors' is not a subset of 'controllers'" =<< reject testEnv proposalCid instrId.admin
+
+-- Withdraw
+-----------
+
+-- | bob accepts, then alice withdraws: all proposers rejected, so the proposal is rejected.
+test_withdraw_rejected : Script ()
+test_withdraw_rejected = do
+  (testEnv@ProposalTestEnv{env = TestEnv{..}}, proposalCid) <- setupPendingProposal
+  pendingCid <- expectPending testEnv proposalCid [(alice, Proposal.PV_Accept), (bob, Proposal.PV_Accept)] =<<
+    expectSuccess (accept testEnv proposalCid bob)
+  expectRejected testEnv =<< expectSuccess (withdraw testEnv pendingCid alice)
+
+-- | bob accepted, but only proposers can withdraw.
+test_withdraw_nonProposer_fails : Script ()
+test_withdraw_nonProposer_fails = do
+  (testEnv@ProposalTestEnv{env = TestEnv{..}}, proposalCid) <- setupPendingProposal
+  pendingCid <- expectPending testEnv proposalCid [(alice, Proposal.PV_Accept), (bob, Proposal.PV_Accept)] =<<
+    expectSuccess (accept testEnv proposalCid bob)
+  expectFailureContaining "'actors' is not a subset of 'proposers'" =<< withdraw testEnv pendingCid bob
+  Some _ <- queryContractId alice pendingCid
+  pure ()

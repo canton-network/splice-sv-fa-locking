@@ -29,12 +29,12 @@ import Splice.AmuletAllocation as AmuletAllocationV1
 import Splice.AmuletAllocationV2 as AmuletAllocationV2
 import Splice.AmuletTransferInstruction
 import Splice.AmuletRules
-import Splice.GovernanceLock (assertInPast24Hours, lockManagerParty)
+import Splice.GovernanceLock (lockManagerParty)
 import Splice.GovernanceLock.Request (governanceLock_transferFactoryV1_transferImpl)
 import Splice.DecentralizedSynchronizer (MemberTrafficPurchase(..), parseTrafficPurchaseMemo)
 import Splice.Round (OpenMiningRound(..))
 import Splice.Types
-import Splice.Util
+import Splice.Util hiding (require')
 
 data ExternalPartyAmuletRules_ExpireAmuletAllocationInput = ExternalPartyAmuletRules_ExpireAmuletAllocationInput
   with
