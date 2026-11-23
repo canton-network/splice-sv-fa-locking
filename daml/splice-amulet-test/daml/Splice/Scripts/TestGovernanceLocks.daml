@@ -16,12 +16,14 @@ import DA.Tuple (fst3)
 
 import Daml.Script
 import Splice.Amulet
+import Splice.AmuletConfig (GovernanceLockConfig(..))
 import Splice.Amulet.TokenApiUtils (amuletInstrumentId)
 import Splice.Api.Token.HoldingV1 qualified as V1
 import Splice.Api.Token.HoldingV2 qualified as V2
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.TransferInstructionV1 qualified as V1
 import Splice.Api.Token.TransferInstructionV2 qualified as V2
+import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Request
@@ -278,6 +280,40 @@ testGovernanceLockMergeOnLockWithZeroAmountTSv2 = testGovernanceLockMergeOnLockW
 
 testGovernanceLockMergeOnLockWithZeroAmountScenario : GovernanceLockOperations i r t -> Script ()
 testGovernanceLockMergeOnLockWithZeroAmountScenario = testGovernanceLockMergeOnLockScenario' 0.0
+
+testGovernanceLockTopUpBelowMinimumTSv1 : Script ()
+testGovernanceLockTopUpBelowMinimumTSv1 = testGovernanceLockTopUpBelowMinimumScenario tsv1Operations
+
+testGovernanceLockTopUpBelowMinimumTSv2 : Script ()
+testGovernanceLockTopUpBelowMinimumTSv2 = testGovernanceLockTopUpBelowMinimumScenario tsv2Operations
+
+-- | Topping up an existing lock may result in a lock below the minimum lock amount, e.g. after the minimum was raised.
+-- Creating a new lock below the minimum still fails.
+testGovernanceLockTopUpBelowMinimumScenario : GovernanceLockOperations i r t -> Script ()
+testGovernanceLockTopUpBelowMinimumScenario ops = do
+  env@TestEnv{..} <- setupTest
+  let registry = registriesEnv.amuletV2
+      someSvKind = GLK_SuperValidatorRightsOwner "TestSV"
+
+  AmuletRegistryV2.tapFaucet registry alice 30000.0
+  firstLockCid <- expectSuccess $ ops.governanceLock (testEnvRegistries env) alice 10000.0 (fullLockSpecification someSvKind)
+
+  -- Raise the minimum lock amount above the amount of the existing lock
+  configStates <- query @ExternalPartyConfigState registry.dso
+  _ <- forA configStates $ \(configStateCid, configState) ->
+    submit registry.dso $ archiveCmd configStateCid *> createCmd configState with
+      governanceLockConfig = Some GovernanceLockConfig with
+        minimumLockAmount = Some 20000.0
+        superValidatorLockVestingDuration = None
+        featuredAppLockVestingDuration = None
+
+  mergedLockCid <- expectSuccess $ ops.governanceLock (testEnvRegistries env) alice 5000.0 (fullLockSpecification someSvKind)
+
+  [(lockCid, lock)] <- query @GovernanceLock alice
+  lockCid === mergedLockCid
+  lock.amount === 15000.0
+  lock.originalLockCid === Some (toAnyContractId firstLockCid)
+  checkLockedHolding alice lockCid 15000.0
 
 testGovernanceLockMergeOnUnlockTSv1 : Script ()
 testGovernanceLockMergeOnUnlockTSv1 = testGovernanceLockMergeOnUnlockScenario tsv1Operations

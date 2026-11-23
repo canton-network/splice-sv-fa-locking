@@ -212,7 +212,7 @@ testLockTransfer_failures ops = do
 
   -- The owner of the source locks must authorize the proposal.
   WalletClientV2.createBatchingUtility charlie
-  mustFail charlie "'actors' is not a subset of 'controllers'" transfer with extraMemoEntries = targetLockOwnerMemoEntries (key lock)
+  mustFail charlie "'source owner' is not a member of 'proposers'" transfer with extraMemoEntries = targetLockOwnerMemoEntries (key lock)
 
   -- The TSv1 request must not have expired, and must name the new owner.
   expectFailureContaining "transfer.executeBefore" =<<

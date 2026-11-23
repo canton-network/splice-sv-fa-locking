@@ -90,7 +90,7 @@ module Splice.GovernanceLock (
 ) where
 
 import Prelude hiding (forA)
-import DA.Action (foldrA, unless)
+import DA.Action (foldrA, unless, when)
 import DA.Assert
 import DA.ContractKeys (lookupNByKey)
 import DA.Foldable (foldMap, forA_)
@@ -528,7 +528,7 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
           forA_ locks (potentiallyUnsafeArchive . fst)
           (unlockedAmount, unlockedHoldings) <- unlockGovernanceLockFunds forOwner (snd <$> locks)
           let mergedAmount = amount + unlockedAmount
-          requireMinimumLock state mergedAmount
+          when (null locks) $ requireMinimumLock state mergedAmount
           createMergedGovernanceLock
             forOwner
             key.specification
