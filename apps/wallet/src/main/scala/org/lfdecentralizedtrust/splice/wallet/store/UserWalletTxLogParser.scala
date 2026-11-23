@@ -932,8 +932,6 @@ class UserWalletTxLogParser(
               )
             }
 
-          // The target lock returns the substituted funds to its owner, and the funds that the
-          // proposer locked move into the new lock, so only the target lock owner's balance changes
           case GovernanceLockSubstitutionAccept(_) | GovernanceLockSubstitutionAcceptV2(_) =>
             defer {
               parseTrees(
@@ -943,23 +941,11 @@ class UserWalletTxLogParser(
                 ignoreUnexpectedAmuletCreateArchive = true,
               )
             }.map { childState =>
-              // All unlocks are of the target lock funds
-              val targetOwner = unlockedAmuletOwner(tree, childState)
-              val proposer = createdGovernanceLockOwners(tree, exercised)
-                .find(_ != targetOwner)
-                .getOrElse(targetOwner)
-              val receivers =
-                if (proposer == targetOwner) Seq.empty
-                else
-                  Seq(
-                    PartyAndAmount(targetOwner, -lockedAmountOwnedBy(tree, exercised, targetOwner))
-                  )
-              governanceLockAcceptState(
+              substitutionExecutionState(
                 tree,
                 exercised,
+                tree.preorderDescendants(exercised).toSeq,
                 childState,
-                PartyAndAmount(proposer, -lockedAmountOwnedBy(tree, exercised, proposer)),
-                receivers,
               )
             }
 
@@ -990,8 +976,6 @@ class UserWalletTxLogParser(
               )
             }
 
-          // Executing an unlock or a withdrawal unlocks the funds of the lock owner and locks again
-          // the part that stays locked, so the owner's balance changes by the part that becomes available
           case UnlockProposalAcceptV2(_) | WithdrawVestedFundsAcceptV2(_) =>
             defer {
               parseTrees(
@@ -1001,22 +985,12 @@ class UserWalletTxLogParser(
                 ignoreUnexpectedAmuletCreateArchive = true,
               )
             }.map { childState =>
-              val owner = childState.entries
-                .collectFirst { case b: BalanceChangeTxLogEntry => b.receiver }
-                .orElse(createdGovernanceLockOwners(tree, exercised).headOption)
-              owner match {
-                case Some(owner) =>
-                  governanceLockAcceptState(
-                    tree,
-                    exercised,
-                    childState,
-                    PartyAndAmount(owner, -lockedAmountOwnedBy(tree, exercised, owner)),
-                    Seq.empty,
-                  )
-                // Withdrawing the fully vested funds of a single vesting lock unlocks and locks
-                // no amulets, so no balance changes
-                case None => childState
-              }
+              unlockExecutionState(
+                tree,
+                exercised,
+                tree.preorderDescendants(exercised).toSeq,
+                childState,
+              )
             }
 
           case TransferInstruction_Accept(node) =>
@@ -1646,13 +1620,14 @@ class UserWalletTxLogParser(
       tree: Transaction,
       exercised: ExercisedEvent,
   ): Seq[Contract[amuletCodegen.LockedAmulet.ContractId, amuletCodegen.LockedAmulet]] =
-    tree
-      .preorderDescendants(exercised)
-      .collect { case created: CreatedEvent =>
-        Contract.fromCreatedEvent(amuletCodegen.LockedAmulet.COMPANION)(created)
-      }
-      .flatten
-      .toSeq
+    createdLockedAmulets(tree.preorderDescendants(exercised).toSeq)
+
+  private def createdLockedAmulets(
+      events: Seq[Event]
+  ): Seq[Contract[amuletCodegen.LockedAmulet.ContractId, amuletCodegen.LockedAmulet]] =
+    events.collect { case created: CreatedEvent =>
+      Contract.fromCreatedEvent(amuletCodegen.LockedAmulet.COMPANION)(created)
+    }.flatten
 
   /** Total amount of the amulets locked for `owner` below `exercised`. */
   private def lockedAmountOwnedBy(
@@ -1660,7 +1635,11 @@ class UserWalletTxLogParser(
       exercised: ExercisedEvent,
       owner: String,
   ): BigDecimal =
-    createdLockedAmulets(tree, exercised)
+    lockedAmountOwnedBy(tree.preorderDescendants(exercised).toSeq, owner)
+
+  /** Total amount of the amulets locked for `owner` in `events`. */
+  private def lockedAmountOwnedBy(events: Seq[Event], owner: String): BigDecimal =
+    createdLockedAmulets(events)
       .filter(_.payload.amulet.owner == owner)
       .map(c => BigDecimal(c.payload.amulet.amount.initialAmount))
       .sum
@@ -1669,14 +1648,21 @@ class UserWalletTxLogParser(
       tree: Transaction,
       exercised: ExercisedEvent,
   ): Seq[String] =
-    tree
-      .preorderDescendants(exercised)
+    createdGovernanceLockOwners(tree.preorderDescendants(exercised).toSeq)
+
+  private def createdGovernanceLockOwners(events: Seq[Event]): Seq[String] =
+    events
       .collect { case created: CreatedEvent =>
         Contract.fromCreatedEvent(splice.governancelock.GovernanceLock.COMPANION)(created)
       }
       .flatten
       .map(_.payload.owner)
-      .toSeq
+
+  /** Total amount of the amulets that the unlocks of `childState` return to `owner`. */
+  private def unlockedAmountOwnedBy(childState: State, owner: String): BigDecimal =
+    childState.entries.collect {
+      case b: BalanceChangeTxLogEntry if b.receiver == owner => b.amount
+    }.sum
 
   /** The owner of the amulets that the accepted governance lock proposal unlocks.
     * Accepting a substitution or transfer always unlocks funds of exactly one owner.
@@ -1702,6 +1688,23 @@ class UserWalletTxLogParser(
       splice.governancelock.withdraw.WithdrawVestedFundsProposal.COMPANION.getTemplateIdWithPackageId
     ),
   )
+
+  private val governanceLockTemplate: QualifiedName =
+    QualifiedName(splice.governancelock.GovernanceLock.COMPANION.getTemplateIdWithPackageId)
+
+  // The choices on the target lock that execute an approved governance lock proposal
+  private val governanceLockUnlockChoices: Set[String] = Set(
+    splice.governancelock.GovernanceLock.CHOICE_GovernanceLock_DsoUnlock.name,
+    splice.governancelock.GovernanceLock.CHOICE_GovernanceLock_DsoWithdraw.name,
+  )
+  private val governanceLockTransferChoice: String =
+    splice.governancelock.GovernanceLock.CHOICE_GovernanceLock_DsoTransfer.name
+  private val governanceLockSubstitutionChoices: Set[String] = Set(
+    splice.governancelock.GovernanceLock.CHOICE_GovernanceLock_DsoSubstitute.name,
+    splice.governancelock.GovernanceLock.CHOICE_GovernanceLock_DsoSplitForSubstitution.name,
+  )
+  private val governanceLockExecutionChoices: Set[String] =
+    governanceLockUnlockChoices ++ governanceLockSubstitutionChoices + governanceLockTransferChoice
 
   // The V1 and V2 choices have the same names
   private val transferInstructionUpdateChoices: Set[String] = Set(
@@ -1763,15 +1766,127 @@ class UserWalletTxLogParser(
       )
   }
 
+  /** Executing an unlock or a withdrawal unlocks the funds of the lock owner and locks again
+    * the part that stays locked, so the owner's balance changes by the part that becomes available.
+    */
+  private def unlockExecutionState(
+      tree: Transaction,
+      exercised: ExercisedEvent,
+      events: Seq[Event],
+      childState: State,
+  ): State = {
+    val owner = childState.entries
+      .collectFirst { case b: BalanceChangeTxLogEntry => b.receiver }
+      .orElse(createdGovernanceLockOwners(events).headOption)
+    owner match {
+      case Some(owner) =>
+        governanceLockAcceptState(
+          tree,
+          exercised,
+          childState,
+          PartyAndAmount(owner, -lockedAmountOwnedBy(events, owner)),
+          Seq.empty,
+        )
+      // Withdrawing the fully vested funds of a single vesting lock unlocks and locks
+      // no amulets, so no balance changes
+      case None => childState
+    }
+  }
+
+  /** The target lock returns the substituted funds to its owner, and the funds that the
+    * proposer locked move into the new lock, so only the target lock owner's balance changes.
+    */
+  private def substitutionExecutionState(
+      tree: Transaction,
+      exercised: ExercisedEvent,
+      events: Seq[Event],
+      childState: State,
+  ): State = {
+    // All unlocks are of the target lock funds
+    val targetOwner = unlockedAmuletOwner(tree, childState)
+    val proposer = createdGovernanceLockOwners(events)
+      .find(_ != targetOwner)
+      .getOrElse(targetOwner)
+    val receivers =
+      if (proposer == targetOwner) Seq.empty
+      else Seq(PartyAndAmount(targetOwner, -lockedAmountOwnedBy(events, targetOwner)))
+    governanceLockAcceptState(
+      tree,
+      exercised,
+      childState,
+      PartyAndAmount(proposer, -lockedAmountOwnedBy(events, proposer)),
+      receivers,
+    )
+  }
+
+  /** The root that executes a governance lock proposal on the target lock, if any.
+    *
+    * A request whose votes complete a controller group executes the proposal in the same
+    * transaction. The parties that see the execution but are not stakeholders of the request,
+    * such as the target lock owner or other controllers, see the choice on the target lock as a
+    * root. The lock merges and the bare amulet archives and creates of the relocks next to it
+    * are further roots.
+    */
+  private def governanceLockExecutionRoot(
+      tree: Transaction,
+      rootIds: List[Integer],
+  ): Option[ExercisedEvent] =
+    rootIds.map(tree.getEventsById.get(_)).collectFirst {
+      case exercised: ExercisedEvent
+          if QualifiedName(exercised.getTemplateId) == governanceLockTemplate &&
+            governanceLockExecutionChoices.contains(exercised.getChoice) =>
+        exercised
+    }
+
+  /** Parses a transaction in which `execution` executes a governance lock proposal without a
+    * visible request or accept. Like the accept of the proposal, the transaction becomes a single
+    * transfer entry.
+    */
+  private def parseGovernanceLockExecution(
+      tree: Transaction,
+      rootIds: List[Integer],
+      execution: ExercisedEvent,
+      synchronizerId: SynchronizerId,
+  )(implicit tc: TraceContext): Eval[State] = {
+    // The relocks of a lock transfer and the lock merges are not below `execution`
+    val events = rootIds
+      .map(tree.getEventsById.get(_))
+      .flatMap(root => root +: tree.preorderDescendants(root).toSeq)
+    parseTrees(tree, rootIds, synchronizerId, ignoreUnexpectedAmuletCreateArchive = true).map {
+      childState =>
+        val choice = execution.getChoice
+        if (governanceLockUnlockChoices.contains(choice))
+          unlockExecutionState(tree, execution, events, childState)
+        else if (governanceLockSubstitutionChoices.contains(choice))
+          substitutionExecutionState(tree, execution, events, childState)
+        else {
+          // The sender's unlocked funds are locked again for the receiver, so neither unlocked
+          // balance changes. The new lock of the receiver may not be visible, so the amount of
+          // the sender is the negated unlocks instead of the new locks as in the accept.
+          val sender = unlockedAmuletOwner(tree, childState)
+          val receiver = createdGovernanceLockOwners(events).find(_ != sender)
+          governanceLockAcceptState(
+            tree,
+            execution,
+            childState,
+            PartyAndAmount(sender, -unlockedAmountOwnedBy(childState, sender)),
+            receiver.map(PartyAndAmount(_, BigDecimal(0))).toList,
+          )
+        }
+    }
+  }
+
   override def tryParse(tx: Transaction, synchronizerId: SynchronizerId)(implicit
       tc: TraceContext
   ): Seq[TxLogEntry] = {
-    parseTrees(
-      tx,
-      tx.getRootNodeIds.asScala.toList,
-      synchronizerId,
-      ignoreUnexpectedAmuletCreateArchive = false,
-    ).value
+    val rootIds = tx.getRootNodeIds.asScala.toList
+    val state = governanceLockExecutionRoot(tx, rootIds) match {
+      case Some(execution) =>
+        parseGovernanceLockExecution(tx, rootIds, execution, synchronizerId)
+      case None =>
+        parseTrees(tx, rootIds, synchronizerId, ignoreUnexpectedAmuletCreateArchive = false)
+    }
+    state.value
       .filterByParty(endUserParty)
       .entries
   }

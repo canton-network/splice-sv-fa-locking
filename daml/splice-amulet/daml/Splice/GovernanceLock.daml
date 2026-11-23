@@ -402,6 +402,8 @@ data GovernanceLock_DsoMergeResult = GovernanceLock_DsoMergeResult with
     lockCid : ContractId GovernanceLock
     lock : GovernanceLock
     changeHolding : Optional (ContractId Amulet)
+    meta : Metadata
+      -- ^ Metadata that describes the holding changes of the choice, in particular its `tx-kind`.
   deriving (Serializable)
 
 data GovernanceLock_DsoUnlockResult = GovernanceLock_DsoUnlockResult with
@@ -411,6 +413,8 @@ data GovernanceLock_DsoUnlockResult = GovernanceLock_DsoUnlockResult with
       -- ^ The still-locked full lock holding the remaining locked amount. None if the full amount was unlocked.
     unlockedAmulet : Optional (ContractId Amulet)
       -- ^ The unlocked funds. Only present if the lock had no vesting period.
+    meta : Metadata
+      -- ^ Metadata that describes the holding changes of the choice, in particular its `tx-kind`.
   deriving (Serializable)
 
 data GovernanceLock_DsoWithdrawResult = GovernanceLock_DsoWithdrawResult with
@@ -418,6 +422,8 @@ data GovernanceLock_DsoWithdrawResult = GovernanceLock_DsoWithdrawResult with
       -- ^ Contract ID of the continuing vesting lock with remaining funds.
     vested : ContractId Holding
       -- ^ Holding of withdrawn available funds. May be either an Amulet or an expired LockedAmulet if the vesting period has passed. May be already spent in the latter case.
+    meta : Metadata
+      -- ^ Metadata that describes the holding changes of the choice, in particular its `tx-kind`.
   deriving (Serializable)
 
 data GovernanceLock_DsoSubstituteResult = GovernanceLock_DsoSubstituteResult with
@@ -425,6 +431,8 @@ data GovernanceLock_DsoSubstituteResult = GovernanceLock_DsoSubstituteResult wit
       -- ^ The lock that keeps the funds that were not substituted, if any.
     unlockedAmulet : ContractId Amulet
       -- ^ The substituted funds, returned to the owner.
+    meta : Metadata
+      -- ^ Metadata that describes the holding changes of the choice, in particular its `tx-kind`.
   deriving (Serializable)
 
 data GovernanceLock_DsoSplitForSubstitutionResult = GovernanceLock_DsoSplitForSubstitutionResult with
@@ -432,6 +440,8 @@ data GovernanceLock_DsoSplitForSubstitutionResult = GovernanceLock_DsoSplitForSu
       -- ^ The lock that keeps the funds that were not split off, if any.
     splitAmulet : ContractId LockedAmulet
       -- ^ The funds that were split off, locked for the new lock.
+    meta : Metadata
+      -- ^ Metadata that describes the holding changes of the choice, in particular its `tx-kind`.
   deriving (Serializable)
 
 data GovernanceLock_DsoTransferResult
@@ -440,7 +450,16 @@ data GovernanceLock_DsoTransferResult
       -- ^ The lock that keeps the funds that were not transferred, if any.
     unlockedAmulet : ContractId Amulet
       -- ^ The transferred funds, returned to the owner of the source lock.
+    meta : Metadata
+      -- ^ Metadata that describes the holding changes of the choice, in particular its `tx-kind`.
   deriving (Serializable)
+
+-- | Metadata of the result of a choice that executes a governance lock request. Its `tx-kind`
+-- lets token standard wallets attribute the holding changes below the choice to it, as parties
+-- that do not see the request, such as the lock owner when a controller executes it, see the
+-- choice as a root.
+governanceLockTxMeta : TxKind -> Text -> Metadata
+governanceLockTxMeta kind reason = simpleHoldingTxMeta kind (Some reason) None
 
 -- | Unlock the funds of `locks`, returning their total amount and the unlocked holdings.
 -- The caller archives the locks.
@@ -483,6 +502,7 @@ createMergedGovernanceLock forOwner@ForOwner{..} specification amount inputs ori
     lockCid
     lock
     changeHolding
+    meta = governanceLockTxMeta TxKind_MergeSplit reason
 
 fetchAndMergeGovernanceLocks'
   :  Optional (Decimal, [ContractId Holding], Time)
@@ -517,6 +537,7 @@ fetchAndMergeGovernanceLocks' newFunds key context state reason =
           lockCid
           lock
           changeHolding = None
+          meta = governanceLockTxMeta TxKind_MergeSplit reason
         (None, (lockCid, _) :: otherLocks) -> merge lockCid (fst <$> otherLocks)
         (Some (amount, inputs, requestedAt), _) -> do
           -- Only the owner locks new funds, so the owner authorizes merging the existing locks without the authority of the DSO party.
@@ -630,7 +651,13 @@ governanceLock_dsoUnlockImpl lockCid lock@GovernanceLock{..} originalProposalCid
       else originalProposalCid
     requestedAt = endTime `addRelTime` (- vestingPeriod))
 
-  pure GovernanceLock_DsoUnlockResult with vestingLock; governanceLock; unlockedAmulet
+  -- With a vesting period, the unlocked funds stay locked until they vest
+  let txKind = if vestingPeriod == days 0 then TxKind_Unlock else TxKind_MergeSplit
+  pure GovernanceLock_DsoUnlockResult with
+    vestingLock
+    governanceLock
+    unlockedAmulet
+    meta = governanceLockTxMeta txKind reason
 
 -- | Withdraw the funds of a vesting lock that vested until `vestedUntilTime`, as part of an approved withdrawal.
 -- The funds that are still vesting, if any, stay locked in a new vesting lock that vests from `vestedUntilTime`.
@@ -644,6 +671,7 @@ governanceLock_dsoWithdrawImpl lockCid lock@GovernanceLock{..} vestedUntilTime r
       pure GovernanceLock_DsoWithdrawResult with
         vestingLock = None
         vested = toInterfaceContractId lockedAmulet
+        meta = governanceLockTxMeta TxKind_Unlock reason
     Some stillLockedAmount -> do -- We have a fraction that is not the whole being withdrawn, do a partial unlock.
       let withdrawAmount = amount - stillLockedAmount
       require' ("withdraw amount", withdrawAmount) isGreaterR ("zero", 0.0)
@@ -657,6 +685,7 @@ governanceLock_dsoWithdrawImpl lockCid lock@GovernanceLock{..} vestedUntilTime r
       pure GovernanceLock_DsoWithdrawResult with
         vestingLock
         vested = toInterfaceContractId unlocked
+        meta = governanceLockTxMeta TxKind_Unlock reason
 
 -- | Release `substitutedAmount` of the locked funds to the owner as part of an approved
 -- substitution. Only the accept step of a `GovernanceLockSubstitution` calls this.
@@ -675,11 +704,13 @@ governanceLock_dsoSubstituteImpl lockCid lock@GovernanceLock{..} substitutedAmou
       pure GovernanceLock_DsoSubstituteResult with
         remainingLockCid = Some remainingLockCid
         unlockedAmulet
+        meta = governanceLockTxMeta TxKind_Unlock reason
     EQ -> do
       (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
       pure GovernanceLock_DsoSubstituteResult with
         remainingLockCid = None
         unlockedAmulet
+        meta = governanceLockTxMeta TxKind_Unlock reason
     GT ->
       fail $ "substituted lock has less funds (" <> show amount <> ") than the amount proposed to be substituted (" <> show substitutedAmount <> ")"
 
@@ -703,11 +734,13 @@ governanceLock_dsoSplitForSubstitutionImpl lockCid lock@GovernanceLock{..} split
       pure GovernanceLock_DsoSplitForSubstitutionResult with
         remainingLockCid = Some remainingLockCid
         splitAmulet
+        meta = governanceLockTxMeta TxKind_MergeSplit reason
     EQ -> do
       splitAmulet <- relockAmulet forOwner lockedAmulet splitLockExpiresAt context reason
       pure GovernanceLock_DsoSplitForSubstitutionResult with
         remainingLockCid = None
         splitAmulet
+        meta = governanceLockTxMeta TxKind_MergeSplit reason
     GT ->
       fail $ "substituted lock has less funds (" <> show amount <> ") than the amount proposed to be substituted (" <> show splitAmount <> ")"
 
@@ -767,11 +800,13 @@ governanceLock_dsoTransferImpl lockCid lock@GovernanceLock{..} transferredAmount
       pure GovernanceLock_DsoTransferResult with
         remainingLockCid = Some remainingLockCid
         unlockedAmulet
+        meta = governanceLockTxMeta TxKind_Unlock reason
     EQ -> do
       (unlockedAmulet, _) <- unlockAmulet forOwner lockedAmulet
       pure GovernanceLock_DsoTransferResult with
         remainingLockCid = None
         unlockedAmulet
+        meta = governanceLockTxMeta TxKind_Unlock reason
     GT ->
       fail $ "transferred lock has less funds (" <> show amount <> ") than the amount proposed to be transferred (" <> show transferredAmount <> ")"
 

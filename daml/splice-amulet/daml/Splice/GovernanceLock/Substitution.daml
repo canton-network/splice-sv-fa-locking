@@ -195,7 +195,7 @@ governanceLock_proposeSubstitution GovernanceLockProposeSubstitutionArgs {..} = 
 
 governanceLock_executeSubstitution : Proposal.ProposalExecuteArgs GovernanceLockSubstitution -> Update GovernanceLock_SubstitutionResult_Completed
 governanceLock_executeSubstitution Proposal.ProposalExecuteArgs{..} = do
-  let (GovernanceLock_DsoMergeResult lockCid lock _changeHolding) = merged
+  let (GovernanceLock_DsoMergeResult lockCid lock _changeHolding _meta) = merged
       GovernanceLockSubstitution{..} = proposal
       originalProposalCid = toAnyContractId <$> optional proposalCid Some originalSubstitutionCid
   -- The target lock owner may not be a controller of the substitution, so act on the target lock
