@@ -30,6 +30,7 @@ import org.lfdecentralizedtrust.splice.util.{
   DarResourcesUtil,
   GovernanceLockUtil,
   TokenStandardAccount,
+  TokenStandardMetadata,
 }
 import org.lfdecentralizedtrust.tokenstandard.transferinstruction.v1
 import org.lfdecentralizedtrust.tokenstandard.transferinstruction.v2
@@ -81,30 +82,37 @@ class HttpTokenStandardTransferInstructionHandler(
         )
         dsoRules <- store.getDsoRules()
         result <- buildTransferFactory(
+          PartyId.tryFromProtoPrimitive(dsoRules.payload.dso),
           PartyId.tryFromProtoPrimitive(transferInstr.transfer.sender),
           PartyId.tryFromProtoPrimitive(transferInstr.transfer.receiver),
+          transferInstr.transfer.meta,
           body.excludeDebugFields.getOrElse(false),
-        )((optTransferPreapproval, optFeaturedAppRight, externalPartyAmuletRules) => {
-          val isSelfTransfer = transferInstr.transfer.receiver == transferInstr.transfer.sender
-          val kind =
-            if (isSelfTransfer) v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Self
-            else if (optTransferPreapproval.isDefined)
-              v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Direct
-            else v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer
-          v1.Resource.GetTransferFactoryResponseOK(
-            v1.definitions.TransferFactoryWithChoiceContext(
-              externalPartyAmuletRules.contractId.contractId,
-              kind,
-              choiceContext = choiceContextBuilder
-                .addOptionalContracts(
-                  "transfer-preapproval" -> optTransferPreapproval
+        )(
+          (optTransferPreapproval, optFeaturedAppRight, externalPartyAmuletRules, lockedAmulets) =>
+            {
+              val isSelfTransfer = transferInstr.transfer.receiver == transferInstr.transfer.sender
+              val kind =
+                if (isSelfTransfer)
+                  v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Self
+                else if (optTransferPreapproval.isDefined)
+                  v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Direct
+                else v1.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer
+              v1.Resource.GetTransferFactoryResponseOK(
+                v1.definitions.TransferFactoryWithChoiceContext(
+                  externalPartyAmuletRules.contractId.contractId,
+                  kind,
+                  choiceContext = choiceContextBuilder
+                    .addOptionalContracts(
+                      "transfer-preapproval" -> optTransferPreapproval
+                    )
+                    .addFeaturedAppRight(clock, dsoRules.payload, optFeaturedAppRight)
+                    .disclose(externalPartyAmuletRules.contract)
+                    .discloseAll(lockedAmulets)
+                    .build(),
                 )
-                .addFeaturedAppRight(clock, dsoRules.payload, optFeaturedAppRight)
-                .disclose(externalPartyAmuletRules.contract)
-                .build(),
-            )
-          )
-        })
+              )
+            }
+        )
       } yield result
     }
   }
@@ -190,34 +198,41 @@ class HttpTokenStandardTransferInstructionHandler(
         )
         dsoRules <- store.getDsoRules()
         result <- buildTransferFactory(
+          PartyId.tryFromProtoPrimitive(dsoRules.payload.dso),
           PartyId.tryFromProtoPrimitive(
             TokenStandardAccount.tryGetRegularAccountOwner(transferInstr.transfer.sender)
           ),
           PartyId.tryFromProtoPrimitive(
             TokenStandardAccount.tryGetRegularAccountOwner(transferInstr.transfer.receiver)
           ),
+          transferInstr.transfer.meta,
           body.excludeDebugFields.getOrElse(false),
-        )((optTransferPreapproval, optFeaturedAppRight, externalPartyAmuletRules) => {
-          val isSelfTransfer = transferInstr.transfer.receiver == transferInstr.transfer.sender
-          val kind =
-            if (isSelfTransfer) v2.definitions.TransferFactoryWithChoiceContext.TransferKind.Self
-            else if (optTransferPreapproval.isDefined)
-              v2.definitions.TransferFactoryWithChoiceContext.TransferKind.Direct
-            else v2.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer
-          v2.Resource.GetTransferFactoryResponseOK(
-            v2.definitions.TransferFactoryWithChoiceContext(
-              externalPartyAmuletRules.contractId.contractId,
-              kind,
-              choiceContext = choiceContextBuilder
-                .addOptionalContracts(
-                  "transfer-preapproval" -> optTransferPreapproval
+        )(
+          (optTransferPreapproval, optFeaturedAppRight, externalPartyAmuletRules, lockedAmulets) =>
+            {
+              val isSelfTransfer = transferInstr.transfer.receiver == transferInstr.transfer.sender
+              val kind =
+                if (isSelfTransfer)
+                  v2.definitions.TransferFactoryWithChoiceContext.TransferKind.Self
+                else if (optTransferPreapproval.isDefined)
+                  v2.definitions.TransferFactoryWithChoiceContext.TransferKind.Direct
+                else v2.definitions.TransferFactoryWithChoiceContext.TransferKind.Offer
+              v2.Resource.GetTransferFactoryResponseOK(
+                v2.definitions.TransferFactoryWithChoiceContext(
+                  externalPartyAmuletRules.contractId.contractId,
+                  kind,
+                  choiceContext = choiceContextBuilder
+                    .addOptionalContracts(
+                      "transfer-preapproval" -> optTransferPreapproval
+                    )
+                    .addFeaturedAppRight(clock, dsoRules.payload, optFeaturedAppRight)
+                    .disclose(externalPartyAmuletRules.contract)
+                    .discloseAll(lockedAmulets)
+                    .build(),
                 )
-                .addFeaturedAppRight(clock, dsoRules.payload, optFeaturedAppRight)
-                .disclose(externalPartyAmuletRules.contract)
-                .build(),
-            )
-          )
-        })
+              )
+            }
+        )
       } yield result
     }
   }
@@ -279,8 +294,10 @@ class HttpTokenStandardTransferInstructionHandler(
   }
 
   private def buildTransferFactory[FactoryResponse](
+      dso: PartyId,
       sender: PartyId,
       receiver: PartyId,
+      meta: metadatav1.Metadata,
       excludeDebugFields: Boolean,
   )(
       build: (
@@ -293,6 +310,7 @@ class HttpTokenStandardTransferInstructionHandler(
             splice.externalpartyamuletrules.ExternalPartyAmuletRules.ContractId,
             splice.externalpartyamuletrules.ExternalPartyAmuletRules,
           ],
+          Seq[Contract[splice.amulet.LockedAmulet.ContractId, splice.amulet.LockedAmulet]],
       ) => FactoryResponse
   )(implicit
       tc: TraceContext
@@ -313,10 +331,37 @@ class HttpTokenStandardTransferInstructionHandler(
             PartyId.tryFromProtoPrimitive(preapproval.payload.provider)
           )
       }
+      lockedAmulets <- Option
+        .when(receiver == GovernanceLockUtil.lockManagerParty)(())
+        .flatMap(_ =>
+          GovernanceLockUtil.Memo
+            .parseTarget(
+              dso,
+              sender,
+              meta.values.getOrDefault(TokenStandardMetadata.reasonMetaKey, ""),
+            )
+            .toOption
+            .flatten
+        )
+        .map(target =>
+          util.ChoiceContextBuilder
+            .getGovernanceLockProposalData(
+              s"TransferFactory_Transfer for governance lock $target",
+              target,
+              requireLock = false,
+              requireLockedAmulet = vestingLockIsNotExpired(target.specification),
+              proposalLockedAmulet = None,
+              store,
+              contractFetcher,
+            )
+            .map(_._2)
+        )
+        .getOrElse(Future.successful(Seq.empty))
     } yield build(
       optTransferPreapproval,
       optFeaturedAppRight,
       externalPartyAmuletRules,
+      lockedAmulets,
     )
 
   }
@@ -390,6 +435,13 @@ class HttpTokenStandardTransferInstructionHandler(
     } yield build(amuletRules, newestOpenRound, externalPartyConfigStateO)
   }
 
+  private def vestingLockIsNotExpired(
+      spec: splice.governancelock.GovernanceLockSpecification
+  ): Boolean =
+    GovernanceLockUtil
+      .getVestingLockSpecification(spec)
+      .fold(true)(v => clock.now.toInstant.isBefore(v.endTime))
+
   /** Generic method to fetch choice contexts for all choices on a transfer instruction */
   private def getTransferInstructionChoiceContext[
       DisclosedContract,
@@ -405,11 +457,6 @@ class HttpTokenStandardTransferInstructionHandler(
       newBuilder: String => Builder,
   )(implicit tc: TraceContext): Future[ChoiceContext] = {
     def description(type_ : String): String = s"$type_ '$transferInstructionId'"
-
-    def vestingLockIsNotExpired(spec: splice.governancelock.GovernanceLockSpecification): Boolean =
-      GovernanceLockUtil
-        .getVestingLockSpecification(spec)
-        .fold(true)(v => clock.now.toInstant.isBefore(v.endTime))
 
     def getGovernanceLockContext(
         tpe: String,

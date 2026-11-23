@@ -7,6 +7,7 @@ import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.time.Clock
 import com.digitalasset.canton.topology.PartyId
 import com.digitalasset.canton.tracing.TraceContext
+import com.digitalasset.nonempty.NonEmpty
 import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock
 import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.DsoRules
@@ -272,6 +273,53 @@ object ChoiceContextBuilder {
   /** Acceptance of a governance lock proposal merges at most this many locks by key. */
   private val maxGovernanceLocksByKey = 20
 
+  def getGovernanceLockProposalData(
+      description: String,
+      key: governancelock.GovernanceLockKey,
+      requireLock: Boolean,
+      requireLockedAmulet: Boolean,
+      proposalLockedAmulet: Option[amulet.LockedAmulet.ContractId],
+      store: ScanStore,
+      fetcher: ChoiceContextContractFetcher,
+  )(implicit ec: ExecutionContext, tc: TraceContext): Future[
+    (
+        Seq[Contract[governancelock.GovernanceLock.ContractId, governancelock.GovernanceLock]],
+        Seq[Contract[amulet.LockedAmulet.ContractId, amulet.LockedAmulet]],
+    )
+  ] = {
+    def notFound(error: String): Nothing =
+      throw io.grpc.Status.NOT_FOUND.withDescription(error).asRuntimeException()
+
+    for {
+      locks <- store.listGovernanceLocksByKey(key, PageLimit.tryCreate(maxGovernanceLocksByKey))
+      _ = if (requireLock && locks.isEmpty)
+        notFound(s"No GovernanceLock with key $key found for $description")
+      lockedAmuletCids = locks.map(_.payload.lockedAmulet) ++ proposalLockedAmulet
+      lockedAmulets <- NonEmpty.from(lockedAmuletCids) match {
+        case Some(lockedAmulets) =>
+          fetcher.lookupContractsById(amulet.LockedAmulet.COMPANION)(
+            locks.map(_.payload.lockedAmulet) ++ proposalLockedAmulet
+          )
+        case None => Future.successful(Seq.empty)
+      }
+      found = lockedAmulets.map(_.contractId.contractId).toSet
+      _ = if (requireLockedAmulet)
+        locks
+          .find(lock => !found(lock.payload.lockedAmulet.contractId))
+          .foreach { lock =>
+            val lockedAmuletId = lock.payload.lockedAmulet
+            notFound(
+              s"LockedAmulet '${lockedAmuletId.contractId}' of GovernanceLock " +
+                s"'${lock.contractId.contractId}' not found for $description"
+            )
+          }
+      _ = proposalLockedAmulet.foreach { cid =>
+        if (!found(cid.contractId))
+          notFound(s"LockedAmulet '${cid.contractId}' not found for $description")
+      }
+    } yield (locks.map(_.contract), lockedAmulets)
+  }
+
   /** Discloses the `LockedAmulet`s of the governance locks that the accept of a governance lock
     * proposal resolves by key, as the controller may not be able to see them.
     *
@@ -291,39 +339,24 @@ object ChoiceContextBuilder {
       fetcher: ChoiceContextContractFetcher,
       clock: Clock,
       newBuilder: String => Builder,
-  )(implicit ec: ExecutionContext, tc: TraceContext): Future[ChoiceContext] = {
-    def notFound(error: String): Nothing =
-      throw io.grpc.Status.NOT_FOUND.withDescription(error).asRuntimeException()
-
+  )(implicit ec: ExecutionContext, tc: TraceContext): Future[ChoiceContext] =
     for {
-      locks <- store.listGovernanceLocksByKey(key, PageLimit.tryCreate(maxGovernanceLocksByKey))
-      _ = if (locks.isEmpty)
-        notFound(s"No GovernanceLock with key $key found for $description")
-      lockedAmulets <- fetcher.lookupContractsById(amulet.LockedAmulet.COMPANION)(
-        locks.map(_.payload.lockedAmulet) ++ proposalLockedAmulet
+      data <- getGovernanceLockProposalData(
+        description,
+        key,
+        requireLock = true,
+        requireLockedAmulet,
+        proposalLockedAmulet,
+        store,
+        fetcher,
       )
-      found = lockedAmulets.map(_.contractId.contractId).toSet
-      _ = if (requireLockedAmulet)
-        locks
-          .find(lock => !found(lock.payload.lockedAmulet.contractId))
-          .foreach { lock =>
-            val lockedAmuletId = lock.payload.lockedAmulet
-            notFound(
-              s"LockedAmulet '${lockedAmuletId.contractId}' of GovernanceLock " +
-                s"'${lock.contractId.contractId}' not found for $description"
-            )
-          }
-      _ = proposalLockedAmulet.foreach { cid =>
-        if (!found(cid.contractId))
-          notFound(s"LockedAmulet '${cid.contractId}' not found for $description")
-      }
+      (locks, lockedAmulets) = data
       (choiceContextBuilder, _) <- getAmuletRulesTransferContext[
         DisclosedContract,
         ChoiceContext,
         Builder,
       ](store, clock, newBuilder)
-      _ = if (discloseLocks) choiceContextBuilder.discloseAll(locks.map(_.contract))
+      _ = if (discloseLocks) choiceContextBuilder.discloseAll(locks)
       result = choiceContextBuilder.discloseAll(lockedAmulets).build()
     } yield result
-  }
 }
