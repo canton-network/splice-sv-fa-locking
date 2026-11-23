@@ -15,6 +15,14 @@ This document provides instructions for AI coding agents (GitHub Copilot, Claude
 
 Every contribution must be tested in an automated test. For further details see the [Testing README](TESTING.md).
 
+For Python, use `scripts/python-checks.py check` and
+`scripts/python-checks.py test` in direnv from the repository root.
+Both accept an optional caller-relative path and select tracked files only.
+Coverage exclusions, additional import directories, and justified stricter-rule
+exceptions live in `scripts/python-checks.json`; see [Python checks](CONTRIBUTING.md#python-checks).
+Keep mypy's `--config-file=` isolation and never execute target code from `check`.
+Ask before substantial refactoring to adopt a stricter rule, or leave a specific TODO.
+
 ## Building and Running Tests
 
 * Run `sbt` inside the direnv/nix dev shell, e.g. `direnv exec . sbt -batch "apps-scan/testOnly <FullyQualifiedSuite>"`. `-batch` avoids the interactive prompt; redirect output to a file and grep for `^\[error\]` and `Tests:`.
@@ -131,6 +139,10 @@ The `common-frontend` package (`@canton-network/splice-common-frontend`) contain
 
 - Every commit needs a DCO `Signed-off-by:` line; use `git commit -s`.
 - PRs are squash-merged, so the PR title and description become the commit message.
+- User-facing changes, i.e. ones visible to anyone deploying, operating, integrating with or using Splice, need an entry in
+  `release-notes/release_notes_upcoming.mdx` under the next patch release section. Breaking changes also go into the minor release template in the same file.
+  Match the style of the [published release notes](https://docs.canton.network/global-synchronizer/release-notes/splice).
+- Do not disclose an unfixed vulnerability in an issue, PR, commit or release note; handle it as described in [SECURITY.md](SECURITY.md).
 - Mark work that is still to be done with the most specific tag, so that it is tracked and done when it is due:
   - `FIXME`: must be fixed before the PR is merged. The static CI checks reject FIXMEs.
   - `TODO(#1234)`: must be fixed as part of that issue. Use the feature's tracking issue if a separate issue makes no sense.
