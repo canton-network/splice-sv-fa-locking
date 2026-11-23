@@ -793,11 +793,11 @@ class DbScanAppRewardsStore(
       ++ insertPartyTotals(historyId, roundNumber) ++ sql" "
       ++ insertRoundTotals(historyId, roundNumber)).asUpdate
 
-  /** Unnest per-verdict activity arrays and aggregate weights by party.
-    * TBAR v1.1 attribution is pre-applied in `app_provider_parties`.
+  /** Unnest activity arrays from both record stores and aggregate weights
+    * by party. TBAR v1.1 attribution is pre-applied in `app_provider_parties`.
     *
     * Reads both `app_activity_record_store` (verdict-derived activity) and
-    * `extra_app_activity_record_store` (CIP-0104 extension-hook activity),
+    * `extra_app_activity_record_store` (CIP-0104 extension hook activity),
     * aggregating each side separately so they land in distinct columns in
     * the totals tables.
     */

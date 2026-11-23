@@ -21,9 +21,9 @@ import scala.concurrent.{ExecutionContext, Future}
 object DbExtraActivityRecordStore {
 
   /** Extra activity record contributed by an
-    * `ActivityRecorder_DsoRecordActivity` exercise (CIP-0104 amendment).
+    * `ActivityRecorder_DsoRecordActivity` exercise (CIP-0104 extension hook).
     * `store_id` is injected from the store descriptor on insert; the DB
-    * PK is `(store_id, round_number, record_time)`.
+    * PK is `(store_id, record_time)`.
     */
   final case class ExtraActivityRecordT(
       roundNumber: Long,
@@ -48,9 +48,9 @@ object DbExtraActivityRecordStore {
       .map(storeId => new DbExtraActivityRecordStore(storage, storeId, loggerFactory))
 }
 
-/** Row store for extra-activity records contributed by the CIP-0104
-  * amendment's `ActivityRecorder_DsoRecordActivity` choice, backed by
-  * `extra_app_activity_record_store`.
+/** Row store for extra-activity records contributed by
+  * `ActivityRecorder_DsoRecordActivity` exercises (CIP-0104 extension hook),
+  * backed by `extra_app_activity_record_store`.
   */
 class DbExtraActivityRecordStore private (
     storage: DbStorage,

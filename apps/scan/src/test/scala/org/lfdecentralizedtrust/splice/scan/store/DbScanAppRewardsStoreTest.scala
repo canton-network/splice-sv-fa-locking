@@ -1600,8 +1600,8 @@ class DbScanAppRewardsStoreTest
   private val extraRecordTimeCounter = new java.util.concurrent.atomic.AtomicLong(1000000L)
 
   /** Insert directly into `extra_app_activity_record_store` (the CIP-0104
-    * extension-hook source). PK is `(store_id, round_number, record_time)`,
-    * so each call bumps a shared record-time counter to stay unique.
+    * extension hook source). PK is `(store_id, record_time)`, so each call
+    * bumps a shared record-time counter to stay unique.
     */
   private def insertExtraActivityRecord(
       storeId: Int,
