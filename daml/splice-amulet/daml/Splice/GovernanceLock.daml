@@ -82,6 +82,7 @@ module Splice.GovernanceLock (
   vestedUntilTimeMemoKey,
 
   -- * Utilities
+  makeUnfeaturedPaymentContext,
   unfeaturedPaymentContextAndConfigFromChoiceContext,
   requireMinimumLock,
   lockAmulet,
@@ -573,15 +574,15 @@ governanceLock_lockForGovernance_impl
  -> Decimal
  -> [ContractId Holding]
  -> FullLockSpecification
- -> ExtraArgs
  -> Party
  -> Time
  -> Text
+ -> ExternalPartyTransferContext
+ -> ExternalPartyConfigState
  -> Update (GovernanceLock, ContractId GovernanceLock, Optional (ContractId Amulet))
-governanceLock_lockForGovernance_impl dso amount inputs fullSpecification extraArgs owner requestedAt reason = do
+governanceLock_lockForGovernance_impl dso amount inputs fullSpecification owner requestedAt reason context state = do
   let specification = GLS_FullLock fullSpecification
   assertInPast24Hours "requestedAt" requestedAt
-  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
   GovernanceLock_DsoMergeResult{lock, lockCid, changeHolding} <- fetchAndMergeGovernanceLocks'
     (Some (amount, inputs, requestedAt))
     (GovernanceLockKey with dso; owner; specification)
@@ -738,13 +739,15 @@ requireMinimumLock : ExternalPartyConfigState -> Decimal -> Update ()
 requireMinimumLock context amount = do
   require' ("locked amount", amount) isGreaterOrEqualR ("minimum governance lock amount", governanceLockMinimumLockAmount context.governanceLockConfig)
 
+makeUnfeaturedPaymentContext : ContractId ExternalPartyConfigState -> ExternalPartyTransferContext
+makeUnfeaturedPaymentContext configStateCid = ExternalPartyTransferContext with
+  externalPartyConfigState = configStateCid
+  featuredAppRight = None
+
 unfeaturedPaymentContextAndConfigFromChoiceContext : Party -> ChoiceContext -> Update (ExternalPartyTransferContext, ExternalPartyConfigState)
 unfeaturedPaymentContextAndConfigFromChoiceContext dso choiceContext = do
   (configStateCid, configState) <- getExternalPartyConfigStateFromChoiceContext dso choiceContext
-  pure (ExternalPartyTransferContext with
-          externalPartyConfigState = configStateCid
-          featuredAppRight = None
-       , configState )
+  pure (makeUnfeaturedPaymentContext configStateCid, configState)
 
 -- | Release `transferredAmount` of the locked funds as part of an approved transfer.
 -- The accept step of a `GovernanceLockTransfer` calls this, and locks the unlocked
