@@ -22,13 +22,11 @@ module Splice.GovernanceLock.Request (
 ) where
 
 import DA.Action (unless)
-import DA.Assert
 import DA.Optional
 import DA.Text qualified as Text
 import DA.Time
 import DA.Validation
 
-import Splice.Amulet.TokenApiUtils
 import Splice.AmuletConfig (GovernanceLockConfig)
 import Splice.AmuletRules
 import Splice.Api.Token.MetadataV1
@@ -42,7 +40,6 @@ import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock
 import Splice.GovernanceLock.Withdraw
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
-import Splice.Util (assertInPast24Hours)
 import Splice.Util.Memo
 import Splice.Util.Parser
 
@@ -95,12 +92,8 @@ governanceLock_transferFactoryV1_transferImpl
   -> ContractId ExternalPartyConfigState
   -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_Transfer{expectedAdmin, transfer} stateCid state = do
-  requireMatchExpected ("admin", expectedAdmin) dso
+governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_Transfer{transfer} stateCid state = do
   checkActor transfer.sender actors
-  requireMatchExpected ("instrumentId", transfer.instrumentId) (amuletInstrumentId dso)
-  assertInPast24Hours "transfer.requestedAt" transfer.requestedAt
-  assertWithinDeadline "transfer.executeBefore" transfer.executeBefore
 
   let context = makeUnfeaturedPaymentContext stateCid
   request <- parseGovernanceLockRequestTSv1 dso transfer.sender transfer.receiver state.governanceLockConfig transfer.meta
