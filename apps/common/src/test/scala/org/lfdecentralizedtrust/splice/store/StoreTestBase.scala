@@ -632,6 +632,7 @@ abstract class StoreTestBase
         Optional.empty(),
         Optional.empty(),
         Optional.empty(),
+        Optional.empty(),
       ),
     )
 

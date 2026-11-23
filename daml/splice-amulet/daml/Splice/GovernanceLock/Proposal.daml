@@ -99,7 +99,6 @@ module Splice.GovernanceLock.Proposal (
 import Prelude hiding (create)
 import DA.Action (foldrA)
 import DA.Assert (assertWithinDeadline)
-import DA.List qualified as List
 import DA.Map qualified as Map
 import DA.Optional
 import DA.Set qualified as Set
@@ -114,7 +113,7 @@ import Splice.Api.Token.TransferInstructionV2 qualified as V2
 import Splice.ExternalPartyConfigState
 import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
-import Splice.TokenStandard.Utils hiding (require)
+import Splice.TokenStandard.Utils hiding (require, require')
 import Splice.Util
 
 -- | Types
@@ -139,6 +138,8 @@ data ProposalVoteResult
 data ProposalView t = ProposalView with
   lockKey : GovernanceLockKey
     -- ^ The lock on which the proposal acts.
+  sender : Party
+    -- ^ The party to list as the sender of the transfer representing the proposal.
   proposers : [Party]
     -- ^ The parties that proposed the action.
   controllers : ControllersSpecification
@@ -320,7 +321,7 @@ transferInstructionViewV2 receiver proposal =
   in V2.TransferInstructionView with
     originalInstructionCid = toInterfaceContractId <$> originalProposalCid
     transfer = V2.Transfer with
-      sender = basicAccount $ List.head proposers
+      sender = basicAccount $ sender
       receiver = basicAccount receiver
       amount
       instrumentId = amuletInstrumentIdV2 lockKey.dso

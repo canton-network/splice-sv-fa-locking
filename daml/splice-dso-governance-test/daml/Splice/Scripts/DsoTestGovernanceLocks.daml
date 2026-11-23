@@ -393,7 +393,7 @@ setupGovernanceSubstitution = do
   tap app bob testVestingAmount
   WalletClientV2.createBatchingUtility bob.primaryParty
 
-  tsv1Operations.proposeSubstitution (TestEnvRegistries registries registry) bob.primaryParty LockSubstitutionArgs with
+  tsv1Operations.proposeSubstitution (TestEnvRegistries registries registry) bob.primaryParty [bob.primaryParty] LockSubstitutionArgs with
     target = GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty
@@ -416,7 +416,7 @@ setupVestingSubstitution = do
     tsv1Operations.governanceUnlock (TestEnvRegistries registries registry) governanceLockCid alice.primaryParty (unlockMemo testVestingAmount unlockAt)
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
 
-  tsv1Operations.proposeSubstitution (TestEnvRegistries registries registry) bob.primaryParty LockSubstitutionArgs with
+  tsv1Operations.proposeSubstitution (TestEnvRegistries registries registry) bob.primaryParty [bob.primaryParty] LockSubstitutionArgs with
     target = GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty
@@ -487,9 +487,9 @@ testDsoRulesWithdrawExpiredGovernanceSubstitutionRejectsForeignDso = do
 
   Some substitution <- queryContractId env.bob.primaryParty substitutionCid
   -- A proposal by the target lock owner must not lock any funds.
-  foreignSubstitutionCid <- submit env.sv1 $ createCmd substitution with
+  foreignSubstitutionCid <- submit (actAs env.sv1 <> actAs env.bob.primaryParty) $ createCmd substitution with
     target = (substitution.target with dso = env.sv1; owner = env.sv1)
-    owner = env.sv1
+    owner = env.bob.primaryParty
     lockedAmulet = None
   passTime (days 91)
 
@@ -581,6 +581,7 @@ data TransferEnv = TransferEnv with
   app : AmuletApp
   sv1 : Party
   dsoRulesCid : ContractId DsoRules
+  alice : AmuletUser
   bob : AmuletUser
 
 setupGovernanceLockTransfer : Script (TransferEnv, ContractId GovernanceLockTransfer)
@@ -589,7 +590,7 @@ setupGovernanceLockTransfer = do
   bob <- setupUser app "bob" app.dso
 
   now <- getTime
-  transferCid <- errorIfLeft =<< tsv1Operations.proposeTransfer (TestEnvRegistries registries registry) alice.primaryParty LockTransferArgs with
+  transferCid <- errorIfLeft =<< tsv1Operations.proposeTransfer (TestEnvRegistries registries registry) [alice.primaryParty] LockTransferArgs with
     source = GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty
@@ -611,7 +612,7 @@ setupVestingLockTransfer = do
   Some vestingLock <- queryContractId alice.primaryParty vestingLockCid
 
   now <- getTime
-  transferCid <- errorIfLeft =<< tsv1Operations.proposeTransfer (TestEnvRegistries registries registry) alice.primaryParty LockTransferArgs with
+  transferCid <- errorIfLeft =<< tsv1Operations.proposeTransfer (TestEnvRegistries registries registry) [alice.primaryParty] LockTransferArgs with
     source = GovernanceLockKey with
       dso = app.dso
       owner = alice.primaryParty
@@ -673,8 +674,8 @@ testDsoRulesExpireGovernanceLockTransferRejectsForeignDso = do
   (env, transferCid) <- setupGovernanceLockTransfer
 
   Some transfer <- queryContractId env.app.dso transferCid
-  foreignTransferCid <- submit env.sv1 $ createCmd transfer with
-    source = (transfer.source with dso = env.sv1; owner = env.sv1)
+  foreignTransferCid <- submit (actAs env.sv1 <> actAs env.alice.primaryParty) $ createCmd transfer with
+    source = (transfer.source with dso = env.sv1; owner = env.alice.primaryParty)
   passTime (days 91)
 
   actionMustFail (expectMessageContains "Contract group identifier mismatch") do

@@ -89,6 +89,7 @@ class GovernanceLockUtilTest extends AnyWordSpec with BaseTest {
       // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
       Optional.empty(),
       Optional.empty(),
+      Optional.empty(),
     )
 
   "governanceLockInformees" should {

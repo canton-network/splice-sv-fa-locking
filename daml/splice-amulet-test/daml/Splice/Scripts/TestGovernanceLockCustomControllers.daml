@@ -8,7 +8,7 @@
 -- of the custom controllers.
 module Splice.Scripts.TestGovernanceLockCustomControllers where
 
-import DA.Action (unless, void)
+import DA.Action (unless, void, when)
 import DA.Assert ((===))
 import DA.Foldable (forA_)
 import DA.List qualified as List
@@ -21,6 +21,7 @@ import Splice.GovernanceLock
 import Splice.GovernanceLock.Controllers
 import Splice.GovernanceLock.Proposal qualified as Proposal
 import Splice.GovernanceLock.Substitution
+import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock
 import Splice.GovernanceLock.Withdraw
 import Splice.Scripts.TestGovernanceLocks
@@ -39,34 +40,34 @@ setupCustomControllersTest = do
 ---------------
 
 testCustomControllers_substitution_fullLock_tsv1 : Script ()
-testCustomControllers_substitution_fullLock_tsv1 = testCustomControllers_substitution tsv1Operations False False
+testCustomControllers_substitution_fullLock_tsv1 = testCustomControllers_substitution tsv1Operations False False False
 
 testCustomControllers_substitution_fullLock_tsv2 : Script ()
-testCustomControllers_substitution_fullLock_tsv2 = testCustomControllers_substitution tsv2Operations False False
+testCustomControllers_substitution_fullLock_tsv2 = testCustomControllers_substitution tsv2Operations False False True
 
 testCustomControllers_substitution_vestingLock_tsv1 : Script ()
-testCustomControllers_substitution_vestingLock_tsv1 = testCustomControllers_substitution tsv1Operations False True
+testCustomControllers_substitution_vestingLock_tsv1 = testCustomControllers_substitution tsv1Operations False True False
 
 testCustomControllers_substitution_vestingLock_tsv2 : Script ()
-testCustomControllers_substitution_vestingLock_tsv2 = testCustomControllers_substitution tsv2Operations False True
+testCustomControllers_substitution_vestingLock_tsv2 = testCustomControllers_substitution tsv2Operations False True True
 
 testCustomControllers_selfSubstitution_fullLock_tsv1 : Script ()
-testCustomControllers_selfSubstitution_fullLock_tsv1 = testCustomControllers_substitution tsv1Operations True False
+testCustomControllers_selfSubstitution_fullLock_tsv1 = testCustomControllers_substitution tsv1Operations True False False
 
 testCustomControllers_selfSubstitution_fullLock_tsv2 : Script ()
-testCustomControllers_selfSubstitution_fullLock_tsv2 = testCustomControllers_substitution tsv2Operations True False
+testCustomControllers_selfSubstitution_fullLock_tsv2 = testCustomControllers_substitution tsv2Operations True False True
 
 testCustomControllers_selfSubstitution_vestingLock_tsv1 : Script ()
-testCustomControllers_selfSubstitution_vestingLock_tsv1 = testCustomControllers_substitution tsv1Operations True True
+testCustomControllers_selfSubstitution_vestingLock_tsv1 = testCustomControllers_substitution tsv1Operations True True False
 
 testCustomControllers_selfSubstitution_vestingLock_tsv2 : Script ()
-testCustomControllers_selfSubstitution_vestingLock_tsv2 = testCustomControllers_substitution tsv2Operations True True
+testCustomControllers_selfSubstitution_vestingLock_tsv2 = testCustomControllers_substitution tsv2Operations True True True
 
 -- | alice proposes to substitute 20000.0 of a lock that needs bob and charlie for substitutions, so the
 -- controllers of the proposal are {alice, bob, charlie}. The target lock is alice's own for a self-substitution,
 -- and provider1's otherwise. The proposal stays pending with bob's vote, and charlie's vote executes it.
-testCustomControllers_substitution : GovernanceLockOperations i r t -> Bool -> Bool -> Script ()
-testCustomControllers_substitution ops selfSubstitution vestingLock = do
+testCustomControllers_substitution : GovernanceLockOperations i r t -> Bool -> Bool -> Bool -> Script ()
+testCustomControllers_substitution ops selfSubstitution vestingLock testSingleStep = do
   env@TestEnv{..} <- setupCustomControllersTest
   requestedAt <- getTime
 
@@ -74,25 +75,25 @@ testCustomControllers_substitution ops selfSubstitution vestingLock = do
       controllers = Some $ makeControllersSpecification [[bob, charlie]]
       kind = GLK_SuperValidatorRightsOwner "TestSV"
       newControllers = makeGovernanceLockControllers None None (Some $ makeControllersSpecification [[charlie]])
-      proposeSubstitution target newControllers =
-        ops.proposeSubstitution (testEnvRegistries env) alice LockSubstitutionArgs with
+      proposeSubstitution owner proposers target newControllers =
+        ops.proposeSubstitution (testEnvRegistries env) owner proposers LockSubstitutionArgs with
           target = key target
           amount = 20000.0
           requestedAt = Some requestedAt
           extraMemoEntries = encodeGovernanceLockNewCustomControllersMemoEntries newControllers
 
-  (fullLockCid, fullLock) <- lockWithSpec ops env targetOwner 50000.0 $ GLS_FullLock FullLockSpecification with
+  (fullLockCid, fullLock) <- lockWithSpec ops env targetOwner 70000.0 $ GLS_FullLock FullLockSpecification with
     kind
     controllers = makeGovernanceLockControllers
       None
       (if vestingLock then None else controllers)
       (if vestingLock then controllers else None)
   (_, target) <- if vestingLock
-    then vestingLockFor ops env targetOwner fullLockCid 50000.0
+    then vestingLockFor ops env targetOwner fullLockCid 70000.0
     else pure (fullLockCid, fullLock)
-  unless selfSubstitution $ void $ AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 50000.0
+  unless selfSubstitution $ void $ AmuletRegistryV2.tapFaucet registriesEnv.amuletV2 alice 70000.0
 
-  substitutionTransferCid <- ops.expectPendingTransfer =<< expectSuccess (proposeSubstitution target newControllers)
+  substitutionTransferCid <- ops.expectPendingTransfer =<< expectSuccess (proposeSubstitution alice [alice] target newControllers)
   let substitutionCid = coerceContractId @_ @GovernanceLockSubstitution substitutionTransferCid
   Some substitution <- queryContractId alice substitutionCid
 
@@ -106,14 +107,14 @@ testCustomControllers_substitution ops selfSubstitution vestingLock = do
         newLocks <- queryFilter @GovernanceLock alice \l -> l.owner == alice && l.specification == expectedSpecification
         length newLocks === length newLockAttrs
         let newLocksSorted = List.sortOn (.originalLockCid) (fmap snd newLocks)
-            newLockAttrsSorted = List.sortOn (Some . toAnyContractId . snd) newLockAttrs
+            newLockAttrsSorted = List.sortOn (fmap toAnyContractId . snd) newLockAttrs
         forA (zip newLocksSorted newLockAttrsSorted) \(newLock, (amount, substitutionCid)) -> newLock === GovernanceLock with
           dso = target.dso
           owner = alice
           amount
           lockedAmulet = newLock.lockedAmulet
           specification = expectedSpecification
-          originalLockCid = Some (toAnyContractId substitutionCid)
+          originalLockCid = toAnyContractId <$> substitutionCid
           requestedAt
 
         [(_, remainingLock)] <- queryFilter @GovernanceLock targetOwner \l -> l.owner == targetOwner && l.specification == target.specification
@@ -126,17 +127,23 @@ testCustomControllers_substitution ops selfSubstitution vestingLock = do
           originalLockCid = Some (toAnyContractId fullLockCid)
           requestedAt = target.requestedAt
 
-  checkLocks [(20000.0, substitutionCid)] 30000.0
+  checkLocks [(20000.0, Some substitutionCid)] 50000.0
 
   -- A substitution with `votes = None` can still be approved
   -- There's no way to create this type of substitution through `proposeSubstitution`, so we create one manually
-  newSubstitutionCid <- submit (actAs target.dso <> actAs alice) $ createCmd substitution with votes = None
+  noVotesSubstitutionCid <- submit (actAs target.dso <> actAs alice) $ createCmd substitution with votes = None
   pendingCid <- tsv2Operations.expectPendingTransfer =<<
-    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId newSubstitutionCid) bob)
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId noVotesSubstitutionCid) bob)
   tsv2Operations.expectCompletedTransfer =<<
     expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
 
-  checkLocks [(20000.0, substitutionCid), (20000.0, newSubstitutionCid)] 10000.0
+  checkLocks [(20000.0, Some substitutionCid), (20000.0, Some noVotesSubstitutionCid)] 30000.0
+
+  -- A single step substitution is possible
+  when testSingleStep do
+    ops.expectCompletedTransfer =<<
+      expectSuccess (proposeSubstitution alice [alice, bob, charlie] target newControllers)
+    checkLocks [(20000.0, Some substitutionCid), (20000.0, Some noVotesSubstitutionCid), (20000.0, None)] 10000.0
 
   -- Failures
   -----------
@@ -144,7 +151,7 @@ testCustomControllers_substitution ops selfSubstitution vestingLock = do
   -- new controllers can't be empty
   let testEmptyNewControllers' kind set errorSuffix controllers = do
         expectFailureContaining (kind <> "Controllers must not " <> errorSuffix) =<<
-          proposeSubstitution target (Some (set (fromSome newControllers) (Some $ makeControllersSpecification controllers)))
+          proposeSubstitution alice [alice] target (Some (set (fromSome newControllers) (Some $ makeControllersSpecification controllers)))
       testEmptyNewControllers kind set = do
         testEmptyNewControllers' kind set "be empty" []
         testEmptyNewControllers' kind set "contain an empty controller set" [[]]
@@ -353,19 +360,19 @@ testCustomControllers_withdraw ops = do
 -----------
 
 testCustomControllers_transfer_fullLock_tsv1 : Script ()
-testCustomControllers_transfer_fullLock_tsv1 = testCustomControllers_transfer tsv1Operations False
+testCustomControllers_transfer_fullLock_tsv1 = testCustomControllers_transfer tsv1Operations False False
 
 testCustomControllers_transfer_fullLock_tsv2 : Script ()
-testCustomControllers_transfer_fullLock_tsv2 = testCustomControllers_transfer tsv2Operations False
+testCustomControllers_transfer_fullLock_tsv2 = testCustomControllers_transfer tsv2Operations False True
 
 testCustomControllers_transfer_vestingLock_tsv1 : Script ()
-testCustomControllers_transfer_vestingLock_tsv1 = testCustomControllers_transfer tsv1Operations True
+testCustomControllers_transfer_vestingLock_tsv1 = testCustomControllers_transfer tsv1Operations True False
 
 testCustomControllers_transfer_vestingLock_tsv2 : Script ()
-testCustomControllers_transfer_vestingLock_tsv2 = testCustomControllers_transfer tsv2Operations True
+testCustomControllers_transfer_vestingLock_tsv2 = testCustomControllers_transfer tsv2Operations True True
 
-testCustomControllers_transfer : GovernanceLockOperations i r t -> Bool -> Script ()
-testCustomControllers_transfer ops vestingLock = do
+testCustomControllers_transfer : GovernanceLockOperations i r t -> Bool -> Bool -> Script ()
+testCustomControllers_transfer ops vestingLock testSingleStep = do
   env@TestEnv{..} <- setupCustomControllersTest
 
   requestedAt <- getTime
@@ -378,24 +385,27 @@ testCustomControllers_transfer ops vestingLock = do
           (if vestingLock then controllers else None)
       newControllers = makeGovernanceLockControllers None None (Some $ makeControllersSpecification [[charlie]])
       setupLock = do
-        (fullLockCid, fullLock) <- lockWithSpec ops env alice 50000.0 fullSpec
+        (fullLockCid, fullLock) <- lockWithSpec ops env alice 70000.0 fullSpec
         (_, source) <- if vestingLock
-          then vestingLockFor ops env alice fullLockCid 50000.0
+          then vestingLockFor ops env alice fullLockCid 70000.0
           else pure (fullLockCid, fullLock)
         pure (fullLockCid, source)
-      proposeTransfer source receiver amount newControllers =
-        ops.proposeTransfer (testEnvRegistries env) alice LockTransferArgs with
-          source = key source
-          receiver
-          amount
-          requestedAt
-          extraMemoEntries = encodeGovernanceLockNewCustomControllersMemoEntries newControllers
+      proposeTransfer source proposers receiver amount newControllers extraMemoEntries =
+        let transfer = LockTransferArgs with
+              source = key source
+              receiver
+              amount
+              requestedAt
+              extraMemoEntries = encodeGovernanceLockNewCustomControllersMemoEntries newControllers <> extraMemoEntries
+        in ops.proposeTransfer' (testEnvRegistries env) proposers transfer identity
 
   -- Happy path
   -------------
 
   (fullLockCid, source) <- setupLock
-  transferCid <- expectSuccess $ proposeTransfer source bob 20000.0 newControllers
+  transferCid' <- ops.expectPendingTransfer =<<
+    expectSuccess (proposeTransfer source [alice] bob 20000.0 newControllers (targetLockOwnerMemoEntries $ key source))
+  let transferCid = coerceContractId @_ @GovernanceLockTransfer transferCid'
   Some transfer <- queryContractId alice transferCid
 
   pendingCid <- tsv2Operations.expectPendingTransfer =<<
@@ -407,14 +417,14 @@ testCustomControllers_transfer ops vestingLock = do
         newLocks <- queryFilter @GovernanceLock bob \l -> l.owner == bob
         length newLocks === length newLockAttrs
         let newLocksSorted = List.sortOn (.originalLockCid) (fmap snd newLocks)
-            newLockAttrsSorted = List.sortOn (Some . toAnyContractId . snd) newLockAttrs
+            newLockAttrsSorted = List.sortOn (fmap toAnyContractId . snd) newLockAttrs
         forA (zip newLocksSorted newLockAttrsSorted) \(newLock, (amount, transferCid)) -> newLock === GovernanceLock with
           dso = source.dso
           owner = bob
           amount
           lockedAmulet = newLock.lockedAmulet
           specification = setNewGovernanceLockControllers source.specification newControllers
-          originalLockCid = Some (toAnyContractId transferCid)
+          originalLockCid = toAnyContractId <$> transferCid
           requestedAt
         [(_, remainingLock)] <- queryFilter @GovernanceLock alice \l -> l.owner == alice
         remainingLock === GovernanceLock with
@@ -426,33 +436,46 @@ testCustomControllers_transfer ops vestingLock = do
           originalLockCid = Some (toAnyContractId fullLockCid)
           requestedAt = source.requestedAt
 
-  checkLocks [(20000.0, transferCid)] 30000.0
+  checkLocks [(20000.0, Some transferCid)] 50000.0
 
   -- A transfer with `votes = None` can still be approved
   -- There's no way to create this type of transfer through `proposeTransfer`, so we create one manually
-  newTransferCid <- submit (actAs source.dso <> actAs alice) $ createCmd transfer with votes = None
+  noVotesTransferCid <- submit (actAs source.dso <> actAs alice) $ createCmd transfer with votes = None
   pendingCid <- tsv2Operations.expectPendingTransfer =<<
-    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId newTransferCid) bob)
+    expectSuccess (tsv2Operations.acceptInstruction env (coerceContractId noVotesTransferCid) bob)
   tsv2Operations.expectCompletedTransfer =<<
     expectSuccess (tsv2Operations.acceptInstruction env pendingCid charlie)
 
-  checkLocks [(20000.0, transferCid), (20000.0, newTransferCid)] 10000.0
+  checkLocks [(20000.0, Some transferCid), (20000.0, Some noVotesTransferCid)] 30000.0
+
+  -- A single step transfer is possible
+  when testSingleStep do
+    ops.expectCompletedTransfer =<<
+      expectSuccess (proposeTransfer source [alice, bob, charlie] bob 20000.0 newControllers (targetLockOwnerMemoEntries $ key source))
+    checkLocks [(20000.0, Some transferCid), (20000.0, Some noVotesTransferCid), (20000.0, None)] 10000.0
 
   -- Failures
   -----------
 
   (_, source) <- setupLock
 
+  -- target-lock-owner is required when the lock has custom controllers, regardless of whether the proposer is the lock owner
+  expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeTransfer source [alice] bob 20000.0 newControllers []
+  expectFailureContaining "Missing memo key 'target-lock-owner'" =<< proposeTransfer source [bob] charlie 20000.0 newControllers []
+
   -- receiver can't be source lock owner
-  expectFailureContaining "'receiver' is equal to 'sender'" =<< proposeTransfer source alice 20000.0 newControllers
+  expectFailureContaining "'receiver' is equal to 'lock owner'" =<<
+    proposeTransfer source [alice] alice 20000.0 newControllers (targetLockOwnerMemoEntries $ key source)
 
   -- amount can't be 0
-  expectFailureContaining "'amount' is not greater than 'zero'" =<< proposeTransfer source bob 0.0 newControllers
+  expectFailureContaining "'amount' is not greater than 'zero'" =<<
+    proposeTransfer source [alice] bob 0.0 newControllers (targetLockOwnerMemoEntries $ key source)
 
   -- new controllers can't be empty
   let testEmptyNewControllers' kind set errorSuffix controllers = do
         expectFailureContaining (kind <> "Controllers must not " <> errorSuffix) =<<
-          proposeTransfer source bob 20000.0 (Some (set (fromSome newControllers) (Some $ makeControllersSpecification controllers)))
+          proposeTransfer source [alice] bob 20000.0 (Some (set (fromSome newControllers) (Some $ makeControllersSpecification controllers)))
+            (targetLockOwnerMemoEntries $ key source)
       testEmptyNewControllers kind set = do
         testEmptyNewControllers' kind set "be empty" []
         testEmptyNewControllers' kind set "contain an empty controller set" [[]]
