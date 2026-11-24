@@ -43,7 +43,7 @@ testMerging = do
 
   mergeTransfer <- mkMergeTransfer registry alice
 
-  submit (actAs operator <> readAs alice <> discloseMany (Map.values mergeTransfer.disclosures.disclosures)) $
+  submit (actAs registry.dso <> actAs operator <> readAs alice <> discloseMany (Map.values mergeTransfer.disclosures.disclosures)) $
     exerciseCmd aliceDelegation MergeDelegation_Merge with
       optMergeTransfer = mergeTransfer.value
       optFeaturedAppRight = Some appRightCall
@@ -149,7 +149,7 @@ setupWalletOperator : AmuletRegistry.AmuletRegistry -> Text -> Script (Party, Fe
 setupWalletOperator registry operatorName = do
   operator <- allocatePartyExact operatorName
   featuredAppRightCid <- AmuletRegistry.featureApp registry operator
-  void $ submit operator $ createCmd BatchMergeUtility with operator
+  batchMergeUtilityCid <- submit operator $ createCmd BatchMergeUtility with operator
   let featuredAppRight = FeaturedAppRightCall with
         appRightCid = toInterfaceContractId featuredAppRightCid
         beneficiaries =
@@ -157,6 +157,7 @@ setupWalletOperator registry operatorName = do
               beneficiary = operator
               weight = 1.0
           ]
+        optBatchMergeUtilityCid = Some batchMergeUtilityCid
   pure (operator, featuredAppRight)
 
 setupMergeDelegation : Party -> Party -> Script (ContractId MergeDelegation)
