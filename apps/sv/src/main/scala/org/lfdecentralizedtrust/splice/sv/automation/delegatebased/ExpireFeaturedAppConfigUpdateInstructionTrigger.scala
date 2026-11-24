@@ -58,7 +58,12 @@ class ExpireFeaturedAppConfigUpdateInstructionTrigger(
         .submit(Seq(store.key.svParty), Seq(store.key.dsoParty), cmd)
         .noDedup
         .yieldUnit()
-    } yield TaskSuccess("expired featured app config update instruction")
+    } yield {
+      logger.warn(
+        s"Expired FeaturedAppConfigUpdateInstruction ${task.work.contractId.contractId} for provider ${task.work.payload.provider}"
+      )
+      TaskSuccess("expired featured app config update instruction")
+    }
   }
 }
 

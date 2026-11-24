@@ -107,11 +107,14 @@ class FeaturedAppConfigUpdateInstructionTimeBasedIntegrationTest
       )
 
       actAndCheck(
-        "the expire trigger runs",
-        sv1Backend.dsoDelegateBasedAutomation
-          .trigger[ExpireFeaturedAppConfigUpdateInstructionTrigger]
-          .runOnce()
-          .futureValue,
+        "the expire trigger runs and warns about the expiry",
+        loggerFactory.assertLogs(
+          sv1Backend.dsoDelegateBasedAutomation
+            .trigger[ExpireFeaturedAppConfigUpdateInstructionTrigger]
+            .runOnce()
+            .futureValue,
+          _.warningMessage should include("Expired FeaturedAppConfigUpdateInstruction"),
+        ),
       )(
         "the instruction is archived and the featured app right is unchanged",
         _ => {

@@ -76,7 +76,10 @@ import com.digitalasset.canton.resource.DbStorage
 import com.digitalasset.canton.resource.DbStorage.Implicits.BuilderChain.toSQLActionBuilderChain
 import com.digitalasset.canton.topology.{ParticipantId, PartyId, SynchronizerId}
 import io.grpc.Status
-import org.lfdecentralizedtrust.splice.codegen.java.splice.dso.instruction.FeaturedAppConfigUpdateInstruction
+import org.lfdecentralizedtrust.splice.codegen.java.splice.dso.instruction.{
+  FeaturedAppConfigUpdateInstruction,
+  RevokeFeaturedAppRightInstruction,
+}
 import org.lfdecentralizedtrust.splice.config.IngestionConfig
 import org.lfdecentralizedtrust.splice.store.db.AcsJdbcTypes.StoreMemberId
 import slick.jdbc.GetResult
@@ -962,6 +965,55 @@ class DbSvDsoStore private (
     } yield limited.map { case (row, rightCid) =>
       SvDsoStore.FeaturedAppConfigUpdateInstructionWithRight(
         assignedContractFromRow(FeaturedAppConfigUpdateInstruction.COMPANION)(row),
+        new FeaturedAppRight.ContractId(rightCid),
+      )
+    }
+
+  override def listRevokeFeaturedAppRightInstructionSample(limit: Limit)(implicit
+      tc: TraceContext
+  ): Future[Seq[SvDsoStore.RevokeFeaturedAppRightInstructionWithRight]] =
+    for {
+      result <- storage
+        .query(
+          (sql"""
+             select #${AcsQueries.SelectFromAcsTableResult.sqlColumnsCommaSeparated(
+              "sample."
+            )}, sample.fa_right_cid
+             from (
+               select #${AcsQueries.SelectFromAcsTableResult.sqlColumnsCommaSeparated(
+              "acs."
+            )},
+                      fa_right.contract_id as fa_right_cid
+               from #${DsoTables.acsTableName} acs
+               cross join lateral (
+                 select r.contract_id
+                 from #${DsoTables.acsTableName} r
+                 where r.store_id = acs.store_id
+                   and r.migration_id = acs.migration_id
+                   and r.package_name = ${FeaturedAppRight.PACKAGE_NAME}
+                   and r.template_id_qualified_name = ${QualifiedName(
+              FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID
+            )}
+                   and r.featured_app_right_provider = acs.featured_app_right_provider
+                 limit 1
+               ) fa_right
+               where acs.store_id = $acsStoreId
+                 and acs.migration_id = $domainMigrationId
+                 and acs.package_name = ${RevokeFeaturedAppRightInstruction.PACKAGE_NAME}
+                 and acs.template_id_qualified_name = ${QualifiedName(
+              RevokeFeaturedAppRightInstruction.TEMPLATE_ID_WITH_PACKAGE_ID
+            )}
+               limit greatest(1000, ${10 * sqlLimit(limit)})
+             ) sample
+             order by random()
+             limit ${sqlLimit(limit)}
+           """).as[(AcsQueries.SelectFromAcsTableResult, String)],
+          "listRevokeFeaturedAppRightInstructionSample",
+        )
+      limited = applyLimit("listRevokeFeaturedAppRightInstructionSample", limit, result)
+    } yield limited.map { case (row, rightCid) =>
+      SvDsoStore.RevokeFeaturedAppRightInstructionWithRight(
+        assignedContractFromRow(RevokeFeaturedAppRightInstruction.COMPANION)(row),
         new FeaturedAppRight.ContractId(rightCid),
       )
     }
