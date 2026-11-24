@@ -1,5 +1,6 @@
 package org.lfdecentralizedtrust.splice.util
 
+import com.daml.ledger.api.v2.CommandsOuterClass
 import com.digitalasset.daml.lf.data.Ref.PackageVersion
 import org.lfdecentralizedtrust.splice.codegen.java.splice
 import org.lfdecentralizedtrust.splice.codegen.java.splice.types.Round
@@ -874,6 +875,19 @@ trait WalletTestUtil extends TestCommon with AnsTestUtil {
       },
     )
   }
+
+  /** The provider is not necessarily a stakeholder of their featured app right,
+    * so commands that use the right must disclose it.
+    */
+  protected def featuredAppRightDisclosure(
+      featuredAppRightCid: com.daml.ledger.javaapi.data.codegen.ContractId[?]
+  )(implicit env: SpliceTestConsoleEnvironment): CommandsOuterClass.DisclosedContract =
+    eventually() {
+      sv1ScanBackend
+        .lookupFeaturedAppRightByContractId(featuredAppRightCid.contractId)
+        .value
+        .toDisclosedContract
+    }
 
   protected def cancelFeaturedAppRight(wallet: WalletAppClientReference)(implicit
       env: SpliceTestConsoleEnvironment

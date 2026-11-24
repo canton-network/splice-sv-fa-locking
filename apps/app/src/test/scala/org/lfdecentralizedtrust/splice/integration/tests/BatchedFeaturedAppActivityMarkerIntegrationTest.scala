@@ -59,10 +59,11 @@ class BatchedFeaturedAppActivityMarkerIntegrationTest
       proxyCid: batchedmarkersproxy.BatchedMarkersProxy.ContractId,
       featuredAppRightCid: amulet.FeaturedAppRight.ContractId,
       batches: Seq[(Seq[(PartyId, Double)], Long)],
-  ) = {
+  )(implicit env: SpliceTestConsoleEnvironment) = {
     validator.participantClientWithAdminToken.ledger_api_extensions.commands
       .submitJava(
         actAs = Seq(provider),
+        disclosedContracts = Seq(featuredAppRightDisclosure(featuredAppRightCid)),
         commands = proxyCid
           .exerciseBatchedMarkersProxy_CreateMarkers(
             featuredAppRightCid.toInterface(featuredapprightv1.FeaturedAppRight.INTERFACE),
@@ -90,10 +91,11 @@ class BatchedFeaturedAppActivityMarkerIntegrationTest
       proxyCid: batchedmarkersproxy.BatchedMarkersProxy.ContractId,
       featuredAppRightCid: amulet.FeaturedAppRight.ContractId,
       batches: Seq[(Seq[(PartyId, Double)], BigDecimal)],
-  ) = {
+  )(implicit env: SpliceTestConsoleEnvironment) = {
     validator.participantClientWithAdminToken.ledger_api_extensions.commands
       .submitJava(
         actAs = Seq(provider),
+        disclosedContracts = Seq(featuredAppRightDisclosure(featuredAppRightCid)),
         commands = proxyCid
           .exerciseBatchedMarkersProxy_CreateMarkersV2(
             featuredAppRightCid.toInterface(featuredapprightv2.FeaturedAppRight.INTERFACE),
