@@ -404,7 +404,7 @@ template FeaturedAppRight with
       controller provider
       do return FeaturedAppRight_CancelResult
 
-    -- | Lets the provider read the featured app right in case they are not an observer of it.
+    -- Lets the provider read the featured app right in case they are not an observer of it.
     nonconsuming choice FeaturedAppRight_Fetch : FeaturedAppRight
       controller provider
       do

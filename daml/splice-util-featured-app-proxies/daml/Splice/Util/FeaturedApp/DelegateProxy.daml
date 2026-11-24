@@ -42,7 +42,7 @@ template DelegateProxy with
     signatory provider
     observer delegate
 
-    -- | Create the activity marker with only the authority of the provider. This makes sure that
+    -- Create the activity marker with only the authority of the provider. This makes sure that
     -- the delegate cannot use the proxy to create markers on a featured app right of another provider.
     -- We use this choice instead of fetching the featured app right, as the provider
     -- is not necessarily a stakeholder of the featured app right.
