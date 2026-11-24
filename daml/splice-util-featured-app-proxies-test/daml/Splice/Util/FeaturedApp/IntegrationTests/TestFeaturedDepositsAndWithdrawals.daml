@@ -63,7 +63,7 @@ setupTest = do
   featuredAppRightCid <- AmuletRegistry.featureApp registry exchangeParty
 
   -- retrieve the create-event blob for the featured app right that the treasuryParty needs to pass in
-  appRightD <- queryDisclosure' @Splice.Amulet.FeaturedAppRight exchangeParty featuredAppRightCid
+  appRightD <- queryDisclosure' @Splice.Amulet.FeaturedAppRight registry.dso featuredAppRightCid
 
   -- Setup treasury party for the exchange with some funds
   treasuryParty <- allocatePartyExact "treasuryParty"

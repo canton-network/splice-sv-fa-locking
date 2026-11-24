@@ -73,6 +73,18 @@ template WalletUserProxy with
       controller actor
       do pure this
 
+    -- | Create the activity marker with only the authority of the provider. This makes sure that
+    -- the user cannot use the proxy to create markers on a featured app right of another provider.
+    -- We use this choice instead of fetching the featured app right, as the provider
+    -- is not necessarily a stakeholder of the featured app right.
+    nonconsuming choice WalletUserProxy_CreateActivityMarker : FeaturedAppRight_CreateActivityMarkerResult
+      with
+        featuredAppRightCid : ContractId FeaturedAppRight
+        beneficiaries : [AppRewardBeneficiary]
+      controller provider
+      do
+        exercise featuredAppRightCid FeaturedAppRight_CreateActivityMarker with beneficiaries
+
     nonconsuming choice WalletUserProxy_TransferFactory_Transfer
       : ProxyResult TransferInstructionResult
       with
@@ -80,7 +92,7 @@ template WalletUserProxy with
         proxyArg : ProxyArg TransferFactory_Transfer
       controller proxyArg.user
       do
-        exerciseProxyChoice this cid proxyArg $ \_ -> do
+        exerciseProxyChoice this self cid proxyArg $ \_ -> do
           pure proxyArg.choiceArg.transfer.sender
 
     nonconsuming choice WalletUserProxy_TransferInstruction_Accept
@@ -90,7 +102,7 @@ template WalletUserProxy with
         proxyArg : ProxyArg TransferInstruction_Accept
       controller proxyArg.user
       do
-        exerciseProxyChoice this cid proxyArg $ \cid -> do
+        exerciseProxyChoice this self cid proxyArg $ \cid -> do
           instr <- fetch cid
           pure (view instr).transfer.receiver
 
@@ -101,7 +113,7 @@ template WalletUserProxy with
         proxyArg : ProxyArg TransferInstruction_Reject
       controller proxyArg.user
       do
-        exerciseProxyChoice this cid proxyArg $ \cid -> do
+        exerciseProxyChoice this self cid proxyArg $ \cid -> do
           instr <- fetch cid
           pure (view instr).transfer.receiver
 
@@ -112,7 +124,7 @@ template WalletUserProxy with
         proxyArg : ProxyArg TransferInstruction_Withdraw
       controller proxyArg.user
       do
-        exerciseProxyChoice this cid proxyArg $ \cid -> do
+        exerciseProxyChoice this self cid proxyArg $ \cid -> do
           instr <- fetch cid
           pure (view instr).transfer.sender
 
@@ -123,7 +135,7 @@ template WalletUserProxy with
         proxyArg : ProxyArg AllocationFactory_Allocate
       controller proxyArg.user
       do
-        exerciseProxyChoice this cid proxyArg $ \_ -> do
+        exerciseProxyChoice this self cid proxyArg $ \_ -> do
           pure proxyArg.choiceArg.allocation.transferLeg.sender
 
     nonconsuming choice WalletUserProxy_Allocation_Withdraw
@@ -133,7 +145,7 @@ template WalletUserProxy with
         proxyArg : ProxyArg Allocation_Withdraw
       controller proxyArg.user
       do
-        exerciseProxyChoice this cid proxyArg $ \cid -> do
+        exerciseProxyChoice this self cid proxyArg $ \cid -> do
           allocation <- fetch cid
           pure (view allocation).allocation.transferLeg.sender
 
@@ -153,7 +165,7 @@ template WalletUserProxy with
           -- ^ The featured app right contract of the provider to use on every transfer.
           -- Optional so the batched choice can be used without a featured app right.
       controller getFirstSender transferCalls
-      do runBatch this arg
+      do runBatch this self arg
 
 
 
@@ -173,24 +185,23 @@ getFirstSender [] = error "Cannot determine sender from empty list of TransferFa
 getFirstSender (call :: _) = call.choiceArg.transfer.sender
 
 -- | Validate the batch call and run it
-runBatch : WalletUserProxy -> WalletUserProxy_BatchTransfer -> Update WalletUserProxy_BatchTransferResult
-runBatch proxy WalletUserProxy_BatchTransfer{..} = do
+runBatch : WalletUserProxy -> ContractId WalletUserProxy -> WalletUserProxy_BatchTransfer -> Update WalletUserProxy_BatchTransferResult
+runBatch proxy proxyCid WalletUserProxy_BatchTransfer{..} = do
   let sender = getFirstSender transferCalls
-  forA_ optFeaturedAppRightCid $ validateAppRight proxy
   checkAllowList proxy.optAllowList sender
-  executeTransferCalls proxy sender optFeaturedAppRightCid transferCalls M.empty []
+  executeTransferCalls proxy proxyCid sender optFeaturedAppRightCid transferCalls M.empty []
 
 -- | Run the individual transfer calls in the batch with proper threading of input holdings.
 executeTransferCalls
-  : WalletUserProxy -> Party -> Optional (ContractId FeaturedAppRight) -> [TransferFactoryCall]
+  : WalletUserProxy -> ContractId WalletUserProxy -> Party -> Optional (ContractId FeaturedAppRight) -> [TransferFactoryCall]
   -> InstrumentHoldingMap -> [TransferInstructionResult]
   -> Update WalletUserProxy_BatchTransferResult
-executeTransferCalls _proxy _sender _optFeaturedAppRightCid [] holdingMap results =
+executeTransferCalls _proxy _proxyCid _sender _optFeaturedAppRightCid [] holdingMap results =
   pure WalletUserProxy_BatchTransferResult with
     transferResults = reverse results
     senderChangeMap = holdingMap
 
-executeTransferCalls proxy sender optFeaturedAppRightCid ((TransferFactoryCall with factoryCid; choiceArg) :: calls) holdingMap results = do
+executeTransferCalls proxy proxyCid sender optFeaturedAppRightCid ((TransferFactoryCall with factoryCid; choiceArg) :: calls) holdingMap results = do
   -- check and execute the one transfer with adjusted input holdings
   let tf = choiceArg.transfer
   require ("Transfer sender " <> show tf.sender <> " matches expected sender " <> show sender) (tf.sender == sender)
@@ -200,11 +211,11 @@ executeTransferCalls proxy sender optFeaturedAppRightCid ((TransferFactoryCall w
   result <- exercise factoryCid actualChoice
 
   -- create the featured app marker for the provider and sender
-  forA_ optFeaturedAppRightCid $ createAppMarker proxy sender
+  forA_ optFeaturedAppRightCid $ createAppMarker proxy proxyCid sender
 
   -- run the rest of the transfer factory calls
   let newHoldingMap = M.insert tf.instrumentId result.senderChangeCids holdingMap
-  executeTransferCalls proxy sender optFeaturedAppRightCid calls newHoldingMap (result :: results)
+  executeTransferCalls proxy proxyCid sender optFeaturedAppRightCid calls newHoldingMap (result :: results)
 
 
 
@@ -214,32 +225,28 @@ executeTransferCalls proxy sender optFeaturedAppRightCid ((TransferFactoryCall w
 -- | Shared code to execute the proxied choice.
 exerciseProxyChoice
   : forall t ch r. HasExercise t ch r =>
-  WalletUserProxy -> ContractId t -> ProxyArg ch -> (ContractId t -> Update Party) -> Update (ProxyResult r)
-exerciseProxyChoice proxy cid proxyArg getExpectedUser = do
+  WalletUserProxy -> ContractId WalletUserProxy -> ContractId t -> ProxyArg ch -> (ContractId t -> Update Party) -> Update (ProxyResult r)
+exerciseProxyChoice proxy proxyCid cid proxyArg getExpectedUser = do
   let ProxyArg{..} = proxyArg
-  -- validate app right and user
-  validateAppRight proxy featuredAppRightCid
+  -- validate user
   expectedUser <- getExpectedUser cid
   require "User matches expected user" (expectedUser == user)
   checkAllowList proxy.optAllowList user
-  markerResult <- createAppMarker proxy user featuredAppRightCid
+  -- create marker, which also checks that the app right belongs to the provider
+  markerResult <- createAppMarker proxy proxyCid user featuredAppRightCid
   -- exercise proxied choice
   choiceResult <- exercise cid choiceArg
   pure ProxyResult with markerResult; choiceResult
-
-validateAppRight : WalletUserProxy -> ContractId FeaturedAppRight -> Update ()
-validateAppRight proxy featuredAppRightCid = do
-  appRight <- fetch featuredAppRightCid
-  require "App right matches expected provider" ((view appRight).provider == proxy.provider)
 
 checkAllowList : Optional [Party] -> Party -> Update ()
 checkAllowList None _ = pure ()
 checkAllowList (Some allowList) user = require "User is in the allow list" (user `elem` allowList)
 
 createAppMarker
-  : WalletUserProxy -> Party -> ContractId FeaturedAppRight -> Update FeaturedAppRight_CreateActivityMarkerResult
-createAppMarker proxy user featuredAppRightCid = do
-  exercise featuredAppRightCid FeaturedAppRight_CreateActivityMarker with
+  : WalletUserProxy -> ContractId WalletUserProxy -> Party -> ContractId FeaturedAppRight -> Update FeaturedAppRight_CreateActivityMarkerResult
+createAppMarker proxy proxyCid user featuredAppRightCid = do
+  exercise proxyCid WalletUserProxy_CreateActivityMarker with
+    featuredAppRightCid
     beneficiaries = proxyBeneficiaries proxy user
 
 -- | Get the list of beneficiaries for the featured app marker.

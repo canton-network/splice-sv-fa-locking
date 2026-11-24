@@ -254,7 +254,7 @@ test_featured_batch_transfer = do
   transfer2 <- mkImmediateTransfer registry alice charlie 50.0 [] -- no holdings, as they will be funneled in
 
   -- execute batch transfer via wallet proxy
-  executeBatchTransfer provider.provider (Some provider.featuredAppRightCid) [transfer1, transfer2]
+  executeBatchTransfer registry provider.provider (Some provider.featuredAppRightCid) [transfer1, transfer2]
 
   -- check featured app markers: there should be four of them, 2 per transfer as the user is also a beneficiary
   markers <- query @Splice.Amulet.FeaturedAppActivityMarker provider.provider
@@ -316,7 +316,7 @@ test_unfeatured_multi_registry_batch_transfer = do
   transfer3 <- mkImmediateTransfer registry alice charlie 50.0 [] -- no holdings, as they will be funneled in
 
   -- execute batch transfer via wallet proxy
-  executeBatchTransfer alice None [transfer1, transfer2, transfer3]
+  executeBatchTransfer registry alice None [transfer1, transfer2, transfer3]
 
   -- check holdings
   checkExactlyOneHolding registry 930.0 alice
@@ -329,12 +329,12 @@ test_unfeatured_multi_registry_batch_transfer = do
 
 
 -- | Execute a batch of transfers.
-executeBatchTransfer : Party -> Optional (ContractId FeaturedAppRight) -> [WithDisclosures TransferFactoryCall] -> Script ()
-executeBatchTransfer operator optFeaturedAppRightCid transferCalls = do
+executeBatchTransfer : AmuletRegistry.AmuletRegistry -> Party -> Optional (ContractId FeaturedAppRight) -> [WithDisclosures TransferFactoryCall] -> Script ()
+executeBatchTransfer registry operator optFeaturedAppRightCid transferCalls = do
   [(proxyCid, _)] <- query @WalletUserProxy operator
   proxyD <- queryDisclosure' @WalletUserProxy operator proxyCid
   appRightD <- forA optFeaturedAppRightCid $ \cid ->
-    queryDisclosure' @Splice.Amulet.FeaturedAppRight operator (fromInterfaceContractId cid)
+    queryDisclosure' @Splice.Amulet.FeaturedAppRight registry.dso (fromInterfaceContractId cid)
 
   -- note the explicit disclosure of both the app right and the wallet proxy on top of the
   -- contracts required to be disclosed for the transfers
@@ -403,7 +403,7 @@ setupWalletProvider registry name optAllowList = do
     extraBeneficiaries = []
     optAllowList
   -- query the disclosures that the wallet app needs to pass in
-  appRightD <- queryDisclosure' @Splice.Amulet.FeaturedAppRight walletProvider featuredAppRightCid
+  appRightD <- queryDisclosure' @Splice.Amulet.FeaturedAppRight registry.dso featuredAppRightCid
   proxyD <- queryDisclosure' @WalletUserProxy walletProvider proxyCid
   let extraDisclosuresForProxy = proxyD <> appRightD
   pure WalletProviderData with

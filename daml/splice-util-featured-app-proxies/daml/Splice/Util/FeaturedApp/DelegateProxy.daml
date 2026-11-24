@@ -42,6 +42,18 @@ template DelegateProxy with
     signatory provider
     observer delegate
 
+    -- | Create the activity marker with only the authority of the provider. This makes sure that
+    -- the delegate cannot use the proxy to create markers on a featured app right of another provider.
+    -- We use this choice instead of fetching the featured app right, as the provider
+    -- is not necessarily a stakeholder of the featured app right.
+    nonconsuming choice DelegateProxy_CreateActivityMarker : FeaturedAppRight_CreateActivityMarkerResult
+      with
+        featuredAppRightCid : ContractId FeaturedAppRight
+        beneficiaries : [AppRewardBeneficiary]
+      controller provider
+      do
+        exercise featuredAppRightCid FeaturedAppRight_CreateActivityMarker with beneficiaries
+
     nonconsuming choice DelegateProxy_TransferFactory_Transfer
       : ProxyResult TransferInstructionResult
       with
@@ -49,7 +61,7 @@ template DelegateProxy with
         proxyArg : ProxyArg TransferFactory_Transfer
       controller delegate
       do
-        exerciseProxyChoice this cid proxyArg $ \_ ->
+        exerciseProxyChoice this self cid proxyArg $ \_ ->
           pure proxyArg.choiceArg.transfer.sender
 
     nonconsuming choice DelegateProxy_TransferInstruction_Accept
@@ -59,7 +71,7 @@ template DelegateProxy with
         proxyArg : ProxyArg TransferInstruction_Accept
       controller delegate
       do
-        exerciseProxyChoice this cid proxyArg $ \cid -> do
+        exerciseProxyChoice this self cid proxyArg $ \cid -> do
           instr <- fetch cid
           pure (view instr).transfer.receiver
 
@@ -70,7 +82,7 @@ template DelegateProxy with
         proxyArg : ProxyArg TransferInstruction_Reject
       controller delegate
       do
-        exerciseProxyChoice this cid proxyArg $ \cid -> do
+        exerciseProxyChoice this self cid proxyArg $ \cid -> do
           instr <- fetch cid
           pure (view instr).transfer.receiver
 
@@ -81,7 +93,7 @@ template DelegateProxy with
         proxyArg : ProxyArg TransferInstruction_Withdraw
       controller delegate
       do
-        exerciseProxyChoice this cid proxyArg $ \cid -> do
+        exerciseProxyChoice this self cid proxyArg $ \cid -> do
           instr <- fetch cid
           pure (view instr).transfer.sender
 
@@ -92,7 +104,7 @@ template DelegateProxy with
         proxyArg : ProxyArg AllocationFactory_Allocate
       controller delegate
       do
-        exerciseProxyChoice this cid proxyArg $ \_ ->
+        exerciseProxyChoice this self cid proxyArg $ \_ ->
           pure proxyArg.choiceArg.allocation.transferLeg.sender
 
     nonconsuming choice DelegateProxy_Allocation_Withdraw
@@ -102,7 +114,7 @@ template DelegateProxy with
         proxyArg : ProxyArg Allocation_Withdraw
       controller delegate
       do
-        exerciseProxyChoice this cid proxyArg $ \cid -> do
+        exerciseProxyChoice this self cid proxyArg $ \cid -> do
           allocation <- fetch cid
           pure (view allocation).allocation.transferLeg.sender
 
@@ -113,15 +125,14 @@ template DelegateProxy with
 -- | Shared code to execute the proxied choice.
 exerciseProxyChoice
   : forall t ch r. HasExercise t ch r =>
-  DelegateProxy -> ContractId t -> ProxyArg ch -> (ContractId t -> Update Party) -> Update (ProxyResult r)
-exerciseProxyChoice proxy cid proxyArg getExpectedDelegate = do
+  DelegateProxy -> ContractId DelegateProxy -> ContractId t -> ProxyArg ch -> (ContractId t -> Update Party) -> Update (ProxyResult r)
+exerciseProxyChoice proxy proxyCid cid proxyArg getExpectedDelegate = do
   let ProxyArg{..} = proxyArg
-  appRight <- fetch featuredAppRightCid
-  require "App right matches expected provider" ((view appRight).provider == proxy.provider)
   expectedDelegate <- getExpectedDelegate cid
   require "Acting party matches delegate" (expectedDelegate == proxy.delegate)
-  -- create marker
-  markerResult <- exercise featuredAppRightCid FeaturedAppRight_CreateActivityMarker with
+  -- create marker, which also checks that the app right belongs to the provider
+  markerResult <- exercise proxyCid DelegateProxy_CreateActivityMarker with
+    featuredAppRightCid
     beneficiaries = proxyArg.beneficiaries
   -- exercise proxied choice
   choiceResult <- exercise cid choiceArg
