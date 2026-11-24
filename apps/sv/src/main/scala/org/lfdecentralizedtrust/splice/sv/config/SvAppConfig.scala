@@ -483,6 +483,8 @@ case class SvAppBackendConfig(
     lsuSequencingTestInterval: NonNegativeFiniteDuration = NonNegativeFiniteDuration.ofSeconds(30),
     featuredAppUnderlockStatusUpdateInterval: NonNegativeFiniteDuration =
       NonNegativeFiniteDuration.ofMinutes(1),
+    mergeDuplicateFeaturedAppRightsInterval: NonNegativeFiniteDuration =
+      NonNegativeFiniteDuration.ofHours(1),
     parameters: SpliceParametersConfig = SpliceParametersConfig(batching = BatchingConfig()),
     extraBeneficiaries: Seq[BeneficiaryConfig] = Seq.empty,
     enableOnboardingParticipantPromotionDelay: Boolean = true,

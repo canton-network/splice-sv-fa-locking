@@ -1132,6 +1132,17 @@ trait SvDsoStore
     ]
   ]
 
+  def listFeaturedAppRightProvidersWithDuplicatesSample(limit: Limit)(implicit
+      tc: TraceContext
+  ): Future[Seq[PartyId]]
+
+  /** A provider's `FeaturedAppRight`s, newest first like `lookupFeaturedAppRight`. */
+  def listFeaturedAppRightsForProvider(provider: PartyId, limit: Limit)(implicit
+      tc: TraceContext
+  ): Future[Seq[
+    AssignedContract[splice.amulet.FeaturedAppRight.ContractId, splice.amulet.FeaturedAppRight]
+  ]]
+
   def listProvisionalGovernanceLocksWithFeaturedAppRightSample(
       unavailablePartiesStore: Option[UnavailablePartiesStore] = None
   ): ListExpiredContracts[

@@ -32,6 +32,9 @@
     - SV app automation now executes `RevokeFeaturedAppRightInstruction`s, archiving the provider's
       featured app right. It also archives instructions that expire before they are executed.
 
+    - SV app automation now merges a provider's duplicate featured app rights into one, up to 100 at a time.
+      It checks every hour by default (`merge-duplicate-featured-app-rights-interval`).
+
   - Governance locks
 
     - The `cip-127/*` metadata entries (e.g. `cip-127/lock-kind` and `cip-127/lock-status`), which were created by accident in the metadata, are no longer

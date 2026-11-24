@@ -2186,6 +2186,59 @@ class DbSvDsoStore private (
     )
   }
 
+  // `featured_app_right_provider is not null` lets the planner use the partial index
+  // dso_acs_store_sid_mid_pn_tid_farp.
+  override def listFeaturedAppRightProvidersWithDuplicatesSample(limit: Limit)(implicit
+      tc: TraceContext
+  ): Future[Seq[PartyId]] = waitUntilAcsIngested {
+    for {
+      providers <- storage.query(
+        sql"""
+          select provider
+          from (
+            select featured_app_right_provider as provider
+            from #${DsoTables.acsTableName}
+            where store_id = $acsStoreId
+              and migration_id = $domainMigrationId
+              and package_name = ${FeaturedAppRight.PACKAGE_NAME}
+              and template_id_qualified_name = ${QualifiedName(
+            FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID
+          )}
+              and featured_app_right_provider is not null
+            group by featured_app_right_provider
+            having count(*) > 1
+            limit greatest(1000, ${10 * sqlLimit(limit)})
+          ) duplicates
+          order by random()
+          limit ${sqlLimit(limit)}
+        """.as[PartyId],
+        "listFeaturedAppRightProvidersWithDuplicatesSample",
+      )
+    } yield applyLimit("listFeaturedAppRightProvidersWithDuplicatesSample", limit, providers)
+  }
+
+  override def listFeaturedAppRightsForProvider(provider: PartyId, limit: Limit)(implicit
+      tc: TraceContext
+  ): Future[Seq[AssignedContract[FeaturedAppRight.ContractId, FeaturedAppRight]]] =
+    waitUntilAcsIngested {
+      for {
+        rows <- storage.query(
+          selectFromAcsTableWithState(
+            DsoTables.acsTableName,
+            acsStoreId,
+            domainMigrationId,
+            FeaturedAppRight.COMPANION,
+            additionalWhere = sql"""and acs.featured_app_right_provider = $provider""",
+            orderLimit =
+              sql"""order by acs.created_at desc, acs.contract_id limit ${sqlLimit(limit)}""",
+          ),
+          "listFeaturedAppRightsForProvider",
+        )
+      } yield applyLimit("listFeaturedAppRightsForProvider", limit, rows).map(
+        assignedContractFromRow(FeaturedAppRight.COMPANION)(_)
+      )
+    }
+
   override def listProvisionalGovernanceLocksWithFeaturedAppRightSample(
       unavailablePartiesStore: Option[UnavailablePartiesStore] = None
   ): ListExpiredContracts[
