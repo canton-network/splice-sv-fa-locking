@@ -101,7 +101,14 @@ testVoteRequestAcceptanceWithoutEffectivity = do
     sv = Some sv1
 
   [(rightCid, right)] <- query @FeaturedAppRight provider
-  right === FeaturedAppRight with dso; provider; activityWeight = Some 11.0; appKind = None; opsParties = None; underlockPermanentAt = None
+  right === FeaturedAppRight with
+    dso
+    provider
+    activityWeight = Some 11.0
+    appKind = None
+    opsParties = None
+    underlockPermanentAt = None
+    providerIsObserver = Some False
 
   -- the request has been archived
   [] <- query @VoteRequest dso
@@ -193,7 +200,14 @@ testVoteRequestAcceptanceWithEffectivity = do
   result.outcome === VRO_Accepted with effectiveAt = effectiveTime
 
   [(rightCid, right)] <- query @FeaturedAppRight provider
-  right === FeaturedAppRight with dso; provider; activityWeight = None; appKind = None; opsParties = None; underlockPermanentAt = None
+  right === FeaturedAppRight with
+    dso
+    provider
+    activityWeight = None
+    appKind = None
+    opsParties = None
+    underlockPermanentAt = None
+    providerIsObserver = Some False
 
   -- the request has been archived
   [] <- query @VoteRequest dso
@@ -208,7 +222,14 @@ testVoteRequestAcceptanceWithEffectivity = do
           newActivityWeight = 1.5
 
   [(rightCid, right)] <- query @FeaturedAppRight provider
-  right === FeaturedAppRight with dso; provider; activityWeight = Some 1.5; appKind = None; opsParties = None; underlockPermanentAt = None
+  right === FeaturedAppRight with
+    dso
+    provider
+    activityWeight = Some 1.5
+    appKind = None
+    opsParties = None
+    underlockPermanentAt = None
+    providerIsObserver = Some False
 
   -- let's test updating the right back to the default
   initiateAndAcceptVote app [sv1, sv2, sv3, sv4] $
@@ -220,7 +241,14 @@ testVoteRequestAcceptanceWithEffectivity = do
           newActivityWeight = 1.0
 
   [(rightCid, right)] <- query @FeaturedAppRight provider
-  right === FeaturedAppRight with dso; provider; activityWeight = None; appKind = None; opsParties = None; underlockPermanentAt = None
+  right === FeaturedAppRight with
+    dso
+    provider
+    activityWeight = None
+    appKind = None
+    opsParties = None
+    underlockPermanentAt = None
+    providerIsObserver = Some False
 
   -- we can remove the granted right using a vote request, provided enough parties answer in time
   -- This uses early closure of the vote request, which is only possible if a super-majority of svs have voted
@@ -1340,6 +1368,7 @@ testGrantFeaturedAppRightWithConfig = do
     appKind = Some FAK_AssetMoving
     opsParties = Some [ops]
     underlockPermanentAt = None
+    providerIsObserver = Some False
   getFeaturedAppConfig right === FeaturedAppConfig with
     appKind = Some FAK_AssetMoving
     activityWeight = Some 2.0
@@ -1382,6 +1411,7 @@ testMergeFeaturedAppRights = do
       appKind = None
       opsParties = None
       underlockPermanentAt = None
+      providerIsObserver = Some False
 
     mergeCommands : [ContractId FeaturedAppRight] -> Script (Commands DsoRules_MergeFeaturedAppRightsResult)
     mergeCommands rightCids = do

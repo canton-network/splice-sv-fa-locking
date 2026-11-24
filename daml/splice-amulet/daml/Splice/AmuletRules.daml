@@ -430,6 +430,7 @@ template AmuletRules
           appKind
           opsParties
           underlockPermanentAt = None
+          providerIsObserver = Some False
         return AmuletRules_DevNet_FeatureAppResult with ..
 
     -- Bootstrap the open mining rounds by creating

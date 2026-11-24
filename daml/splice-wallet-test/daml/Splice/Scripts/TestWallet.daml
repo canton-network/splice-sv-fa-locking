@@ -572,6 +572,7 @@ testSelfGrantFeaturedAppRight = script do
     appKind = Some FAK_AssetMoving
     opsParties = Some [bob.primaryParty]
     underlockPermanentAt = None
+    providerIsObserver = Some False
 
   -- opsParties is limited to 10 entries
   opsParties <- forA [1..11] $ \i -> allocateParty ("ops" <> show i)

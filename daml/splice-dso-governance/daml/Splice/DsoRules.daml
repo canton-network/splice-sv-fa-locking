@@ -1154,6 +1154,7 @@ template DsoRules with
           appKind
           opsParties
           underlockPermanentAt = None
+          providerIsObserver = Some False
         return DsoRules_GrantFeaturedAppRightResult with ..
 
     nonconsuming choice DsoRules_RevokeFeaturedAppRight : DsoRules_RevokeFeaturedAppRightResult
@@ -1192,13 +1193,14 @@ template DsoRules with
           valueUnlessDefault None _ = None
 
           normalizeRight : FeaturedAppRight -> FeaturedAppRight
-          normalizeRight (FeaturedAppRight dso provider activityWeight appKind opsParties underlockPermanentAt) = FeaturedAppRight with
+          normalizeRight (FeaturedAppRight dso provider activityWeight appKind opsParties underlockPermanentAt providerIsObserver) = FeaturedAppRight with
             dso
             provider
             activityWeight = valueUnlessDefault activityWeight defaultAppActivityWeight
             appKind = valueUnlessDefault appKind defaultAppKind
             opsParties = dedupSort <$> valueUnlessDefault opsParties defaultOpsParties
             underlockPermanentAt
+            providerIsObserver
 
         featuredAppRight <- case rightCids of
           [] -> pure None
@@ -1216,28 +1218,35 @@ template DsoRules with
               getAppKind right = fromOptional defaultAppKind right.appKind
               getOpsParties right = Set.fromList $ fromOptional defaultOpsParties right.opsParties
 
-              (activityWeight, appKind, opsParties, underlockPermanentAt) = foldl
-                (\(accActivityWeight, accAppKind, accOpsParties, accUnderlockPermanentAt) right -> (
+              (activityWeight, appKind, opsParties, underlockPermanentAt, providerIsObserver) = foldl
+                (\(accActivityWeight, accAppKind, accOpsParties, accUnderlockPermanentAt, accProviderIsObserver) right -> (
                   max accActivityWeight (getActivityWeight right),
                   max accAppKind (getAppKind right),
                   accOpsParties <> getOpsParties right,
                   case (accUnderlockPermanentAt, right.underlockPermanentAt) of
                     (Some x, Some y) -> Some $ min x y
-                    _ -> optional right.underlockPermanentAt Some accUnderlockPermanentAt
+                    _ -> optional right.underlockPermanentAt Some accUnderlockPermanentAt,
+                  case (accProviderIsObserver, right.providerIsObserver) of
+                    (None, None) -> None
+                    (x, y) -> Some $ fromOptional True x || fromOptional True y
                 ))
                 (
                   getActivityWeight firstRight,
                   getAppKind firstRight,
                   getOpsParties firstRight,
-                  firstRight.underlockPermanentAt
+                  firstRight.underlockPermanentAt,
+                  firstRight.providerIsObserver
                 )
                 otherRights
 
-              mergedRight = normalizeRight firstRight with
+              mergedRight = normalizeRight FeaturedAppRight with
+                dso = firstRight.dso
+                provider = firstRight.provider
                 activityWeight = Some activityWeight
                 appKind = Some appKind
                 opsParties = Some (Set.toList opsParties)
                 underlockPermanentAt
+                providerIsObserver
 
             if mergedRight == normalizeRight firstRight
               then pure $ Some firstCid
