@@ -5,7 +5,6 @@ package org.lfdecentralizedtrust.splice.scan.store.db
 
 import org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock as gl
-import org.lfdecentralizedtrust.splice.store.db.AcsJdbcTypes
 import com.digitalasset.canton.BaseTest
 import io.circe.Json
 import io.circe.syntax.*
@@ -27,9 +26,10 @@ import org.scalatest.wordspec.AnyWordSpec
 // This test pins the current JSON of every kind of specification, as a
 // tripwire for such changes.
 //
-// A typical break: a new optional field is encoded as `"field": null`, while
-// values stored by earlier releases lack the field entirely, so they are no
-// longer jsonb-equal.
+// Both sides of the comparison drop the fields with a `null` value, so a new
+// optional field does not break the lookup: earlier releases stored values
+// without the field, later releases store it as `"field": null`. A rename of
+// a field or constructor, or a change of the encoding, still breaks it.
 class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
   private val provider = "provider::1220aaaa"
   private val featuredApp = new gl.governancelockkind.GLK_FeaturedApp(provider)
@@ -48,23 +48,21 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
   private val endTime = Instant.parse("2026-10-27T12:34:56.123456Z")
 
   private def fullLock(kind: gl.GovernanceLockKind): Json =
-    AcsJdbcTypes
-      .payloadJsonFromDefinedDataType(
-        new gl.governancelockspecification.GLS_FullLock(
-          new gl.FullLockSpecification(kind, Optional.empty())
-        )
+    DbScanStore.governanceLockSpecificationJson(
+      new gl.governancelockspecification.GLS_FullLock(
+        new gl.FullLockSpecification(kind, Optional.empty())
       )
+    )
 
   private def vestingLock(
       kind: gl.GovernanceLockKind,
       vestingPeriod: RelTime,
   ): Json =
-    AcsJdbcTypes
-      .payloadJsonFromDefinedDataType(
-        new gl.governancelockspecification.GLS_VestingLock(
-          new gl.VestingLockSpecification(kind, vestingPeriod, endTime, Optional.empty())
-        )
+    DbScanStore.governanceLockSpecificationJson(
+      new gl.governancelockspecification.GLS_VestingLock(
+        new gl.VestingLockSpecification(kind, vestingPeriod, endTime, Optional.empty())
       )
+    )
 
   "The JSON of a governance lock specification" should {
     "not change for a featured app full lock" in {
@@ -74,9 +72,7 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
           "kind" := Json.obj(
             "tag" := "GLK_FeaturedApp",
             "value" := Json.obj("provider" := provider),
-          ),
-          // TODO(canton-network/splice-sv-fa-locking#211): drop trailing nulls
-          "controllers" := Json.Null,
+          )
         ),
       )
     }
@@ -88,8 +84,7 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
           "kind" := Json.obj(
             "tag" := "GLK_ProvisionalFeaturedApp",
             "value" := Json.obj("provider" := provider),
-          ),
-          "controllers" := Json.Null,
+          )
         ),
       )
     }
@@ -101,8 +96,7 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
           "kind" := Json.obj(
             "tag" := "GLK_SuperValidatorRightsOwner",
             "value" := Json.obj("svName" := "sv1"),
-          ),
-          "controllers" := Json.Null,
+          )
         ),
       )
     }
@@ -117,7 +111,6 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
           ),
           "vestingPeriod" := Json.obj("microseconds" := 5184000000000L),
           "endTime" := "2026-10-27T12:34:56.123456Z",
-          "vestingControllers" := Json.Null,
         ),
       )
     }
@@ -135,7 +128,6 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
           ),
           "vestingPeriod" := Json.obj("microseconds" := 0),
           "endTime" := "2026-10-27T12:34:56.123456Z",
-          "vestingControllers" := Json.Null,
         ),
       )
     }
@@ -150,7 +142,6 @@ class FreezeGovernanceLockJsonTest extends AnyWordSpec with BaseTest {
           ),
           "vestingPeriod" := Json.obj("microseconds" := 31557600000000L),
           "endTime" := "2026-10-27T12:34:56.123456Z",
-          "vestingControllers" := Json.Null,
         ),
       )
     }
