@@ -201,26 +201,6 @@ class DbValidatorStore private (
       .value
   } yield row.map(contractFromRow(walletCodegen.WalletAppInstall.COMPANION)(_))
 
-  override def lookupValidatorFeaturedAppRight()(implicit
-      tc: TraceContext
-  ): Future[
-    Option[Contract[amuletCodegen.FeaturedAppRight.ContractId, amuletCodegen.FeaturedAppRight]]
-  ] = for {
-    row <- storage
-      .querySingle(
-        selectFromAcsTable(
-          ValidatorTables.acsTableName,
-          acsStoreId,
-          domainMigrationId,
-          amuletCodegen.FeaturedAppRight.COMPANION,
-          where = sql"""provider_party = ${walletKey.validatorParty}""",
-          orderLimit = sql"limit 1",
-        ).headOption,
-        "lookupValidatorFeaturedAppRight",
-      )
-      .value
-  } yield row.map(contractFromRow(amuletCodegen.FeaturedAppRight.COMPANION)(_))
-
   override def lookupWalletInstallByNameWithOffset(
       endUserName: String
   )(implicit tc: TraceContext): Future[QueryResult[
