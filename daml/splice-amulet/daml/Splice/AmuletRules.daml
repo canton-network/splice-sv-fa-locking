@@ -1320,7 +1320,8 @@ getUnsuspendedFeaturedAppProvider dso contextFeaturedAppRight provider = do
   case contextFeaturedAppRight of
     None -> pure None
     Some featuredAppRightCid -> do
-      right <- fetchReferenceData (ForOwner with dso; owner = provider) featuredAppRightCid
+      -- The provider is not necessarily a stakeholder of the featured app right, so we can't fetch it
+      right <- fetchPublicReferenceData (ForOwner with dso; owner = provider) featuredAppRightCid FeaturedAppRight_Fetch
       pure $ if isFeaturedAppRightSuspended right
         then None
         else Some provider
