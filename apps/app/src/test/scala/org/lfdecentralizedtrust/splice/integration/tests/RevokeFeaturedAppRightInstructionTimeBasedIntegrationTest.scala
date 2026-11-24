@@ -70,11 +70,14 @@ class RevokeFeaturedAppRightInstructionTimeBasedIntegrationTest
       )
 
       actAndCheck(
-        "the expire trigger runs",
-        sv1Backend.dsoDelegateBasedAutomation
-          .trigger[ExpireRevokeFeaturedAppRightInstructionTrigger]
-          .runOnce()
-          .futureValue,
+        "the expire trigger runs and warns about the expiry",
+        loggerFactory.assertLogs(
+          sv1Backend.dsoDelegateBasedAutomation
+            .trigger[ExpireRevokeFeaturedAppRightInstructionTrigger]
+            .runOnce()
+            .futureValue,
+          _.warningMessage should include("Expired RevokeFeaturedAppRightInstruction"),
+        ),
       )(
         "the instruction is archived and the featured app right is kept",
         _ => {

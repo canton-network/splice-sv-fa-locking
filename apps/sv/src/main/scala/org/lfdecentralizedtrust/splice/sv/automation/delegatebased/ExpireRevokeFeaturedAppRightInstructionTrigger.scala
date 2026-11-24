@@ -52,7 +52,12 @@ class ExpireRevokeFeaturedAppRightInstructionTrigger(
         .submit(Seq(store.key.svParty), Seq(store.key.dsoParty), cmd)
         .noDedup
         .yieldUnit()
-    } yield TaskSuccess("expired revoke featured app right instruction")
+    } yield {
+      logger.warn(
+        s"Expired RevokeFeaturedAppRightInstruction ${task.work.contractId.contractId} for provider ${task.work.payload.provider}"
+      )
+      TaskSuccess("expired revoke featured app right instruction")
+    }
 }
 
 object ExpireRevokeFeaturedAppRightInstructionTrigger {
