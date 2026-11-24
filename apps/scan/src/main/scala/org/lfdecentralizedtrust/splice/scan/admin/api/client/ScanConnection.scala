@@ -246,10 +246,23 @@ trait ScanConnection
           openMiningRound.contractId,
           featured.map(_.contractId).toJava,
         ),
-        ledgerConnection.disclosedContracts(amuletRules, openMiningRound),
+        ledgerConnection.disclosedContracts(
+          amuletRules,
+          (Seq[ContractWithState[?, ?]](openMiningRound) ++
+            featuredAppRightWithState(featured, amuletRules))*
+        ),
       )
     }
   }
+
+  // The provider is not necessarily a stakeholder of the featured app right, so we disclose it.
+  // Approximating the state of featured app right to be the same as the AmuletRules
+  // as scan currently does not return a ContractWithState.
+  private def featuredAppRightWithState(
+      featured: Option[Contract[FeaturedAppRight.ContractId, FeaturedAppRight]],
+      amuletRules: ContractWithState[AmuletRules.ContractId, AmuletRules],
+  ): Seq[ContractWithState[FeaturedAppRight.ContractId, FeaturedAppRight]] =
+    featured.map(ContractWithState(_, amuletRules.state)).toList
 
   def getAppTransferContextForRound(
       ledgerConnection: SpliceLedgerConnection,
@@ -276,7 +289,11 @@ trait ScanConnection
                 openMiningRound.contractId,
                 featured.map(_.contractId).toJava,
               ),
-              ledgerConnection.disclosedContracts(amuletRules, openMiningRound),
+              ledgerConnection.disclosedContracts(
+                amuletRules,
+                (Seq[ContractWithState[?, ?]](openMiningRound) ++
+                  featuredAppRightWithState(featured, amuletRules))*
+              ),
             )
           )
         case None => Left("round is not an open mining round")
