@@ -436,3 +436,44 @@ checkExactlyOneHolding registry expectedAmount user = do
   WalletClient.checkBalance user registry.instrumentId expectedAmount
   holdingCids <- WalletClient.listHoldingCids user registry.instrumentId
   length holdingCids === 1
+
+-- | The user cannot use the proxy to create markers on a featured app right
+-- where the user is the provider, as the markers are created with only the
+-- authority of the proxy's provider.
+test_user_cannot_use_own_app_right : Script ()
+test_user_cannot_use_own_app_right = do
+  registry <- AmuletRegistry.initialize AmuletRegistry.defaultAmuletRegistryConfig
+  aliceProvider <- setupWalletProvider registry "aliceWalletProvider" None
+
+  alice <- allocatePartyExact "alice"
+  AmuletRegistry.tapLockedAndUnlockedFunds registry alice 1000.0
+  aliceHoldingCids <- WalletClient.listHoldingCids alice registry.instrumentId
+  aliceAppRightCid <- AmuletRegistry.featureApp registry alice
+  aliceAppRightD <- queryDisclosure' @Splice.Amulet.FeaturedAppRight registry.dso aliceAppRightCid
+
+  bob <- allocatePartyExact "bob"
+  now <- getTime
+  enrichedChoice <- RegistryApi.getTransferFactory registry TransferFactory_Transfer with
+    expectedAdmin = registry.dso
+    transfer = Api.Token.TransferInstructionV1.Transfer with
+      sender = alice
+      receiver = bob
+      amount = 10.0
+      instrumentId = registry.instrumentId
+      requestedAt = now
+      executeBefore = now `addRelTime` days 1
+      inputHoldingCids = aliceHoldingCids
+      meta = emptyMetadata
+    extraArgs = emptyExtraArgs
+
+  submitWithDisclosuresMustFail' alice (aliceProvider.extraDisclosuresForProxy <> aliceAppRightD <> enrichedChoice.disclosures) $ exerciseCmd
+    (aliceProvider.proxyCid)
+    WalletUserProxy_TransferFactory_Transfer with
+      cid = enrichedChoice.factoryCid
+      proxyArg = ProxyArg with
+        user = alice
+        choiceArg = enrichedChoice.arg
+        featuredAppRightCid = toInterfaceContractId aliceAppRightCid
+
+  [] <- query @Splice.Amulet.FeaturedAppActivityMarker registry.dso
+  WalletClient.checkBalance alice registry.instrumentId 1000.0

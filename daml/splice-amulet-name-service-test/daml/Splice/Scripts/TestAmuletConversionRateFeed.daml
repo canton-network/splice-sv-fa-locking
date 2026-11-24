@@ -83,3 +83,30 @@ testAmuletConversionRateFeed = do
   length markers === 1
 
   pure ()
+
+-- | The publisher cannot create markers on a featured app right of another provider.
+testAmuletConversionRateFeedOtherProvidersRight : Script ()
+testAmuletConversionRateFeedOtherProvidersRight = do
+  app <- setupApp
+  publisherUser <- setupValidator' app "publisher"
+  let publisher = publisherUser.primaryParty
+  otherProviderUser <- setupValidator' app "otherProvider"
+  otherFeaturedAppRightCid <- featureApp app otherProviderUser
+  cid <- submit publisher $ createCmd AmuletConversionRateFeed with
+    publisher
+    dso = app.dso
+    nextUpdateAfter = None
+    amuletConversionRate = 1.0
+
+  (amuletRulesCid, _) <- getAmuletRules app
+  now <- getTime
+
+  submitMustFail (actAs publisher <> readAs app.dso) $ exerciseCmd cid AmuletConversionRateFeed_Update with
+    amuletConversionRate = 2.0
+    amuletRulesCid
+    markerContextO = Some MarkerContext with
+      beneficiaries = [Api.AppRewardBeneficiary publisher 1.0]
+      featuredAppRightCid = toInterfaceContractId otherFeaturedAppRightCid
+    newNextUpdateAfter = now `addRelTime` minutes 5
+
+  checkRate app.dso cid 1.0

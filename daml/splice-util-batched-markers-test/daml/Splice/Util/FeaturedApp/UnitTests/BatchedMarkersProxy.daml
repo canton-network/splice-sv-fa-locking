@@ -18,13 +18,13 @@ test = script do
   provider <- allocateParty "provider"
   beneficiary <- allocateParty "beneficiary"
   featuredAppRightCid <- AmuletRegistry.featureApp registry provider
-  featuredAppRightD <- queryDisclosure' registry.dso featuredAppRightCid
+  appRightD <- queryDisclosure' registry.dso featuredAppRightCid
 
   markerProxy <- submit provider $ createCmd BatchedMarkersProxy with
     provider
     dso = registry.dso
 
-  submitWithDisclosures' provider featuredAppRightD $ exerciseCmd markerProxy $ BatchedMarkersProxy_CreateMarkers with
+  submitWithDisclosures' provider appRightD $ exerciseCmd markerProxy $ BatchedMarkersProxy_CreateMarkers with
     featuredAppRightCid = toInterfaceContractId featuredAppRightCid
     batches = [
       RewardBatch
@@ -39,7 +39,7 @@ test = script do
         }
       ]
 
-  submitWithDisclosures' provider featuredAppRightD $ exerciseCmd markerProxy $ BatchedMarkersProxy_CreateMarkersV2 with
+  submitWithDisclosures' provider appRightD $ exerciseCmd markerProxy $ BatchedMarkersProxy_CreateMarkersV2 with
     featuredAppRightCid = toInterfaceContractId featuredAppRightCid
     batches = [
       RewardBatchV2

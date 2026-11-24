@@ -142,6 +142,64 @@ testMultiRegistryAirdrop = do
   length markers === 9
 
 
+-- | The operator cannot use a `BatchMergeUtility` of the owner to create markers
+-- on a featured app right of the owner.
+testMergingWithOwnerUtilityFails : Script ()
+testMergingWithOwnerUtilityFails = do
+  registry <- AmuletRegistry.initialize AmuletRegistry.defaultAmuletRegistryConfig
+
+  (operator, _) <- setupWalletOperator registry "wallet-operator"
+  (alice, aliceDelegation) <- setupWalletUserNoPreapproval operator "alice"
+  -- alice is also a featured app provider with her own batch merge utility
+  (_, aliceAppRightCall) <- setupFeaturedParty registry alice
+  aliceAppRightD <- queryDisclosure' registry.dso (fromInterfaceContractId @Amulet.FeaturedAppRight aliceAppRightCall.appRightCid)
+
+  AmuletRegistry.tapFaucet registry alice 42.0
+  AmuletRegistry.tapFaucet registry alice 23.0
+  mergeTransfer <- mkMergeTransfer registry alice
+
+  submitMustFail (actAs operator <> readAs alice <> discloseMany' (mergeTransfer.disclosures <> aliceAppRightD)) $
+    exerciseCmd aliceDelegation MergeDelegation_Merge with
+      optMergeTransfer = mergeTransfer.value
+      optFeaturedAppRight = Some aliceAppRightCall
+      optExtraTransfer = None
+
+  [] <- query @Amulet.FeaturedAppActivityMarker registry.dso
+  pure ()
+
+-- | Without a `BatchMergeUtility`, the featured app right is fetched, which only works
+-- if the operator is an observer of the featured app right.
+testMergingWithoutUtility : Script ()
+testMergingWithoutUtility = do
+  registry <- AmuletRegistry.initialize AmuletRegistry.defaultAmuletRegistryConfig
+
+  (operator, appRightCall) <- setupWalletOperator registry "wallet-operator"
+  (alice, aliceDelegation) <- setupWalletUserNoPreapproval operator "alice"
+  let mergeAlice options call = do
+        AmuletRegistry.tapFaucet registry alice 42.0
+        AmuletRegistry.tapFaucet registry alice 23.0
+        mergeTransfer <- mkMergeTransfer registry alice
+        pure (options <> discloseMany' mergeTransfer.disclosures, MergeDelegation_Merge with
+          optMergeTransfer = mergeTransfer.value
+          optFeaturedAppRight = Some call with optBatchMergeUtilityCid = None
+          optExtraTransfer = None)
+
+  -- fails when the operator is not an observer of the featured app right, even with disclosure
+  let appRightCid = fromInterfaceContractId @Amulet.FeaturedAppRight appRightCall.appRightCid
+  appRightD <- queryDisclosure' registry.dso appRightCid
+  (options, choiceArg) <- mergeAlice (actAs operator <> readAs alice <> discloseMany' appRightD) appRightCall
+  submitMustFail options $ exerciseCmd aliceDelegation choiceArg
+
+  -- succeeds when the operator is an observer of the featured app right
+  observedAppRightCid <- setProviderIsObserver registry appRightCid None
+  (options, choiceArg) <- mergeAlice (actAs operator <> readAs alice) appRightCall with
+    appRightCid = toInterfaceContractId observedAppRightCid
+  submit options $ exerciseCmd aliceDelegation choiceArg
+
+  markers <- query @Amulet.FeaturedAppActivityMarker operator
+  length markers === 1
+
+
 -- setup utilities
 ------------------
 
@@ -159,6 +217,22 @@ setupWalletOperator registry operatorName = do
           ]
         optBatchMergeUtilityCid = Some batchMergeUtilityCid
   pure (operator, featuredAppRight)
+
+-- | Feature an existing party and create its `BatchMergeUtility`.
+setupFeaturedParty : AmuletRegistry.AmuletRegistry -> Party -> Script (ContractId BatchMergeUtility, FeaturedAppRightCall)
+setupFeaturedParty registry party = do
+  featuredAppRightCid <- AmuletRegistry.featureApp registry party
+  batchMergeUtilityCid <- submit party $ createCmd BatchMergeUtility with operator = party
+  pure (batchMergeUtilityCid, FeaturedAppRightCall with
+    appRightCid = toInterfaceContractId featuredAppRightCid
+    beneficiaries = [AppRewardBeneficiary with beneficiary = party; weight = 1.0]
+    optBatchMergeUtilityCid = Some batchMergeUtilityCid)
+
+-- | Recreate a featured app right with a different `providerIsObserver` value.
+setProviderIsObserver : AmuletRegistry.AmuletRegistry -> ContractId Amulet.FeaturedAppRight -> Optional Bool -> Script (ContractId Amulet.FeaturedAppRight)
+setProviderIsObserver registry rightCid providerIsObserver = do
+  Some right <- queryContractId registry.dso rightCid
+  submit registry.dso $ archiveCmd rightCid *> createCmd right with providerIsObserver
 
 setupMergeDelegation : Party -> Party -> Script (ContractId MergeDelegation)
 setupMergeDelegation owner delegate = do
