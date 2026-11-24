@@ -42,7 +42,7 @@ arcGrantFeaturedAppRight provider f =
 grantFeaturedAppRight : AmuletApp -> Party -> Script (ContractId FeaturedAppRight, FeaturedAppRight)
 grantFeaturedAppRight app provider = do
   confirmAndExecutionAction app $ arcGrantFeaturedAppRight provider identity
-  [right] <- query @FeaturedAppRight provider
+  [right] <- queryFilter @FeaturedAppRight app.dso \r -> r.provider == provider
   pure right
 
 -- Vote Requests
@@ -57,7 +57,7 @@ testVoteRequestAcceptanceWithoutEffectivity = do
 
   -- allocate an app provider, and check that there is no app right
   provider <- allocateParty "provider"
-  [] <- query @FeaturedAppRight provider
+  [] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
 
   -- sv1 initiates the granting of the featured app right for the provider with no effective time
   result <- submit (actAs sv1 <> readAs dso) $ exerciseCmd dsoRulesCid DsoRules_RequestVote with
@@ -100,7 +100,7 @@ testVoteRequestAcceptanceWithoutEffectivity = do
     amuletRulesCid = None
     sv = Some sv1
 
-  [(rightCid, right)] <- query @FeaturedAppRight provider
+  [(rightCid, right)] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   right === FeaturedAppRight with
     dso
     provider
@@ -121,7 +121,7 @@ testVoteRequestAcceptanceWithoutEffectivity = do
         rightCid
 
   -- the right is now revoked
-  [] <- query @FeaturedAppRight provider
+  [] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   pure ()
 
 -- | Tests vote request machinery on featured app right granting and revoking with effectivity.
@@ -133,7 +133,7 @@ testVoteRequestAcceptanceWithEffectivity = do
 
   -- allocate an app provider, and check that there is no app right
   provider <- allocateParty "provider"
-  [] <- query @FeaturedAppRight provider
+  [] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
 
   now <- getTime
   let effectiveTime = addRelTime now (days 8)
@@ -199,7 +199,7 @@ testVoteRequestAcceptanceWithEffectivity = do
   result.abstainingSvs === []
   result.outcome === VRO_Accepted with effectiveAt = effectiveTime
 
-  [(rightCid, right)] <- query @FeaturedAppRight provider
+  [(rightCid, right)] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   right === FeaturedAppRight with
     dso
     provider
@@ -221,7 +221,7 @@ testVoteRequestAcceptanceWithEffectivity = do
           reason = "tier 1"
           newActivityWeight = 1.5
 
-  [(rightCid, right)] <- query @FeaturedAppRight provider
+  [(rightCid, right)] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   right === FeaturedAppRight with
     dso
     provider
@@ -240,7 +240,7 @@ testVoteRequestAcceptanceWithEffectivity = do
           reason = "default tier"
           newActivityWeight = 1.0
 
-  [(rightCid, right)] <- query @FeaturedAppRight provider
+  [(rightCid, right)] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   right === FeaturedAppRight with
     dso
     provider
@@ -258,7 +258,7 @@ testVoteRequestAcceptanceWithEffectivity = do
         rightCid
 
   -- the right is now revoked
-  [] <- query @FeaturedAppRight provider
+  [] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   pure ()
 
 testVoteRequestRejectionWithoutEffectivity : Script ()
@@ -269,7 +269,7 @@ testVoteRequestRejectionWithoutEffectivity = do
 
   -- allocate an app provider, and check that there is no app right
   provider <- allocateParty "provider"
-  [] <- query @FeaturedAppRight provider
+  [] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
 
   -- sv1 initiates the granting of the featured app right for the provider
   result <- submit (actAs sv1 <> readAs dso) $ exerciseCmd dsoRulesCid DsoRules_RequestVote with
@@ -312,7 +312,7 @@ testVoteRequestRejectionWithEffectivityBeforeExpiration = do
 
   -- allocate an app provider, and check that there is no app right
   provider <- allocateParty "provider"
-  [] <- query @FeaturedAppRight provider
+  [] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
 
   -- sv1 initiates the granting of the featured app right for the provider
   result <- submit (actAs sv1 <> readAs dso) $ exerciseCmd dsoRulesCid DsoRules_RequestVote with
@@ -355,7 +355,7 @@ testVoteRequestRejectionWithEffectivityAfterExpiration = do
 
   -- allocate an app provider, and check that there is no app right
   provider <- allocateParty "provider"
-  [] <- query @FeaturedAppRight provider
+  [] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
 
   -- voteRequests with an effective time set before the expiration date must fail
   submitMustFail (actAs sv1 <> readAs dso) $ exerciseCmd dsoRulesCid DsoRules_RequestVote with
@@ -1205,7 +1205,7 @@ testFeaturedAppConfigUpdate = do
   instructionCid <- voteFeaturedAppConfigUpdateInstruction app svs provider baseConfig newConfig
 
   -- accepting the vote only records the instruction, the right is unchanged
-  [(rightCid', _)] <- query @FeaturedAppRight provider
+  [(rightCid', _)] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   rightCid' === rightCid
 
   -- the instruction cannot be applied to another provider's right
@@ -1219,7 +1219,7 @@ testFeaturedAppConfigUpdate = do
     exerciseCmd dsoRulesCid DsoRules_ExecuteFeaturedAppConfigUpdateInstruction with
       instructionCid; rightCid; sv = sv3
 
-  [(_, updatedRight)] <- query @FeaturedAppRight provider
+  [(_, updatedRight)] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   getFeaturedAppConfig updatedRight === newConfig
   updatedRight.activityWeight === Some 2.5
 
@@ -1256,7 +1256,7 @@ testFeaturedAppConfigUpdateMultiple = do
         _ <- svSubmits app sv1 $ \dsoRulesCid ->
           exerciseCmd dsoRulesCid DsoRules_ExecuteFeaturedAppConfigUpdateInstruction with
             instructionCid; rightCid; sv = sv1
-        [(_, updatedRight)] <- query @FeaturedAppRight provider
+        [(_, updatedRight)] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
         getFeaturedAppConfig updatedRight === expectedConfig
 
   -- each instruction may be executed in any order
@@ -1322,7 +1322,7 @@ testFeaturedAppConfigUpdatePatch = do
       update = FeaturedAppRight_Update with reason = "tier 1"; newActivityWeight = 1.5
 
   let executeInstruction instructionCid = do
-        [(currentCid, _)] <- query @FeaturedAppRight provider
+        [(currentCid, _)] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
         svSubmits app sv1 $ \dsoRulesCid ->
           exerciseCmd dsoRulesCid DsoRules_ExecuteFeaturedAppConfigUpdateInstruction with
             instructionCid; rightCid = currentCid; sv = sv1
@@ -1331,7 +1331,7 @@ testFeaturedAppConfigUpdatePatch = do
   _ <- executeInstruction kindInstructionCid
   _ <- executeInstruction opsInstructionCid
 
-  [(_, finalRight)] <- query @FeaturedAppRight provider
+  [(_, finalRight)] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   getFeaturedAppConfig finalRight === FeaturedAppConfig with
     appKind = Some FAK_Asset
     activityWeight = Some 1.5
@@ -1343,7 +1343,7 @@ testFeaturedAppConfigUpdatePatch = do
     resetBaseConfig (resetBaseConfig with activityWeight = None)
   _ <- executeInstruction resetInstructionCid
 
-  [(_, resetRight)] <- query @FeaturedAppRight provider
+  [(_, resetRight)] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   getFeaturedAppConfig resetRight === FeaturedAppConfig with
     appKind = Some FAK_Asset
     activityWeight = None
@@ -1360,7 +1360,7 @@ testGrantFeaturedAppRightWithConfig = do
     activityWeight = Some 2.0
     appKind = Some FAK_AssetMoving
     opsParties = Some [ops]
-  [(_, right)] <- query @FeaturedAppRight provider
+  [(_, right)] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   right === FeaturedAppRight with
     dso
     provider
@@ -1389,7 +1389,7 @@ testGrantFeaturedAppRightWithConfig = do
     submitMustFail'' (expectMessageContains "Template precondition violated") (actAs sv1 <> readAs dso) $
       exerciseCmd dsoRulesCid DsoRules_CloseVoteRequest with
         requestCid; amuletRulesCid = Some amuletRulesCid; sv = Some sv1
-  [_] <- query @FeaturedAppRight provider
+  [_] <- queryFilter @FeaturedAppRight dso \r -> r.provider == provider
   pure ()
 
 testMergeFeaturedAppRights : Script ()
@@ -1430,7 +1430,7 @@ testMergeFeaturedAppRights = do
     submitAndGetMerged : Commands DsoRules_MergeFeaturedAppRightsResult -> Script (ContractId FeaturedAppRight, FeaturedAppRight)
     submitAndGetMerged cmds = do
       DsoRules_MergeFeaturedAppRightsResult{featuredAppRight = Some mergedCid} <- submit submitOpts cmds
-      Some merged <- queryContractId provider mergedCid
+      Some merged <- queryContractId dso mergedCid
       pure (mergedCid, merged)
 
   -- Merging zero rights is a no-op
