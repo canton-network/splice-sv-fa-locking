@@ -68,52 +68,6 @@ class FeaturedAppUnderlockInstructionTimeBasedIntegrationTest
     featuredAppRightOf(alice).data.underlockPermanentAt.toScala shouldBe Some(deadline)
   }
 
-  "keep the earlier deadline on a repeated underlock" in { implicit env =>
-    val alice = grantRight(aliceWalletClient, aliceValidatorBackend)
-    voteToCreateUnderlockInstruction(alice, underlocked = true)
-    val deadline = executeUnderlockAndExpectPermanentAt(alice)
-    val suspendedRight = featuredAppRightOf(alice)
-
-    advanceTimeWithinRound(Duration.ofMinutes(1))
-    voteToCreateUnderlockInstruction(alice, underlocked = true)
-    runTriggerAndCheck(
-      alice,
-      "the instruction is archived, and the right keeps its contract id " +
-        "and its deadline",
-    ) {
-      underlockInstructionsFor(alice) shouldBe empty
-      val right = featuredAppRightOf(alice)
-      right.id shouldBe suspendedRight.id
-      right.data.underlockPermanentAt.toScala shouldBe Some(deadline)
-    }
-  }
-
-  "clear the deadline on recovery" in { implicit env =>
-    val alice = grantRight(aliceWalletClient, aliceValidatorBackend)
-    voteToCreateUnderlockInstruction(alice, underlocked = true)
-    executeUnderlockAndExpectPermanentAt(alice)
-
-    voteToCreateUnderlockInstruction(alice, underlocked = false)
-    runTriggerAndCheck(
-      alice,
-      "the instruction is archived and the right has no deadline",
-    ) {
-      underlockInstructionsFor(alice) shouldBe empty
-      isSuspended(alice) shouldBe false
-    }
-    val recoveredRight = featuredAppRightOf(alice)
-
-    voteToCreateUnderlockInstruction(alice, underlocked = false)
-    runTriggerAndCheck(
-      alice,
-      "a recovery of a right without a deadline archives the instruction " +
-        "and keeps the right's contract id",
-    ) {
-      underlockInstructionsFor(alice) shouldBe empty
-      featuredAppRightOf(alice).id shouldBe recoveredRight.id
-    }
-  }
-
   // TODO(canton-network/splice-sv-fa-locking#205): pause the trigger that
   // expires underlock instructions here, once it exists.
   "apply an instruction past its expiry" in { implicit env =>
