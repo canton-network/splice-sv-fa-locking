@@ -241,7 +241,8 @@ object ValidatorStore {
           )
         },
         mkFilter(amuletCodegen.FeaturedAppRight.COMPANION)(co =>
-          co.payload.dso == dso && co.payload.provider == validator
+          co.payload.dso == dso && co.payload.provider == validator &&
+            FeaturedAppRightUtil.providerIsObserver(co.payload)
         ) { contract =>
           ValidatorAcsStoreRowData(
             contract = contract,

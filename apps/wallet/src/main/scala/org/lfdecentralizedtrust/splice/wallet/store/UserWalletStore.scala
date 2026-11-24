@@ -768,7 +768,8 @@ object UserWalletStore {
         )(UserWalletAcsStoreRowData(_)),
         // Featured app right
         mkFilter(amuletCodegen.FeaturedAppRight.COMPANION)(co =>
-          co.payload.dso == dso && co.payload.provider == endUser
+          co.payload.dso == dso && co.payload.provider == endUser &&
+            FeaturedAppRightUtil.providerIsObserver(co.payload)
         )(UserWalletAcsStoreRowData(_)),
         // ANS entry
         mkFilter(ansCodegen.AnsEntry.COMPANION)(co => co.payload.user == endUser)(
