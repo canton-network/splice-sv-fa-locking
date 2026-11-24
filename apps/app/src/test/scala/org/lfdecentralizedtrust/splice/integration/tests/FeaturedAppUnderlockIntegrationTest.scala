@@ -105,7 +105,7 @@ class FeaturedAppUnderlockIntegrationTest
       tsv1Operations.createGovernanceLock(
         aliceValidatorBackend.participantClientWithAdminToken,
         RichPartyId.local(charlie),
-        lockKind = ProvisionalFeaturedAppLock,
+        lockKind = GovernanceLockUtil.LockKind.ProvisionalFeaturedApp,
         lockSubject = charlie.toProtoPrimitive,
         amount = basicLockThreshold,
         LockControllers(),

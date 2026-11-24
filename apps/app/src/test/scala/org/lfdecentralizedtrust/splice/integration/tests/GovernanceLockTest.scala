@@ -41,11 +41,6 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
   // Same as `defaultGovernanceLockMinimumLockAmount` in Daml.
   protected val minimumLockAmount = BigDecimal(10000.0)
 
-  private val lockStatusMemoKey = "lock-status"
-  private val lockVestingDurationMemoKey = "lock-vesting-duration-micros"
-  private val lockVestingEndTimeMemoKey = "lock-vesting-end-time-micros"
-  private val targetLockOwnerMemoKey = "target-lock-owner"
-
   protected val tiaAccept = new tiv2.transferinstructionaction.TIA_Accept(DamlUnit.getInstance)
   protected val tiaReject = new tiv2.transferinstructionaction.TIA_Reject(DamlUnit.getInstance)
   protected val tiaWithdraw = new tiv2.transferinstructionaction.TIA_Withdraw(DamlUnit.getInstance)
@@ -58,14 +53,6 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
   private def formatInstant(i: Instant): String =
     DateTimeFormatter.ISO_INSTANT.format(i.truncatedTo(ChronoUnit.MICROS))
 
-  sealed abstract class LockKind(val kind: String)
-  case object SuperValidatorLock extends LockKind("sv-lock")
-  case object ProvisionalFeaturedAppLock extends LockKind("provisional-fa-lock")
-
-  sealed abstract class LockStatus(val status: String)
-  case object Locked extends LockStatus("locked")
-  case object Vesting extends LockStatus("vesting")
-
   case class LockControllers(
       unlockControllers: List[List[PartyId]] = Nil,
       substitutionControllers: List[List[PartyId]] = Nil,
@@ -73,9 +60,9 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
   ) {
     final def memoEntriesWithPrefix(prefix: String) =
       List(
-        (prefix ++ "unlock-controllers") -> unlockControllers,
-        (prefix ++ "substitution-controllers") -> substitutionControllers,
-        (prefix ++ "vesting-controllers") -> vestingControllers,
+        (prefix ++ GovernanceLockUtil.Memo.unlockControllersKey) -> unlockControllers,
+        (prefix ++ GovernanceLockUtil.Memo.substitutionControllersKey) -> substitutionControllers,
+        (prefix ++ GovernanceLockUtil.Memo.vestingControllersKey) -> vestingControllers,
       )
         .filter { case (_, controllers) => controllers.nonEmpty }
         .map { case (key, controllers) =>
@@ -89,38 +76,50 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
       val request: String,
       val memoEntries: A => List[(String, String)],
   )
-  case object CreateLock extends LockRequest[LockControllers]("create-lock", _.memoEntries)
+  case object CreateLock
+      extends LockRequest[LockControllers](GovernanceLockUtil.Memo.createLockRequest, _.memoEntries)
   case object UnlockAndStartVesting
       extends LockRequest[(BigDecimal, Instant, Option[PartyId], LockControllers)](
-        "unlock-and-start-vesting",
+        GovernanceLockUtil.Memo.unlockRequest,
         { case (unlockAmount, vestingStartTime, targetLockOwner, controllers) =>
           List(
             "unlock-amount" -> unlockAmount.toString,
             "vesting-start-time" -> formatInstant(vestingStartTime),
           ) ++
-            targetLockOwner.map(p => (targetLockOwnerMemoKey, p.toProtoPrimitive)) ++
+            targetLockOwner.map(p =>
+              (GovernanceLockUtil.Memo.targetLockOwnerKey, p.toProtoPrimitive)
+            ) ++
             controllers.memoEntries
         },
       )
   case object WithdrawVestedFunds
       extends LockRequest[(Instant, RelTime, Instant, Option[PartyId], LockControllers)](
-        "withdraw-vested-funds",
+        GovernanceLockUtil.Memo.withdrawRequest,
         { case (vestedUntilTime, vestingPeriod, vestingEndTime, targetLockOwner, controllers) =>
           List(
             "vested-until-time" -> formatInstant(vestedUntilTime),
-            lockVestingDurationMemoKey -> vestingPeriod.microseconds.toString,
-            lockVestingEndTimeMemoKey -> instantToMicros(vestingEndTime).toString,
+            GovernanceLockUtil.Memo.vestingDurationKey -> vestingPeriod.microseconds.toString,
+            GovernanceLockUtil.Memo.vestingEndTimeKey -> instantToMicros(vestingEndTime).toString,
           ) ++
-            targetLockOwner.map(p => (targetLockOwnerMemoKey, p.toProtoPrimitive)) ++
+            targetLockOwner.map(p =>
+              (GovernanceLockUtil.Memo.targetLockOwnerKey, p.toProtoPrimitive)
+            ) ++
             controllers.memoEntries
         },
       )
 
   case object SubstituteLock
       extends LockRequest[
-        (LockStatus, PartyId, Option[RelTime], Option[Instant], LockControllers, LockControllers)
+        (
+            GovernanceLockUtil.LockStatus,
+            PartyId,
+            Option[RelTime],
+            Option[Instant],
+            LockControllers,
+            LockControllers,
+        )
       ](
-        "substitute-lock",
+        GovernanceLockUtil.Memo.substituteRequest,
         {
           case (
                 lockStatus,
@@ -131,11 +130,15 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
                 newControllers,
               ) =>
             List(
-              lockStatusMemoKey -> lockStatus.status,
-              targetLockOwnerMemoKey -> targetLockOwner.toProtoPrimitive,
+              GovernanceLockUtil.Memo.lockStatusKey -> lockStatus.status,
+              GovernanceLockUtil.Memo.targetLockOwnerKey -> targetLockOwner.toProtoPrimitive,
             ) ++
-              vestingPeriod.map(t => (lockVestingDurationMemoKey, t.microseconds.toString)) ++
-              vestingEndTime.map(t => (lockVestingEndTimeMemoKey, instantToMicros(t).toString)) ++
+              vestingPeriod.map(t =>
+                (GovernanceLockUtil.Memo.vestingDurationKey, t.microseconds.toString)
+              ) ++
+              vestingEndTime.map(t =>
+                (GovernanceLockUtil.Memo.vestingEndTimeKey, instantToMicros(t).toString)
+              ) ++
               targetControllers.memoEntries ++
               newControllers.memoEntriesWithPrefix("new-")
         },
@@ -144,7 +147,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
   case object TransferLock
       extends LockRequest[
         (
-            LockStatus,
+            GovernanceLockUtil.LockStatus,
             PartyId,
             BigDecimal,
             Option[RelTime],
@@ -154,7 +157,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
             LockControllers,
         )
       ](
-        "transfer-lock",
+        GovernanceLockUtil.Memo.transferRequest,
         {
           case (
                 lockStatus,
@@ -167,13 +170,19 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
                 newControllers,
               ) =>
             List(
-              lockStatusMemoKey -> lockStatus.status,
+              GovernanceLockUtil.Memo.lockStatusKey -> lockStatus.status,
               "new-lock-owner" -> newLockOwner.toProtoPrimitive,
               "transfer-amount" -> transferAmount.toString,
             ) ++
-              vestingPeriod.map(t => (lockVestingDurationMemoKey, t.microseconds.toString)) ++
-              vestingEndTime.map(t => (lockVestingEndTimeMemoKey, instantToMicros(t).toString)) ++
-              targetLockOwner.map(p => (targetLockOwnerMemoKey, p.toProtoPrimitive)) ++
+              vestingPeriod.map(t =>
+                (GovernanceLockUtil.Memo.vestingDurationKey, t.microseconds.toString)
+              ) ++
+              vestingEndTime.map(t =>
+                (GovernanceLockUtil.Memo.vestingEndTimeKey, instantToMicros(t).toString)
+              ) ++
+              targetLockOwner.map(p =>
+                (GovernanceLockUtil.Memo.targetLockOwnerKey, p.toProtoPrimitive)
+              ) ++
               sourceControllers.memoEntries ++
               newControllers.memoEntriesWithPrefix("new-")
         },
@@ -183,49 +192,49 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     lockMemoPrefix + entries.map { case (k, v) => s"$k=$v" }.mkString("&")
 
   private def commonLockMemoEntries(
-      lockKind: LockKind,
+      lockKind: GovernanceLockUtil.LockKind,
       lockSubject: String,
-  ): List[(String, String)] = List("lock-kind" -> lockKind.kind, "lock-subject" -> lockSubject)
+  ): List[(String, String)] =
+    List(
+      GovernanceLockUtil.Memo.lockKindKey -> lockKind.kind,
+      GovernanceLockUtil.Memo.lockSubjectKey -> lockSubject,
+    )
 
   def makeInputLockMemo[A](
       lockRequest: LockRequest[A],
-      lockKind: LockKind,
+      lockKind: GovernanceLockUtil.LockKind,
       lockSubject: String,
   )(data: A): String =
     makeLockMemo(
-      List("request" -> lockRequest.request) ++
+      List(GovernanceLockUtil.Memo.requestKey -> lockRequest.request) ++
         commonLockMemoEntries(lockKind, lockSubject) ++
         lockRequest.memoEntries(data)
     )
 
   def makeOutputLockMemo(
-      lockKind: LockKind,
+      lockKind: GovernanceLockUtil.LockKind,
       lockSubject: String,
-      lockStatus: LockStatus,
+      lockStatus: GovernanceLockUtil.LockStatus,
   ): String =
     makeLockMemo(
       commonLockMemoEntries(lockKind, lockSubject) ++
-        Map(lockStatusMemoKey -> lockStatus.status)
+        Map(GovernanceLockUtil.Memo.lockStatusKey -> lockStatus.status)
     )
 
   /** The memo of a pending transfer of a lock that is not vesting */
-  def makeAcceptTransferLockMemo(lockKind: LockKind, lockSubject: String): String =
+  def makeAcceptTransferLockMemo(
+      lockKind: GovernanceLockUtil.LockKind,
+      lockSubject: String,
+  ): String =
     makeLockMemo(
-      List("request" -> "accept-to-transfer-lock") ++
+      List(GovernanceLockUtil.Memo.requestKey -> "accept-to-transfer-lock") ++
         commonLockMemoEntries(lockKind, lockSubject) ++
-        Map(lockStatusMemoKey -> Locked.status)
+        Map(GovernanceLockUtil.Memo.lockStatusKey -> GovernanceLockUtil.LockStatus.Locked.status)
     )
 
   // Using a Map so order doesn't matter when comparing below
   private def extractLockMemoEntries(memo: String): Map[String, String] =
-    memo
-      .stripPrefix(lockMemoPrefix)
-      .split("&")
-      .flatMap(_.split("=", 2) match {
-        case Array(k, v) => Some((k, v))
-        case _ => None
-      })
-      .toMap
+    GovernanceLockUtil.Memo.parseFields(memo).getOrElse(Map.empty)
 
   def isVestingLock(lock: gl.GovernanceLock): Boolean =
     GovernanceLockUtil.getVestingLockSpecification(lock).isDefined
@@ -379,7 +388,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     final def createGovernanceLock(
         participant: ParticipantClientReference,
         owner: RichPartyId,
-        lockKind: LockKind,
+        lockKind: GovernanceLockUtil.LockKind,
         lockSubject: String,
         amount: BigDecimal,
         controllers: LockControllers,
@@ -399,17 +408,20 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
       ).loneElement._1
     }
 
-    private def atMostOneVestingLock(locks: Seq[(CId, View)]): Option[(CId, View)] =
+    private def atMostOne(
+        type_ : String,
+        locks: Seq[(CId, View)],
+    ): Option[(CId, View)] =
       locks match {
         case Seq() => None
         case Seq(cid) => Some(cid)
-        case many => fail(s"Expected at most one vesting lock, got $many")
+        case many => fail(s"Expected at most one ${type_}, got $many")
       }
 
     final def unlockGovernanceLock(
         participant: ParticipantClientReference,
         proposers: NonEmptyList[RichPartyId],
-        lockKind: LockKind,
+        lockKind: GovernanceLockUtil.LockKind,
         lockSubject: String,
         unlockAmount: BigDecimal,
         vestingStartTime: Instant,
@@ -420,7 +432,8 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
       // The proposer may already have pending instructions, so only look at new ones
       val existingCids = listTransfers(participant, proposers.head.partyId).map(_._1).toSet
 
-      atMostOneVestingLock(
+      atMostOne(
+        "vesting lock",
         transferAndList(
           "request an unlock of the GovernanceLock",
           "a new pending TransferInstruction is created",
@@ -434,14 +447,14 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
           (cid, view) =>
             defaultIsValid(GovernanceLockUtil.lockManagerParty, existingCids)(cid, view) &&
               isValid(view),
-        )
+        ),
       )
     }
 
     final def withdrawVestingLock(
         participant: ParticipantClientReference,
         proposers: NonEmptyList[RichPartyId],
-        lockKind: LockKind,
+        lockKind: GovernanceLockUtil.LockKind,
         lockSubject: String,
         vestingLock: gl.GovernanceLock,
         vestedUntilTime: Instant,
@@ -451,7 +464,8 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
       // The proposer may already have pending instructions, so only look at new ones
       val existingCids = listTransfers(participant, proposers.head.partyId).map(_._1).toSet
 
-      atMostOneVestingLock(
+      atMostOne(
+        "vesting lock",
         transferAndList(
           "withdraw the vesting lock",
           "at most one new pending TransferInstruction is created",
@@ -469,12 +483,12 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
           ),
           wait = false,
           defaultIsValid(GovernanceLockUtil.lockManagerParty, existingCids),
-        )
+        ),
       )
     }
 
     final class SubstituteLock(
-        lockStatus: LockStatus,
+        lockStatus: GovernanceLockUtil.LockStatus,
         targetLockOwner: PartyId,
         vestingPeriod: Option[RelTime],
         vestingEndTime: Option[Instant],
@@ -482,42 +496,45 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
       final def apply(
           participant: ParticipantClientReference,
           proposer: RichPartyId,
-          lockKind: LockKind,
+          lockKind: GovernanceLockUtil.LockKind,
           lockSubject: String,
           substitutionAmount: BigDecimal,
           targetControllers: LockControllers,
           newControllers: LockControllers,
-      )(implicit env: SpliceTestConsoleEnvironment): (CId, View) = {
+      )(implicit env: SpliceTestConsoleEnvironment): Option[(CId, View)] = {
         // The proposer may already have pending instructions, so only look at new ones
         val existingCids = listTransfers(participant, proposer.partyId).map(_._1).toSet
 
-        transferAndList(
-          "propose a substitution",
-          "the substitution is now a pending TransferInstruction to the owner of the target lock",
-          participant,
-          NonEmptyList.one(proposer),
-          substitutionAmount,
-          makeInputLockMemo(SubstituteLock, lockKind, lockSubject)(
-            (
-              lockStatus,
-              targetLockOwner,
-              vestingPeriod,
-              vestingEndTime,
-              targetControllers,
-              newControllers,
-            )
+        atMostOne(
+          "substitution",
+          transferAndList(
+            "propose a substitution",
+            "the substitution is now a pending TransferInstruction to the owner of the target lock",
+            participant,
+            NonEmptyList.one(proposer),
+            substitutionAmount,
+            makeInputLockMemo(SubstituteLock, lockKind, lockSubject)(
+              (
+                lockStatus,
+                targetLockOwner,
+                vestingPeriod,
+                vestingEndTime,
+                targetControllers,
+                newControllers,
+              )
+            ),
+            // A substitution proposed by the owner of the target lock locks no funds,
+            // so no input holding is archived
+            wait = proposer.partyId != targetLockOwner,
+            defaultIsValid(targetLockOwner, existingCids),
           ),
-          // A substitution proposed by the owner of the target lock locks no funds,
-          // so no input holding is archived
-          wait = proposer.partyId != targetLockOwner,
-          defaultIsValid(targetLockOwner, existingCids),
-        ).loneElement
+        )
       }
     }
 
     /** Propose a substitution of a GovernanceLock with the given owner */
     def substituteGovernanceLock(owner: PartyId): SubstituteLock =
-      new SubstituteLock(Locked, owner, None, None)
+      new SubstituteLock(GovernanceLockUtil.LockStatus.Locked, owner, None, None)
 
     /** Propose a substitution of a GovernanceLock */
     def substituteGovernanceLock(lock: gl.GovernanceLock): SubstituteLock =
@@ -526,7 +543,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     /** Propose a substitution of a vesting GovernanceLock with the given attributes */
     def substituteVestingLock(owner: PartyId, vestingPeriod: Duration, vestingEndTime: Instant) =
       new SubstituteLock(
-        Vesting,
+        GovernanceLockUtil.LockStatus.Vesting,
         owner,
         Some(durationToRelTime(vestingPeriod)),
         Some(vestingEndTime),
@@ -535,69 +552,77 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
     /** Propose a substitution of a vesting GovernanceLock */
     def substituteVestingLock(lock: gl.GovernanceLock) =
       new SubstituteLock(
-        Vesting,
+        GovernanceLockUtil.LockStatus.Vesting,
         PartyId.tryFromProtoPrimitive(lock.owner),
         Some(vestingLockSpecification(lock).vestingPeriod),
         Some(vestingLockSpecification(lock).endTime),
       )
 
     final class TransferLock(
-        lockStatus: LockStatus,
+        lockStatus: GovernanceLockUtil.LockStatus,
         vestingPeriod: Option[RelTime],
         vestingEndTime: Option[Instant],
     ) {
       final def apply(
           participant: ParticipantClientReference,
-          owner: RichPartyId,
-          lockKind: LockKind,
+          proposers: NonEmptyList[RichPartyId],
+          lockKind: GovernanceLockUtil.LockKind,
           lockSubject: String,
           newLockOwner: PartyId,
           targetLockOwner: Option[PartyId],
           transferAmount: BigDecimal,
           sourceControllers: LockControllers,
           newControllers: LockControllers,
-      )(implicit env: SpliceTestConsoleEnvironment): (CId, View) = {
+      )(implicit env: SpliceTestConsoleEnvironment): Option[(CId, View)] = {
         // `owner` may already have pending instructions, so only look at new ones
-        val existingCids = listTransfers(participant, owner.partyId).map(_._1).toSet
+        val existingCids = listTransfers(participant, newLockOwner.partyId).map(_._1).toSet
 
-        transferAndList(
-          "the owner proposes the lock transfer",
-          "the lock transfer is now a pending TransferInstruction to the new owner",
-          participant,
-          NonEmptyList.one(owner),
-          0,
-          makeInputLockMemo(TransferLock, lockKind, lockSubject)(
-            (
-              lockStatus,
-              newLockOwner,
-              transferAmount,
-              vestingPeriod,
-              vestingEndTime,
-              targetLockOwner,
-              sourceControllers,
-              newControllers,
-            )
+        atMostOne(
+          "transfer",
+          transferAndList(
+            "propose the lock transfer",
+            "the lock transfer is now a pending TransferInstruction to the new owner",
+            participant,
+            proposers,
+            0,
+            makeInputLockMemo(TransferLock, lockKind, lockSubject)(
+              (
+                lockStatus,
+                newLockOwner,
+                transferAmount,
+                vestingPeriod,
+                vestingEndTime,
+                targetLockOwner,
+                sourceControllers,
+                newControllers,
+              )
+            ),
+            // A lock transfer proposal moves no funds, so no input holding is archived
+            wait = false,
+            defaultIsValid(newLockOwner, existingCids),
           ),
-          // A lock transfer proposal moves no funds, so no input holding is archived
-          wait = false,
-          defaultIsValid(newLockOwner, existingCids),
-        ).loneElement
+        )
       }
     }
 
     /** Propose a transfer of a GovernanceLock */
-    final val transferGovernanceLock = new TransferLock(Locked, None, None)
+    final val transferGovernanceLock =
+      new TransferLock(GovernanceLockUtil.LockStatus.Locked, None, None)
 
     /** Propose a transfer of a vesting GovernanceLock */
     final def transferVestingLock(vestingPeriod: Duration, vestingEndTime: Instant) =
-      new TransferLock(Vesting, Some(durationToRelTime(vestingPeriod)), Some(vestingEndTime))
+      new TransferLock(
+        GovernanceLockUtil.LockStatus.Vesting,
+        Some(durationToRelTime(vestingPeriod)),
+        Some(vestingEndTime),
+      )
 
     /** Propose a transfer of part of a vesting GovernanceLock, keeping its
       * vesting schedule
       */
     final def transferVestingLock(lock: gl.GovernanceLock) =
       new TransferLock(
-        Vesting,
+        GovernanceLockUtil.LockStatus.Vesting,
         Some(vestingLockSpecification(lock).vestingPeriod),
         Some(vestingLockSpecification(lock).endTime),
       )
@@ -742,25 +767,16 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
       final val all = List(alice, bob, charlie, sv1)
     }
 
-    private def makeParty(
-        walletAppClient: WalletAppClientReference,
-        validator: ValidatorAppBackendReference,
-    ): Party =
-      Party(
-        RichPartyId.local(onboardWalletUser(walletAppClient, validator)),
-        validator.participantClientWithAdminToken,
-      )
+    // The shape of a function that creates a proposal,
+    // returning its contract id and transfer instruction view
+    type Propose[CId, View] = (
+        Parties,
+        ParticipantClientReference,
+        NonEmptyList[RichPartyId],
+        LockControllers,
+    ) => Option[(CId, View)]
 
-    def testProposal[
-        ICId <: ContractId[?],
-        IView,
-        TCId <: ContractId[T],
-        TC <: Contract[TCId, T],
-        T <: Template,
-    ](
-        ops: TokenStandardOps[ICId, IView],
-        proposalCompanion: ContractCompanion[TC, TCId, T],
-    )(
+    case class TestProposalArgs[CId <: ContractId[?], View](
         // The custom controllers to use when testing the proposal
         makeControllers: Parties => List[List[Party]],
         // How to set the custom controllers in the `LockControllers`
@@ -770,7 +786,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
         // The set of parties who propose the proposal when testing acceptance
         makeAcceptProposers: Parties => NonEmptyList[Party],
         // The set of parties who accept the proposal when testing acceptance
-        makeAcceptors: Parties => NonEmptyList[Party],
+        makeAcceptors: Parties => List[Party],
         // The set of parties who propose the proposal when testing rejection
         makeRejectProposers: Parties => NonEmptyList[Party],
         // The set of parties who reject the proposal when testing rejection
@@ -778,12 +794,7 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
         // The set of parties who propose the proposal when testing withdrawal
         makeWithdrawProposers: Parties => NonEmptyList[Party],
         // Create the proposal; return its contract id and transfer instruction view
-        propose: (
-            Parties,
-            ParticipantClientReference,
-            NonEmptyList[RichPartyId],
-            LockControllers,
-        ) => (ICId, IView),
+        propose: Propose[CId, View],
         // The amount expected to be reported on the proposal's transfer instruction view
         expectedAmount: BigDecimal,
         // The receiver expected to be reported on the proposal's transfer instruction view
@@ -791,43 +802,68 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
         // The set of parties that are expected to own locks after the proposal is accepted
         makeUpdatedLockOwners: Parties => List[Party],
         // A function to check the updated set of locks after the proposal is accepted
-        checkUpdatedLocks: (Parties, Seq[(ICId, IView, gl.GovernanceLock.Contract)]) => Unit,
-    )(implicit env: SpliceTestConsoleEnvironment): Seq[gl.GovernanceLock.Contract] = {
-      // Lock and proposal setup
-      // -----------------------
+        checkUpdatedLocks: (Parties, Seq[(CId, View, gl.GovernanceLock.Contract)]) => Unit,
+    )
 
-      val parties = Parties(
+    private def makeParty(
+        walletAppClient: WalletAppClientReference,
+        validator: ValidatorAppBackendReference,
+    ): Party =
+      Party(
+        RichPartyId.local(onboardWalletUser(walletAppClient, validator)),
+        validator.participantClientWithAdminToken,
+      )
+
+    private def makeParties(implicit env: SpliceTestConsoleEnvironment): Parties =
+      Parties(
         alice = makeParty(aliceWalletClient, aliceValidatorBackend),
         bob = makeParty(bobWalletClient, bobValidatorBackend),
         charlie = makeParty(charlieWalletClient, aliceValidatorBackend),
         sv1 = makeParty(sv1WalletClient, sv1ValidatorBackend),
       )
-      val controllers = makeLockControllers(makeControllers(parties).map(_.map(_.partyId)))
-      val (lockOwner, origLockCid) = setupLock(parties, controllers)
 
-      def setupProposal(
-          makeProposers: Parties => NonEmptyList[Party]
-      ): (ICId, NonEmptyList[Party], List[Party]) = {
-        val proposers = ops match {
-          // TSv1 can only have one proposer
-          case `tsv1Operations` => NonEmptyList.one(makeProposers(parties).head)
-          case `tsv2Operations` => makeProposers(parties).sortBy(_.partyId.toProtoPrimitive)
-        }
-        val firstProposer = proposers.head
+    private def setupProposal[
+        ICId <: ContractId[?],
+        IView,
+        TCId <: ContractId[T],
+        TC <: Contract[TCId, T],
+        T <: Template,
+    ](
+        ops: TokenStandardOps[ICId, IView],
+        proposalCompanion: ContractCompanion[TC, TCId, T],
+    )(
+        parties: Parties,
+        controllers: LockControllers,
+        makeProposers: Parties => NonEmptyList[Party],
+        makeActors: Parties => List[Party],
+        propose: Propose[ICId, IView],
+        expectedAmount: BigDecimal,
+        expectedReceiver: Parties => PartyId,
+    ): (Option[ICId], NonEmptyList[Party], List[Party]) = {
+      val proposers = ops match {
+        // TSv1 can only have one proposer
+        case `tsv1Operations` => NonEmptyList.one(makeProposers(parties).head)
+        case `tsv2Operations` => makeProposers(parties).sortBy(_.partyId.toProtoPrimitive)
+      }
+      val firstProposer = proposers.head
 
-        // all proposers must be hosted on the same validator
-        proposers.map(_.participant.name).toList.toSet.size shouldBe 1
+      // all proposers must be hosted on the same validator
+      proposers.map(_.participant.name).toList.toSet.size shouldBe 1
 
-        val proposersSet = proposers.toList.map(_.partyId).toSet
-        val nonProposers = parties.all.filterNot(p => proposersSet.contains(p.partyId))
+      val proposersSet = proposers.toList.map(_.partyId).toSet
+      val nonProposers = parties.all.filterNot(p => proposersSet.contains(p.partyId))
 
-        // the proposers initiate the proposal
-        val (proposalCid, proposalView) = propose(
-          parties,
-          firstProposer.participant,
-          proposers.map(_.richPartyId),
-          controllers,
-        )
+      // the proposers initiate the proposal
+      val proposalTuple = propose(
+        parties,
+        firstProposer.participant,
+        proposers.map(_.richPartyId),
+        controllers,
+      )
+
+      if (makeActors(parties).nonEmpty) {
+        val (proposalCid, proposalView) = proposalTuple.value
+
         // Prove that proposalCid is the correct proposal type
         val _ = firstProposer.participant.ledger_api_extensions.acs
           .filterJava(proposalCompanion)(
@@ -846,15 +882,176 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
             tiaReject -> nonProposers.map(_.partyId.toProtoPrimitive).toSet,
             tiaWithdraw -> proposers.toList.map(_.partyId.toProtoPrimitive).toSet,
           )
-
-        (proposalCid, proposers, nonProposers)
       }
+
+      (proposalTuple.map(_._1), proposers, nonProposers)
+    }
+
+    def testProposalAcceptance[
+        ICId <: ContractId[?],
+        IView,
+        TCId <: ContractId[T],
+        TC <: Contract[TCId, T],
+        T <: Template,
+    ](
+        ops: TokenStandardOps[ICId, IView],
+        proposalCompanion: ContractCompanion[TC, TCId, T],
+    )(
+        args: TestProposalArgs[ICId, IView],
+        optParties: Option[Parties] = None,
+    )(implicit env: SpliceTestConsoleEnvironment): Seq[gl.GovernanceLock.Contract] = {
+      import args.*
+
+      val parties = optParties.getOrElse(makeParties)
+      val controllers = makeLockControllers(makeControllers(parties).map(_.map(_.partyId)))
+      val (lockOwner, origLockCid) = setupLock(parties, controllers)
+
+      val (optProposalBeforeAcceptCid, acceptProposers, acceptNonProposers) =
+        setupProposal(ops, proposalCompanion)(
+          parties,
+          controllers,
+          makeAcceptProposers,
+          makeAcceptors,
+          propose,
+          expectedAmount,
+          expectedReceiver,
+        )
+
+      optProposalBeforeAcceptCid.foreach { cid =>
+        clue("Scan serves an accept choice context for the proposal") {
+          ops.getAcceptContext(cid).disclosedContracts should not be empty
+        }
+      }
+
+      def expectUpdatedLocks(): Seq[gl.GovernanceLock.Contract] = {
+        val locks = makeUpdatedLockOwners(parties)
+          .flatMap { lockHolder =>
+            val transferCidToView: Map[String, (ICId, IView)] =
+              ops
+                .listTransfers(lockHolder.participant, lockHolder.partyId)
+                .map { case (cid, view) => (cid.contractId, (cid, view)) }
+                .toMap
+
+            lockHolder.participant.ledger_api_extensions.acs
+              .filterJava(gl.GovernanceLock.COMPANION)(
+                lockHolder.partyId,
+                predicate = l => transferCidToView.contains(l.id.contractId),
+              )
+              .map { lock =>
+                val (cid, view) = transferCidToView(lock.id.contractId)
+                (cid, view, lock)
+              }
+          }
+          .distinctBy(_._1.contractId)
+
+        checkUpdatedLocks(parties, locks)
+        locks.map(_._3)
+      }
+
+      val acceptors = makeAcceptors(parties)
+
+      // If acceptors is empty, it's expected that the proposal was executed immediately
+      if (acceptors.isEmpty) expectUpdatedLocks()
+      else {
+        val (_, _, locks) = acceptors.zipWithIndex.foldLeft(
+          (
+            optProposalBeforeAcceptCid.value,
+            Set.empty[PartyId],
+            Seq.empty[gl.GovernanceLock.Contract],
+          )
+        ) { case ((accProposalCid, accAcceptors, accLocks), (acceptor, idx)) =>
+          tsv2Operations.acceptTransfer(
+            acceptor.participant,
+            acceptor.richPartyId,
+            tsv2Operations.makeCId(accProposalCid.contractId),
+          )
+
+          if (idx == acceptors.length - 1) {
+            // the final acceptance triggers execution of the proposal
+            (accProposalCid, accAcceptors, expectUpdatedLocks())
+          } else {
+            // the proposal remains pending after acceptance
+            val updAcceptors = accAcceptors + acceptor.partyId
+            val (stillPendingProposalCid, stillPendingProposalView) = ops
+              .listTransfers(acceptProposers.head.participant, acceptProposers.head.partyId)
+              .filter { case (_, view) =>
+                ops.transferValues.originalInstructionCid(view) == optProposalBeforeAcceptCid
+              }
+              .loneElement
+            // prove that the proposal is the correct type
+            val _ =
+              acceptProposers.head.participant.ledger_api_extensions.acs
+                .filterJava(proposalCompanion)(
+                  acceptProposers.head.partyId,
+                  predicate = _.id.contractId == stillPendingProposalCid.contractId,
+                )
+                .loneElement
+
+            ops.transferValues.sender(stillPendingProposalView) shouldBe
+              acceptProposers.head.partyId.toProtoPrimitive
+            ops.transferValues.receiver(stillPendingProposalView) shouldBe
+              expectedReceiver(parties).toProtoPrimitive
+            ops.transferValues.amount(stillPendingProposalView) shouldBe expectedAmount
+            ops.transferValues.pendingActions(stillPendingProposalView) shouldBe
+              Map(
+                tiaAccept -> acceptNonProposers
+                  .filterNot(p => updAcceptors.contains(p.partyId))
+                  .map(_.partyId.toProtoPrimitive)
+                  .toSet,
+                tiaReject -> acceptNonProposers.map(_.partyId.toProtoPrimitive).toSet,
+                tiaWithdraw -> acceptProposers.toList.map(_.partyId.toProtoPrimitive).toSet,
+              )
+
+            (stillPendingProposalCid, updAcceptors, accLocks)
+          }
+        }
+
+        locks
+      }
+    }
+
+    def testProposal[
+        ICId <: ContractId[?],
+        IView,
+        TCId <: ContractId[T],
+        TC <: Contract[TCId, T],
+        T <: Template,
+    ](
+        ops: TokenStandardOps[ICId, IView],
+        proposalCompanion: ContractCompanion[TC, TCId, T],
+    )(
+        args: TestProposalArgs[ICId, IView]
+    )(implicit env: SpliceTestConsoleEnvironment): Seq[gl.GovernanceLock.Contract] = {
+      import args.*
+
+      // Lock setup
+      // -----------------------
+
+      val parties = Parties(
+        alice = makeParty(aliceWalletClient, aliceValidatorBackend),
+        bob = makeParty(bobWalletClient, bobValidatorBackend),
+        charlie = makeParty(charlieWalletClient, aliceValidatorBackend),
+        sv1 = makeParty(sv1WalletClient, sv1ValidatorBackend),
+      )
+      val controllers = makeLockControllers(makeControllers(parties).map(_.map(_.partyId)))
+      val (lockOwner, origLockCid) = setupLock(parties, controllers)
+
+      val setupProposal = customControllers.setupProposal(ops, proposalCompanion)(
+        parties,
+        controllers,
+        _,
+        _,
+        propose,
+        expectedAmount,
+        expectedReceiver,
+      )
 
       // Proposal rejection
       // ------------------
 
-      val (proposalBeforeRejectCid, rejectProposers, rejectNonProposers) =
-        setupProposal(makeRejectProposers)
+      val (optProposalBeforeRejectCid, rejectProposers, rejectNonProposers) =
+        setupProposal(makeRejectProposers, makeRejectors(_).toList)
+      val proposalBeforeRejectCid = optProposalBeforeRejectCid.value
 
       clue("Scan serves a reject choice context for the proposal") {
         ops.getRejectContext(proposalBeforeRejectCid).disclosedContracts should not be empty
@@ -916,8 +1113,9 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
       // Proposal withdrawal
       // -------------------
 
-      val (proposalBeforeWithdrawCid, withdrawProposers, withdrawNonProposers) =
-        setupProposal(makeWithdrawProposers)
+      val (optProposalBeforeWithdrawCid, withdrawProposers, withdrawNonProposers) =
+        setupProposal(makeWithdrawProposers, makeWithdrawProposers(_).toList)
+      val proposalBeforeWithdrawCid = optProposalBeforeWithdrawCid.value
 
       clue("Scan serves a withdraw choice context for the proposal") {
         ops.getWithdrawContext(proposalBeforeWithdrawCid).disclosedContracts should not be empty
@@ -977,89 +1175,10 @@ trait GovernanceLockTest extends TokenStandardTest with WalletTestUtil {
       // Proposal acceptance
       // -------------------
 
-      val (proposalBeforeAcceptCid, acceptProposers, acceptNonProposers) =
-        setupProposal(makeAcceptProposers)
-
-      clue("Scan serves an accept choice context for the proposal") {
-        ops.getAcceptContext(proposalBeforeAcceptCid).disclosedContracts should not be empty
-      }
-
-      val acceptors = makeAcceptors(parties)
-      val (_, _, locks) = acceptors.zipWithIndex.foldLeft(
-        (
-          proposalBeforeAcceptCid,
-          Set.empty[PartyId],
-          Seq.empty[gl.GovernanceLock.Contract],
-        )
-      ) { case ((accProposalCid, accAcceptors, accLocks), (acceptor, idx)) =>
-        tsv2Operations.acceptTransfer(
-          acceptor.participant,
-          acceptor.richPartyId,
-          tsv2Operations.makeCId(accProposalCid.contractId),
-        )
-
-        if (idx == acceptors.length - 1) {
-          // the final acceptance triggers execution of the proposal
-          val locks = makeUpdatedLockOwners(parties)
-            .flatMap { lockHolder =>
-              val transferCidToView: Map[String, (ICId, IView)] =
-                ops
-                  .listTransfers(lockHolder.participant, lockHolder.partyId)
-                  .map { case (cid, view) => (cid.contractId, (cid, view)) }
-                  .toMap
-
-              lockHolder.participant.ledger_api_extensions.acs
-                .filterJava(gl.GovernanceLock.COMPANION)(
-                  lockHolder.partyId,
-                  predicate = l => transferCidToView.contains(l.id.contractId),
-                )
-                .map { lock =>
-                  val (cid, view) = transferCidToView(lock.id.contractId)
-                  (cid, view, lock)
-                }
-            }
-            .distinctBy(_._1.contractId)
-
-          checkUpdatedLocks(parties, locks)
-          (accProposalCid, accAcceptors, locks.map(_._3))
-        } else {
-          // the proposal remains pending after acceptance
-          val updAcceptors = accAcceptors + acceptor.partyId
-          val (stillPendingProposalCid, stillPendingProposalView) = ops
-            .listTransfers(acceptProposers.head.participant, acceptProposers.head.partyId)
-            .filter { case (_, view) =>
-              ops.transferValues.originalInstructionCid(view) == Some(proposalBeforeAcceptCid)
-            }
-            .loneElement
-          // prove that the proposal is the correct type
-          val _ =
-            acceptProposers.head.participant.ledger_api_extensions.acs
-              .filterJava(proposalCompanion)(
-                acceptProposers.head.partyId,
-                predicate = _.id.contractId == stillPendingProposalCid.contractId,
-              )
-              .loneElement
-
-          ops.transferValues.sender(stillPendingProposalView) shouldBe
-            acceptProposers.head.partyId.toProtoPrimitive
-          ops.transferValues.receiver(stillPendingProposalView) shouldBe
-            expectedReceiver(parties).toProtoPrimitive
-          ops.transferValues.amount(stillPendingProposalView) shouldBe expectedAmount
-          ops.transferValues.pendingActions(stillPendingProposalView) shouldBe
-            Map(
-              tiaAccept -> acceptNonProposers
-                .filterNot(p => updAcceptors.contains(p.partyId))
-                .map(_.partyId.toProtoPrimitive)
-                .toSet,
-              tiaReject -> acceptNonProposers.map(_.partyId.toProtoPrimitive).toSet,
-              tiaWithdraw -> acceptProposers.toList.map(_.partyId.toProtoPrimitive).toSet,
-            )
-
-          (stillPendingProposalCid, updAcceptors, accLocks)
-        }
-      }
-
-      locks
+      testProposalAcceptance(ops, proposalCompanion)(
+        args.copy(setupLock = (_, _) => (lockOwner, origLockCid)),
+        Some(parties),
+      )
     }
   }
 }

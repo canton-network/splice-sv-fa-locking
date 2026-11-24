@@ -40,7 +40,7 @@ import org.lfdecentralizedtrust.splice.codegen.java.splice.{
   round as roundCodegen,
 }
 import org.lfdecentralizedtrust.splice.environment.{DarResources, RetryProvider}
-import org.lfdecentralizedtrust.splice.scan.store.db.{DbScanStore, DbScanStoreMetrics}
+import org.lfdecentralizedtrust.splice.scan.store.db.{DbScanStore, DbScanStoreMetrics, ScanTables}
 import org.lfdecentralizedtrust.splice.scan.store.*
 import org.lfdecentralizedtrust.splice.store.MultiDomainAcsStore.ContractState.Assigned
 import org.lfdecentralizedtrust.splice.store.UpdateHistory.BackfillingRequirement
@@ -1467,6 +1467,56 @@ class DbScanStoreTest
     for {
       _ <- resetAllAppTables(storage)
     } yield ()
+
+  "listGovernanceLocksByKey" should {
+    "find locks stored without the optional fields added to the specification since" in {
+      val owner = userParty(1)
+      val sv1 = new splice.governancelock.governancelockkind.GLK_SuperValidatorRightsOwner("sv1")
+      val fullLock = governanceLock(owner, BigDecimal(10), kind = sv1)
+      val vestingLock = governanceLock(
+        owner,
+        BigDecimal(20),
+        kind = sv1,
+        vestingEndTime = Some(Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS)),
+      )
+      val lockIds = Seq(fullLock, vestingLock).map(_.contractId.contractId)
+      for {
+        store <- mkStore()
+        _ <- MonadUtil.sequentialTraverse(Seq(fullLock, vestingLock))(
+          dummyDomain.create(_)(store.multiDomainAcsStore)
+        )
+        // Earlier releases stored the specification without these fields, not with `null`
+        updated <- storage
+          .update(
+            sqlu"""
+              update #${ScanTables.acsTableName}
+              set create_arguments = create_arguments
+                #- '{specification,value,controllers}'
+                #- '{specification,value,vestingControllers}'
+              where contract_id in (${lockIds(0)}, ${lockIds(1)})
+                and ((create_arguments->'specification'->'value') - 'controllers' - 'vestingControllers')
+                  <> (create_arguments->'specification'->'value')
+            """,
+            "removeSpecificationFields",
+          )
+          .failOnShutdownToAbortException("removeSpecificationFields")
+        locksByKey <- MonadUtil.sequentialTraverse(Seq(fullLock, vestingLock)) { lock =>
+          store.listGovernanceLocksByKey(
+            new splice.governancelock.GovernanceLockKey(
+              lock.payload.dso,
+              lock.payload.owner,
+              lock.payload.specification,
+            ),
+            PageLimit.tryCreate(10),
+          )
+        }
+      } yield {
+        updated shouldBe 2
+        locksByKey.map(_.map(_.contract.contractId)) shouldBe
+          Seq(Seq(fullLock.contractId), Seq(vestingLock.contractId))
+      }
+    }
+  }
 
   "bigquery-replicated-tables.yaml" should {
 

@@ -37,6 +37,7 @@ import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.dsorules_act
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock.{
   GovernanceLock,
   GovernanceLockKey,
+  GovernanceLockSpecification,
 }
 import org.lfdecentralizedtrust.splice.codegen.java.splice.externalpartyamuletrules.ExternalPartyAmuletRules
 import org.lfdecentralizedtrust.splice.codegen.java.splice.validatorlicense.ValidatorLicense
@@ -53,6 +54,7 @@ import org.lfdecentralizedtrust.splice.store.MultiDomainAcsStore.ContractCompani
 import org.lfdecentralizedtrust.splice.store.db.StoreDescriptor
 import org.lfdecentralizedtrust.splice.store.db.{
   SingleSynchronizerAcsQueries,
+  AcsJdbcTypes,
   AcsTables,
   DbTxLogAppStore,
   TxLogQueries,
@@ -76,6 +78,7 @@ import org.lfdecentralizedtrust.splice.util.{
   TemplateJsonDecoder,
 }
 import slick.jdbc.canton.ActionBasedSQLInterpolation.Implicits.actionBasedSQLInterpolationCanton
+import io.circe.Json
 import io.grpc.Status
 import org.lfdecentralizedtrust.splice.config.IngestionConfig
 import org.lfdecentralizedtrust.splice.store.UpdateHistoryQueries.UpdateHistoryQueries
@@ -192,6 +195,29 @@ object DbScanStore {
         "dsoParty" -> key.dsoParty.toProtoPrimitive
       ),
       userVersion = txLogStoreDescriptorUserVersion,
+    )
+
+  /** The JSON of a governance lock specification, as [[DbScanStore.listGovernanceLocksByKey]]
+    * compares it with `jsonb_strip_nulls` of the stored specification.
+    *
+    * Upgrades of the Daml package add optional fields at the end of a record. Releases before an
+    * upgrade store the specification without these fields, later releases store them as `null`.
+    * Removing all fields with a `null` value on both sides makes the two forms equal.
+    */
+  private[db] def governanceLockSpecificationJson(
+      specification: GovernanceLockSpecification
+  ): Json = stripNulls(AcsJdbcTypes.payloadJsonFromDefinedDataType(specification))
+
+  // Same as Postgres' `jsonb_strip_nulls`: removes the fields with a `null` value from all
+  // objects, recursively, but keeps `null` elements of arrays.
+  private def stripNulls(json: Json): Json =
+    json.arrayOrObject(
+      json,
+      array => Json.fromValues(array.map(stripNulls)),
+      obj =>
+        Json.fromJsonObject(
+          obj.filter { case (_, value) => !value.isNull }.mapValues(stripNulls)
+        ),
     )
 }
 class DbScanStore private (
@@ -450,7 +476,7 @@ class DbScanStore private (
     waitUntilAcsIngested {
       val (lockType, lockSubject) =
         GovernanceLockUtil.specificationTypeAndSubject(key.specification)
-      val specification = payloadJsonFromDefinedDataType(key.specification)
+      val specification = DbScanStore.governanceLockSpecificationJson(key.specification)
       for {
         rows <- storage.query(
           selectFromAcsTableWithState(
@@ -460,11 +486,13 @@ class DbScanStore private (
             GovernanceLock.COMPANION,
             // The type and subject use the index, but only the specification
             // also matches the vesting period and end time.
+            // jsonb_strip_nulls makes specifications stored by earlier releases, which lack
+            // optional fields added since, equal to the ones with these fields set to null.
             additionalWhere = sql"""
               and governance_lock_type = ${lengthLimited(lockType.storeValue)}
               and governance_lock_subject = ${lengthLimited(lockSubject)}
               and create_arguments->>'owner' = ${key.owner}
-              and create_arguments->'specification' = $specification
+              and jsonb_strip_nulls(create_arguments->'specification') = $specification
             """,
             orderLimit = sql"""
               order by (create_arguments->>'amount')::numeric desc, event_number
