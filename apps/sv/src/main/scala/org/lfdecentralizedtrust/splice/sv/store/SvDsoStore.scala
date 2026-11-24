@@ -1136,7 +1136,6 @@ trait SvDsoStore
       tc: TraceContext
   ): Future[Seq[PartyId]]
 
-  /** A provider's `FeaturedAppRight`s, newest first like `lookupFeaturedAppRight`. */
   def listFeaturedAppRightsForProvider(provider: PartyId, limit: Limit)(implicit
       tc: TraceContext
   ): Future[Seq[
