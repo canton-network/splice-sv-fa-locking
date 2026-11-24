@@ -486,12 +486,48 @@ abstract class StoreTestBase
     )
   }
 
-  protected def fullLockSpecification(kind: governancelockCodegen.GovernanceLockKind) =
+  protected def controllersSpecification(
+      controllers: Option[Seq[Seq[PartyId]]]
+  ): Optional[governancelockCodegen.controllers.ControllersSpecification] =
+    controllers.map { sets =>
+      new governancelockCodegen.controllers.ControllersSpecification(
+        sets.map(_.map(_.toProtoPrimitive).asJava).asJava
+      )
+    }.toJava
+
+  protected def fullLockSpecification(
+      kind: governancelockCodegen.GovernanceLockKind,
+      unlockControllers: Option[Seq[Seq[PartyId]]] = None,
+      substitutionControllers: Option[Seq[Seq[PartyId]]] = None,
+      vestingControllers: Option[Seq[Seq[PartyId]]] = None,
+  ) =
     new governancelockCodegen.governancelockspecification.GLS_FullLock(
       new governancelockCodegen.FullLockSpecification(
         kind,
-        // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
-        None.toJava,
+        if (Seq(unlockControllers, substitutionControllers, vestingControllers).exists(_.nonEmpty))
+          Optional.of(
+            new governancelockCodegen.controllers.GovernanceLockControllers(
+              controllersSpecification(unlockControllers),
+              controllersSpecification(substitutionControllers),
+              controllersSpecification(vestingControllers),
+            )
+          )
+        else Optional.empty(),
+      )
+    )
+
+  protected def vestingLockSpecification(
+      kind: governancelockCodegen.GovernanceLockKind,
+      endTime: Instant,
+      vestingPeriod: RelTime = new RelTime(1_000_000),
+      vestingControllers: Option[Seq[Seq[PartyId]]] = None,
+  ) =
+    new governancelockCodegen.governancelockspecification.GLS_VestingLock(
+      new governancelockCodegen.VestingLockSpecification(
+        kind,
+        vestingPeriod,
+        endTime,
+        controllersSpecification(vestingControllers),
       )
     )
 
@@ -504,6 +540,9 @@ abstract class StoreTestBase
       vestingEndTime: Option[Instant] = None,
       vestingPeriod: RelTime = new RelTime(1_000_000),
       contractId: String = nextCid(),
+      unlockControllers: Option[Seq[Seq[PartyId]]] = None,
+      substitutionControllers: Option[Seq[Seq[PartyId]]] = None,
+      vestingControllers: Option[Seq[Seq[PartyId]]] = None,
   ): Contract[
     governancelockCodegen.GovernanceLock.ContractId,
     governancelockCodegen.GovernanceLock,
@@ -518,15 +557,14 @@ abstract class StoreTestBase
         new LockedAmulet.ContractId(nextCid()),
         vestingEndTime match {
           case Some(endTime) =>
-            new governancelockCodegen.governancelockspecification.GLS_VestingLock(
-              new governancelockCodegen.VestingLockSpecification(
-                kind,
-                vestingPeriod,
-                endTime,
-                None.toJava,
-              )
+            vestingLockSpecification(kind, endTime, vestingPeriod, vestingControllers)
+          case None =>
+            fullLockSpecification(
+              kind,
+              unlockControllers,
+              substitutionControllers,
+              vestingControllers,
             )
-          case None => fullLockSpecification(kind)
         },
         Optional.empty(),
         Instant.now().truncatedTo(ChronoUnit.MICROS),
@@ -579,6 +617,12 @@ abstract class StoreTestBase
       expiresAt: Instant,
       dso: PartyId = dsoParty,
       contractId: String = nextCid(),
+      // The kind is always an SV lock here: an FA party is not a stakeholder of the
+      // transfer itself, so there is nothing extra to test for it.
+      sourceSpecification: governancelockCodegen.GovernanceLockSpecification =
+        fullLockSpecification(
+          new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner("sv1")
+        ),
   ): Contract[
     governancelockCodegen.transfer.GovernanceLockTransfer.ContractId,
     governancelockCodegen.transfer.GovernanceLockTransfer,
@@ -591,17 +635,12 @@ abstract class StoreTestBase
         new governancelockCodegen.GovernanceLockKey(
           dso.toProtoPrimitive,
           sender.toProtoPrimitive,
-          // The kind is always an SV lock here: an FA party is not a stakeholder of the
-          // transfer itself, so there is nothing extra to test for it.
-          fullLockSpecification(
-            new governancelockCodegen.governancelockkind.GLK_SuperValidatorRightsOwner("sv1")
-          ),
+          sourceSpecification,
         ),
         receiver.toProtoPrimitive,
         BigDecimal(10).bigDecimal,
         Instant.EPOCH,
         expiresAt,
-        // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
         Optional.empty(),
         Optional.empty(),
         Optional.empty(),

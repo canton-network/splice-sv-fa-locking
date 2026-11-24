@@ -765,6 +765,11 @@ trait SvDsoStore
       : ListExpiredContracts[so.SvOnboardingConfirmed.ContractId, so.SvOnboardingConfirmed] =
     multiDomainAcsStore.listExpiredFromPayloadExpiry(so.SvOnboardingConfirmed.COMPANION)
 
+  protected val allGovernanceLockControllersJsonPaths = Seq(
+    "$.specification.value.controllers.*.controllers[*][*]",
+    "$.specification.value.vestingControllers.controllers[*][*]",
+  )
+
   def listExpiredVestingLocks(
       unavailablePartiesStore: Option[UnavailablePartiesStore]
   ): ListExpiredContracts[
@@ -774,10 +779,8 @@ trait SvDsoStore
     multiDomainAcsStore.listExpiredFromPayloadExpiry(
       splice.governancelock.GovernanceLock.COMPANION,
       unavailablePartiesStore,
-      // TODO(canton-network/splice-sv-fa-locking#76): Make sure custom
-      // controllers parties are listed here as well when they are implemented
-      // in Daml.
       ignoredPartyFields = Seq("owner"),
+      ignoredPartyJsonPaths = allGovernanceLockControllersJsonPaths,
     )
 
   def listFeaturedAppRightsPastUnderlockDeadline(

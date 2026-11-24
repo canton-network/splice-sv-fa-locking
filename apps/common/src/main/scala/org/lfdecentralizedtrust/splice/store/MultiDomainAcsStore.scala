@@ -204,6 +204,7 @@ trait MultiDomainAcsStore extends HasIngestionSink with AutoCloseable with Named
       companion: C,
       unavailablePartiesStore: Option[UnavailablePartiesStore] = None,
       ignoredPartyFields: Seq[String] = Seq.empty,
+      ignoredPartyJsonPaths: Seq[String] = Seq.empty,
   )(implicit
       companionClass: ContractCompanion[C, TCid, T]
   ): ListExpiredContracts[TCid, T]

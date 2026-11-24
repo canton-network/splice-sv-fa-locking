@@ -67,6 +67,7 @@ class ProvisionalFeaturedAppLockConversionIntegrationTest
             lockKind = ProvisionalFeaturedAppLock,
             lockSubject = charlie.toProtoPrimitive,
             amount = lockAmount,
+            LockControllers(),
           )
           tsv1Operations.createGovernanceLock(
             bobValidatorBackend.participantClientWithAdminToken,
@@ -74,6 +75,7 @@ class ProvisionalFeaturedAppLockConversionIntegrationTest
             lockKind = ProvisionalFeaturedAppLock,
             lockSubject = alice.toProtoPrimitive,
             amount = lockAmount,
+            LockControllers(),
           )
         },
       )(

@@ -7,6 +7,10 @@ import com.digitalasset.canton.topology.PartyId
 import io.grpc.Status
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock as gl
 
+import java.util.Optional
+import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
+
 object GovernanceLockUtil {
 
   /** Receiver of all governance lock requests, mirroring `lockManagerParty` in `Splice.GovernanceLock`. */
@@ -34,27 +38,89 @@ object GovernanceLockUtil {
   def getGovernanceLockKind(lock: gl.GovernanceLock): gl.GovernanceLockKind =
     getSpecificationKind(lock.specification)
 
-  def getVestingLockSpecification(lock: gl.GovernanceLock): Option[gl.VestingLockSpecification] =
-    foldSpecification(lock.specification)(_ => None, Some(_))
+  def getVestingLockSpecification(
+      specification: gl.GovernanceLockSpecification
+  ): Option[gl.VestingLockSpecification] =
+    foldSpecification(specification)(_ => None, Some(_))
 
-  /** Parties observing a lock with this specification, mirroring `governanceLockObservers`
+  def getVestingLockSpecification(lock: gl.GovernanceLock): Option[gl.VestingLockSpecification] =
+    getVestingLockSpecification(lock.specification)
+
+  /** Parties observing a lock based on its kind, mirroring `governanceLockObservers`
     * in `Splice.GovernanceLock`.
     */
-  def specificationObservers(specification: gl.GovernanceLockSpecification): Seq[String] =
-    getSpecificationKind(specification) match {
+  private def governanceLockKindObservers(spec: gl.GovernanceLockSpecification): Seq[String] =
+    getSpecificationKind(spec) match {
       case kind: gl.governancelockkind.GLK_FeaturedApp => Seq(kind.provider)
       case kind: gl.governancelockkind.GLK_ProvisionalFeaturedApp => Seq(kind.provider)
       case _ => Seq.empty
     }
 
-  def governanceLockInformees(lock: gl.GovernanceLock): Seq[String] =
-    (lock.owner +: specificationObservers(lock.specification)).distinct
-
-  def substitutionInformees(
-      substitution: gl.substitution.GovernanceLockSubstitution
+  private def controllersSpecificationObservers(
+      controllers: Optional[gl.controllers.ControllersSpecification]
   ): Seq[String] =
-    (substitution.owner +: substitution.target.owner +:
-      specificationObservers(substitution.target.specification)).distinct
+    controllers.toScala
+      .fold(Seq.empty[String])(_.controllers.asScala.flatMap(_.asScala).toSeq)
+      .distinct
+
+  private def governanceLockControllersObservers(
+      controllers: Optional[gl.controllers.GovernanceLockControllers],
+      get: gl.controllers.GovernanceLockControllers => Optional[
+        gl.controllers.ControllersSpecification
+      ],
+  ): Seq[String] =
+    controllers.toScala.fold(Seq.empty[String])(cs => controllersSpecificationObservers(get(cs)))
+
+  def governanceLockInformees(lock: gl.GovernanceLock): Seq[String] =
+    (lock.owner +:
+      governanceLockKindObservers(lock.specification) ++:
+      foldSpecification(lock.specification)(
+        spec =>
+          governanceLockControllersObservers(spec.controllers, _.unlockControllers) ++
+            governanceLockControllersObservers(spec.controllers, _.substitutionControllers) ++
+            governanceLockControllersObservers(spec.controllers, _.vestingControllers),
+        spec => controllersSpecificationObservers(spec.vestingControllers),
+      )).distinct
+
+  private def substitutionControllers(key: gl.GovernanceLockKey): Seq[String] =
+    foldSpecification(key.specification)(
+      spec => governanceLockControllersObservers(spec.controllers, _.substitutionControllers),
+      spec => controllersSpecificationObservers(spec.vestingControllers),
+    )
+
+  def substitutionInformees(substitution: gl.substitution.GovernanceLockSubstitution): Seq[String] =
+    (substitution.owner +:
+      substitution.target.owner +:
+      governanceLockKindObservers(substitution.target.specification) ++:
+      substitution.proposers.toScala.fold(Seq.empty[String])(_.asScala.toSeq) ++:
+      substitutionControllers(substitution.target)).distinct
+
+  def transferInformees(transfer: gl.transfer.GovernanceLockTransfer): Seq[String] =
+    (transfer.source.owner +:
+      transfer.receiver +:
+      transfer.proposers.toScala.fold(Seq.empty[String])(_.asScala.toSeq) ++:
+      substitutionControllers(transfer.source)).distinct
+
+  def unlockInformees(unlock: gl.unlock.UnlockProposal): Seq[String] =
+    (unlock.specification.owner +:
+      unlock.proposers.asScala.toSeq ++:
+      governanceLockKindObservers(
+        new gl.governancelockspecification.GLS_FullLock(unlock.specification.fullSpec)
+      ) ++:
+      governanceLockControllersObservers(
+        unlock.specification.fullSpec.controllers,
+        _.unlockControllers,
+      )).distinct
+
+  def withdrawInformees(withdraw: gl.withdraw.WithdrawVestedFundsProposal): Seq[String] =
+    (withdraw.specification.owner +:
+      withdraw.proposers.asScala.toSeq ++:
+      governanceLockKindObservers(
+        new gl.governancelockspecification.GLS_VestingLock(withdraw.specification.vestingSpec)
+      ) ++:
+      controllersSpecificationObservers(
+        withdraw.specification.vestingSpec.vestingControllers
+      )).distinct
 
   sealed abstract class StoreType(val type_ : String)
   object StoreType {

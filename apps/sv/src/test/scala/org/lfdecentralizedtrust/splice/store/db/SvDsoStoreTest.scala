@@ -257,6 +257,43 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
         }
       }
 
+      "respects ignored custom vesting controllers" in {
+        val owner = userParty(1)
+        val controller = userParty(2)
+        // The controller is in the second controller set
+        val controlledLock = governanceLock(
+          owner,
+          amount = BigDecimal(10),
+          vestingEndTime = Some(time(2).toInstant),
+          vestingControllers = Some(Seq(Seq(owner), Seq(controller))),
+        )
+        val otherLock =
+          governanceLock(
+            userParty(3),
+            amount = BigDecimal(20),
+            vestingEndTime = Some(time(2).toInstant),
+          )
+        for {
+          store <- mkStore()
+          _ <- MonadUtil.sequentialTraverse(Seq(controlledLock, otherLock))(
+            dummyDomain.create(_)(store.multiDomainAcsStore)
+          )
+        } yield {
+          def cidsIgnoring(ignored: Set[PartyId]) = store
+            .listExpiredVestingLocks(Some(new InMemoryUnavailablePartiesStore(ignored)))(
+              time(3),
+              PageLimit.tryCreate(10),
+            )(TraceContext.empty)
+            .futureValue
+            .map(_.contract.contractId)
+
+          cidsIgnoring(Set(controller)) should contain theSameElementsAs Seq(otherLock.contractId)
+          // A party that controls no lock must not filter anything out.
+          cidsIgnoring(Set(userParty(9))) should contain theSameElementsAs
+            Seq(controlledLock.contractId, otherLock.contractId)
+        }
+      }
+
     }
 
     "listFeaturedAppRightsPastUnderlockDeadline" should {
@@ -388,6 +425,69 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
         }
       }
 
+      "respects ignored custom controllers of the source lock" in {
+        val svKind =
+          new splice.governancelock.governancelockkind.GLK_SuperValidatorRightsOwner("sv1")
+        val substitutionController = userParty(7)
+        val vestingController = userParty(8)
+        // Controllers of the full source lock that do not control the transfer
+        val unlockController = userParty(9)
+        val fullLockVestingController = userParty(10)
+        // A full source lock is controlled by its substitution controllers
+        val fullLockTransfer = governanceLockTransfer(
+          userParty(1),
+          userParty(2),
+          time(2).toInstant,
+          sourceSpecification = fullLockSpecification(
+            svKind,
+            unlockControllers = Some(Seq(Seq(unlockController))),
+            substitutionControllers = Some(Seq(Seq(userParty(1)), Seq(substitutionController))),
+            vestingControllers = Some(Seq(Seq(fullLockVestingController))),
+          ),
+        )
+        // A vesting source lock is controlled by its vesting controllers
+        val vestingLockTransfer = governanceLockTransfer(
+          userParty(3),
+          userParty(4),
+          time(2).toInstant,
+          sourceSpecification = vestingLockSpecification(
+            svKind,
+            endTime = time(5).toInstant,
+            vestingControllers = Some(Seq(Seq(vestingController))),
+          ),
+        )
+        val otherTransfer = governanceLockTransfer(userParty(5), userParty(6), time(2).toInstant)
+        for {
+          store <- mkStore()
+          _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+          _ <- MonadUtil.sequentialTraverse(
+            Seq(fullLockTransfer, vestingLockTransfer, otherTransfer)
+          )(dummyDomain.create(_)(store.multiDomainAcsStore))
+        } yield {
+          def cidsIgnoring(ignored: Set[PartyId]) = store
+            .listExpiredGovernanceLockTransfers(
+              Some(new InMemoryUnavailablePartiesStore(ignored))
+            )(time(3), PageLimit.tryCreate(10))(TraceContext.empty)
+            .futureValue
+            .map(_.contract.contractId)
+
+          cidsIgnoring(Set(substitutionController)) should contain theSameElementsAs
+            Seq(vestingLockTransfer.contractId, otherTransfer.contractId)
+          cidsIgnoring(Set(vestingController)) should contain theSameElementsAs
+            Seq(fullLockTransfer.contractId, otherTransfer.contractId)
+          cidsIgnoring(Set(substitutionController, vestingController)) should
+            contain theSameElementsAs Seq(otherTransfer.contractId)
+          // The unlock and vesting controllers of a full lock do not observe the transfer,
+          // so ignoring them must not filter anything out.
+          cidsIgnoring(Set(unlockController, fullLockVestingController)) should
+            contain theSameElementsAs Seq(
+              fullLockTransfer.contractId,
+              vestingLockTransfer.contractId,
+              otherTransfer.contractId,
+            )
+        }
+      }
+
     }
 
     "listExpiredGovernanceLockSubstitutions" should {
@@ -473,8 +573,8 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
           userParty(2),
           userParty(3),
           time(2).toInstant,
-          kind = new splice.governancelock.governancelockkind.GLK_FeaturedApp(
-            provider.toProtoPrimitive
+          targetSpecification = fullLockSpecification(
+            new splice.governancelock.governancelockkind.GLK_FeaturedApp(provider.toProtoPrimitive)
           ),
         )
         // An SV lock has no provider, so its subject never matches an ignored party.
@@ -501,6 +601,70 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
           // An SV name never matches an ignored party, so that row survives.
           cidsIgnoring(Set(userParty(9))) should contain theSameElementsAs
             Seq(faSubstitution.contractId, svSubstitution.contractId)
+        }
+      }
+
+      "respects ignored custom controllers of the target lock" in {
+        val svKind =
+          new splice.governancelock.governancelockkind.GLK_SuperValidatorRightsOwner("sv1")
+        val substitutionController = userParty(7)
+        val vestingController = userParty(8)
+        // Controllers of the full target lock that do not control the substitution
+        val unlockController = userParty(9)
+        val fullLockVestingController = userParty(10)
+        // A full target lock is controlled by its substitution controllers
+        val fullLockSubstitution = governanceLockSubstitution(
+          userParty(1),
+          userParty(2),
+          time(2).toInstant,
+          targetSpecification = fullLockSpecification(
+            svKind,
+            unlockControllers = Some(Seq(Seq(unlockController))),
+            substitutionControllers = Some(Seq(Seq(userParty(2)), Seq(substitutionController))),
+            vestingControllers = Some(Seq(Seq(fullLockVestingController))),
+          ),
+        )
+        // A vesting target lock is controlled by its vesting controllers
+        val vestingLockSubstitution = governanceLockSubstitution(
+          userParty(3),
+          userParty(4),
+          time(2).toInstant,
+          targetSpecification = vestingLockSpecification(
+            svKind,
+            endTime = time(5).toInstant,
+            vestingControllers = Some(Seq(Seq(vestingController))),
+          ),
+        )
+        val otherSubstitution =
+          governanceLockSubstitution(userParty(5), userParty(6), time(2).toInstant)
+        for {
+          store <- mkStore()
+          _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
+          _ <- MonadUtil.sequentialTraverse(
+            Seq(fullLockSubstitution, vestingLockSubstitution, otherSubstitution)
+          )(dummyDomain.create(_)(store.multiDomainAcsStore))
+        } yield {
+          def cidsIgnoring(ignored: Set[PartyId]) = store
+            .listExpiredGovernanceLockSubstitutions(
+              Some(new InMemoryUnavailablePartiesStore(ignored))
+            )(time(3), PageLimit.tryCreate(10))(TraceContext.empty)
+            .futureValue
+            .map(_.contract.contractId)
+
+          cidsIgnoring(Set(substitutionController)) should contain theSameElementsAs
+            Seq(vestingLockSubstitution.contractId, otherSubstitution.contractId)
+          cidsIgnoring(Set(vestingController)) should contain theSameElementsAs
+            Seq(fullLockSubstitution.contractId, otherSubstitution.contractId)
+          cidsIgnoring(Set(substitutionController, vestingController)) should
+            contain theSameElementsAs Seq(otherSubstitution.contractId)
+          // The unlock and vesting controllers of a full lock do not observe the substitution,
+          // so ignoring them must not filter anything out.
+          cidsIgnoring(Set(unlockController, fullLockVestingController)) should
+            contain theSameElementsAs Seq(
+              fullLockSubstitution.contractId,
+              vestingLockSubstitution.contractId,
+              otherSubstitution.contractId,
+            )
         }
       }
 
@@ -3090,8 +3254,10 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
       proposer: PartyId,
       lockOwner: PartyId,
       expiresAt: Instant,
-      kind: splice.governancelock.GovernanceLockKind =
-        new splice.governancelock.governancelockkind.GLK_SuperValidatorRightsOwner("sv1"),
+      targetSpecification: splice.governancelock.GovernanceLockSpecification =
+        fullLockSpecification(
+          new splice.governancelock.governancelockkind.GLK_SuperValidatorRightsOwner("sv1")
+        ),
       dso: PartyId = dsoParty,
       contractId: String = nextCid(),
   ): Contract[
@@ -3107,8 +3273,7 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
         new splice.governancelock.GovernanceLockKey(
           dso.toProtoPrimitive,
           lockOwner.toProtoPrimitive,
-          // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
-          fullLockSpecification(kind),
+          targetSpecification,
         ),
         proposer.toProtoPrimitive,
         BigDecimal(10).bigDecimal,
@@ -3116,7 +3281,6 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
         Instant.EPOCH,
         expiresAt,
         Optional.empty(),
-        // TODO(canton-network/splice-sv-fa-locking#211): test custom controllers
         Optional.empty(),
         Optional.empty(),
         Optional.empty(),
@@ -3337,14 +3501,21 @@ class DbSvDsoStoreTest
     "respects ignored parties" in {
       val ownerA = userParty(1)
       val ownerB = userParty(2)
-      val providerA = userParty(3)
-      val providerB = userParty(4)
+      val ownerC = userParty(3)
+      val providerA = userParty(4)
+      val providerB = userParty(5)
+      val providerC = userParty(6)
+      // Each lock has a custom controller in a different controller field
+      val unlockController = userParty(7)
+      val substitutionController = userParty(8)
+      val vestingController = userParty(9)
       val lockA = governanceLock(
         ownerA,
         amount = BigDecimal(10),
         kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
           providerA.toProtoPrimitive
         ),
+        unlockControllers = Some(Seq(Seq(unlockController))),
       )
       val lockB = governanceLock(
         ownerB,
@@ -3352,44 +3523,73 @@ class DbSvDsoStoreTest
         kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
           providerB.toProtoPrimitive
         ),
+        // The controller is in the second controller set
+        substitutionControllers = Some(Seq(Seq(ownerB), Seq(substitutionController))),
       )
+      val lockC = governanceLock(
+        ownerC,
+        amount = BigDecimal(10),
+        kind = new splice.governancelock.governancelockkind.GLK_ProvisionalFeaturedApp(
+          providerC.toProtoPrimitive
+        ),
+        vestingControllers = Some(Seq(Seq(vestingController))),
+      )
+
+      def listIgnoring(store: SvDsoStore, ignoredParties: PartyId*) =
+        store
+          .listProvisionalGovernanceLocksWithFeaturedAppRightSample(
+            Option.when(ignoredParties.nonEmpty)(
+              new InMemoryUnavailablePartiesStore(ignoredParties.toSet)
+            )
+          )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
+          .map(_.map(_.contract.contractId))
 
       for {
         store <- mkStore()
         _ <- dummyDomain.create(dsoRules())(store.multiDomainAcsStore)
         _ <- dummyDomain.create(lockA)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(lockB)(store.multiDomainAcsStore)
+        _ <- dummyDomain.create(lockC)(store.multiDomainAcsStore)
         _ <- dummyDomain.create(featuredAppRight(providerA))(store.multiDomainAcsStore)
         _ <- dummyDomain.create(featuredAppRight(providerB))(store.multiDomainAcsStore)
-        result <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample()(
-          CantonTimestamp.now(),
-          PageLimit.tryCreate(100),
-        )(traceContext)
-        resultNoOwnerA <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
-          Some(new InMemoryUnavailablePartiesStore(Set(ownerA)))
-        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
-        resultNoOwners <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
-          Some(new InMemoryUnavailablePartiesStore(Set(ownerA, ownerB)))
-        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
-        resultNoProviderA <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
-          Some(new InMemoryUnavailablePartiesStore(Set(providerA)))
-        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
-        resultNoProviders <- store.listProvisionalGovernanceLocksWithFeaturedAppRightSample(
-          Some(new InMemoryUnavailablePartiesStore(Set(providerA, providerB)))
-        )(CantonTimestamp.now(), PageLimit.tryCreate(100))(traceContext)
+        _ <- dummyDomain.create(featuredAppRight(providerC))(store.multiDomainAcsStore)
+        result <- listIgnoring(store)
+        resultNoOwnerA <- listIgnoring(store, ownerA)
+        resultNoOwners <- listIgnoring(store, ownerA, ownerB, ownerC)
+        resultNoProviderA <- listIgnoring(store, providerA)
+        resultNoProviders <- listIgnoring(store, providerA, providerB, providerC)
+        resultNoUnlockController <- listIgnoring(store, unlockController)
+        resultNoSubstitutionController <- listIgnoring(store, substitutionController)
+        resultNoVestingController <- listIgnoring(store, vestingController)
+        resultNoControllers <- listIgnoring(
+          store,
+          unlockController,
+          substitutionController,
+          vestingController,
+        )
       } yield {
-        result.map(_.contract.contractId) should contain theSameElementsAs Seq(
+        result should contain theSameElementsAs Seq(
+          lockA.contractId,
+          lockB.contractId,
+          lockC.contractId,
+        )
+        resultNoOwnerA should contain theSameElementsAs Seq(lockB.contractId, lockC.contractId)
+        resultNoOwners shouldBe empty
+        resultNoProviderA should contain theSameElementsAs Seq(lockB.contractId, lockC.contractId)
+        resultNoProviders shouldBe empty
+        resultNoUnlockController should contain theSameElementsAs Seq(
+          lockB.contractId,
+          lockC.contractId,
+        )
+        resultNoSubstitutionController should contain theSameElementsAs Seq(
+          lockA.contractId,
+          lockC.contractId,
+        )
+        resultNoVestingController should contain theSameElementsAs Seq(
           lockA.contractId,
           lockB.contractId,
         )
-        resultNoOwnerA.map(_.contract.contractId) should contain theSameElementsAs Seq(
-          lockB.contractId
-        )
-        resultNoOwners shouldBe empty
-        resultNoProviderA.map(_.contract.contractId) should contain theSameElementsAs Seq(
-          lockB.contractId
-        )
-        resultNoProviders shouldBe empty
+        resultNoControllers shouldBe empty
       }
     }
 
