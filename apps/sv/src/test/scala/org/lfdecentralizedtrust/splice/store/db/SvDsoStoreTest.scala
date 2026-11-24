@@ -651,6 +651,49 @@ abstract class SvDsoStoreTest extends StoreTestBase with HasExecutionContext {
       }
     }
 
+    "listFeaturedAppRightsForProvider" should {
+      "return the provider's rights newest first, breaking ties by contract id" in {
+        val t1 = Instant.parse("2024-03-01T10:00:00Z")
+        val t2 = t1.plusSeconds(1)
+        val older = featuredAppRight(userParty(1), validContractId(1)).copy(createdAt = t1)
+        val newerHighCid =
+          featuredAppRight(userParty(1), validContractId(3)).copy(createdAt = t2)
+        val newerLowCid =
+          featuredAppRight(userParty(1), validContractId(2)).copy(createdAt = t2)
+        val otherProvider =
+          featuredAppRight(userParty(2), validContractId(4)).copy(createdAt = t2.plusSeconds(1))
+        for {
+          store <- mkStore()
+          _ <- MonadUtil.sequentialTraverse(Seq(newerHighCid, older, newerLowCid, otherProvider))(
+            dummyDomain.create(_)(store.multiDomainAcsStore)
+          )
+          result <- store.listFeaturedAppRightsForProvider(userParty(1), PageLimit.tryCreate(10))
+        } yield result.map(_.contract) shouldBe Seq(newerLowCid, newerHighCid, older)
+      }
+    }
+
+    "listFeaturedAppRightProvidersWithDuplicatesSample" should {
+      "return only providers with more than one right" in {
+        val rights = Seq(
+          featuredAppRight(userParty(1)),
+          featuredAppRight(userParty(2)),
+          featuredAppRight(userParty(2)),
+          featuredAppRight(userParty(3)),
+          featuredAppRight(userParty(3)),
+          featuredAppRight(userParty(3)),
+        )
+        for {
+          store <- mkStore()
+          _ <- MonadUtil.sequentialTraverse(rights)(
+            dummyDomain.create(_)(store.multiDomainAcsStore)
+          )
+          result <- store.listFeaturedAppRightProvidersWithDuplicatesSample(
+            PageLimit.tryCreate(10)
+          )
+        } yield result should contain theSameElementsAs Seq(userParty(2), userParty(3))
+      }
+    }
+
     "findFeaturedAppRightsForParties" should {
       "return empty when the query set is empty" in {
         for {

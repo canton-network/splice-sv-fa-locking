@@ -276,6 +276,13 @@ class DsoDelegateBasedAutomationService(
         unavailablePartiesStore,
       )
     )
+    registerTrigger(
+      new MergeDuplicateFeaturedAppRightsTrigger(
+        triggerContext,
+        config.mergeDuplicateFeaturedAppRightsInterval,
+        svTaskContext,
+      )
+    )
   }
 }
 
@@ -324,6 +331,7 @@ object DsoDelegateBasedAutomationService extends AutomationServiceCompanion {
     aTrigger[ExpireGovernanceLockSubstitutionTrigger],
     aTrigger[ProvisionalFeaturedAppLockConversionTrigger],
     aTrigger[FeaturedAppPermanentUnderlockTrigger],
+    aTrigger[MergeDuplicateFeaturedAppRightsTrigger],
     aTrigger[ExecuteFeaturedAppConfigUpdateInstructionTrigger],
     aTrigger[ExpireFeaturedAppConfigUpdateInstructionTrigger],
     aTrigger[ExecuteRevokeFeaturedAppRightInstructionTrigger],
