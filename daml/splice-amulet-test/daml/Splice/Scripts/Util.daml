@@ -658,6 +658,7 @@ featureApp app provider = do
     activityWeight = None
     appKind = None
     opsParties = None
+    providerIsObserver = Some False
   return result.featuredAppRightCid
 
 getNormalizedBalance: Party -> Script Decimal

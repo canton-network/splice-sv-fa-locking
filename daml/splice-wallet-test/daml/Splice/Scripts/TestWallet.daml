@@ -564,6 +564,7 @@ testSelfGrantFeaturedAppRight = script do
       activityWeight = Some 2.5
       appKind = Some FAK_AssetMoving
       opsParties = Some [bob.primaryParty]
+      providerIsObserver = Some False
   Some customRight <- queryContractId app.dso customCid.featuredAppRight
   customRight === FeaturedAppRight with
     dso = app.dso
@@ -582,12 +583,14 @@ testSelfGrantFeaturedAppRight = script do
       activityWeight = None
       appKind = None
       opsParties = Some (take 10 opsParties)
+      providerIsObserver = Some False
   submitMustFail (actAs aliceValidator.primaryParty <> readAs app.dso) $
     exerciseCmd install WalletAppInstall_FeaturedAppRights_SelfGrant with
       amuletRulesCid
       activityWeight = None
       appKind = None
       opsParties = Some opsParties
+      providerIsObserver = Some False
 
   pure ()
 

@@ -420,6 +420,7 @@ template AmuletRules
         activityWeight : Optional Decimal
         appKind : Optional FeaturedAppKind
         opsParties : Optional [Party]
+        providerIsObserver : Optional Bool
       controller provider
       do
         require "isDevNet flag is true" isDevNet
@@ -430,7 +431,7 @@ template AmuletRules
           appKind
           opsParties
           underlockPermanentAt = None
-          providerIsObserver = Some False
+          providerIsObserver
         return AmuletRules_DevNet_FeatureAppResult with ..
 
     -- Bootstrap the open mining rounds by creating

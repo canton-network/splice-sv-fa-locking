@@ -1447,6 +1447,13 @@ components:
           maxItems: 10
           items:
             type: string
+        provider_is_observer:
+          description: |
+            Whether the provider is an observer of the featured app right.
+            If not set or false, the provider is not an observer, which requires splice-wallet and
+            splice-amulet versions that support this to be vetted.
+            If true, the provider is an observer, and the right also works with older versions.
+          type: boolean
 
     FeaturedAppKind:
       type: string

@@ -336,6 +336,14 @@ class HttpWalletHandler(
       val appKind = request.flatMap(_.appKind).map(FeaturedAppKindUtil.toDaml)
       val activityWeight =
         request.flatMap(_.activityWeight).map(Codec.tryDecode(Codec.JavaBigDecimal)(_))
+      // The provider is an observer when the field is not set on the right, so we leave it unset
+      // when requested. This keeps the right usable with older amulet versions.
+      //
+      // TODO: this defaults to Optional.of(false) at the moment to identify test failures and bad
+      // assumptions. We need to revert it to default to None so old versions continue to work.
+      val providerIsObserver: java.util.Optional[java.lang.Boolean] =
+        if (request.flatMap(_.providerIsObserver).contains(true)) java.util.Optional.empty()
+        else java.util.Optional.of(false)
       val opsParties = request.flatMap(_.opsPartyIds).map { partyIds =>
         // Same limit as enforced by WalletAppInstall_FeaturedAppRights_SelfGrant
         maxSizeOrFail("ops_party_ids", partyIds, 10)
@@ -353,6 +361,7 @@ class HttpWalletHandler(
                 activityWeight.toJava,
                 appKind.toJava,
                 opsParties.map(_.asJava).toJava,
+                providerIsObserver,
               )
               .map(_.exerciseResult.featuredAppRight)
           )

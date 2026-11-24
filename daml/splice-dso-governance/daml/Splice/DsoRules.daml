@@ -1154,6 +1154,8 @@ template DsoRules with
           appKind
           opsParties
           underlockPermanentAt = None
+          -- TODO: this defaults to `Some False` at the moment to identify test failures and bad
+          -- assumptions. We need to revert it to default to `None` so old versions continue to work.
           providerIsObserver = Some False
         return DsoRules_GrantFeaturedAppRightResult with ..
 
@@ -1200,7 +1202,9 @@ template DsoRules with
             appKind = valueUnlessDefault appKind defaultAppKind
             opsParties = dedupSort <$> valueUnlessDefault opsParties defaultOpsParties
             underlockPermanentAt
-            providerIsObserver
+            providerIsObserver = case providerIsObserver of
+              Some True -> None
+              _ -> providerIsObserver
 
         featuredAppRight <- case rightCids of
           [] -> pure None

@@ -160,7 +160,10 @@ class BatchedFeaturedAppActivityMarkerIntegrationTest
     val alice = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
     val bob = onboardWalletUser(bobWalletClient, bobValidatorBackend)
     val splitwell = onboardWalletUser(splitwellWalletClient, splitwellValidatorBackend)
-    val aliceFeaturedAppRightCid = aliceWalletClient.selfGrantFeaturedAppRight()
+    // Bob is an informee of alice's markers and only vets amulet <= 0.1.19, which cannot represent
+    // a right where the provider is not an observer.
+    val aliceFeaturedAppRightCid =
+      aliceWalletClient.selfGrantFeaturedAppRight(providerIsObserver = Some(true))
     val splitwellFeaturedAppRightCid = splitwellWalletClient.selfGrantFeaturedAppRight()
     val aliceProxy = createBatchedMarkersProxy(aliceValidatorBackend, alice)
     val splitwellProxy = createBatchedMarkersProxy(splitwellValidatorBackend, splitwell)
