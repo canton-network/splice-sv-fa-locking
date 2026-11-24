@@ -4,19 +4,23 @@
 package org.lfdecentralizedtrust.splice.validator.admin.http
 
 import org.lfdecentralizedtrust.splice.http.v0.{definitions, validator_public as v0}
+import org.lfdecentralizedtrust.splice.scan.admin.api.client.BftScanConnection
 import org.lfdecentralizedtrust.splice.validator.store.ValidatorStore
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.tracing.Spanning
 import io.opentelemetry.api.trace.Tracer
+import org.apache.pekko.stream.Materializer
 
 import scala.concurrent.{ExecutionContext, Future}
 
 class HttpValidatorPublicHandler(
     store: ValidatorStore,
+    scanConnection: BftScanConnection,
     validatorUserName: String,
     protected val loggerFactory: NamedLoggerFactory,
 )(implicit
     ec: ExecutionContext,
+    mat: Materializer,
     tracer: Tracer,
 ) extends v0.ValidatorPublicHandler[Unit]
     with Spanning
@@ -30,7 +34,8 @@ class HttpValidatorPublicHandler(
   ): Future[v0.ValidatorPublicResource.GetValidatorUserInfoResponse] =
     withNewTrace(workflowId) { implicit tc => _ =>
       for {
-        featuredAppRight <- store.lookupValidatorFeaturedAppRight()
+        // Look up the right in scan, as the validator is not necessarily a stakeholder of it.
+        featuredAppRight <- scanConnection.lookupFeaturedAppRight(store.key.validatorParty)
       } yield definitions.GetValidatorUserInfoResponse(
         store.key.validatorParty.filterString,
         validatorUserName,

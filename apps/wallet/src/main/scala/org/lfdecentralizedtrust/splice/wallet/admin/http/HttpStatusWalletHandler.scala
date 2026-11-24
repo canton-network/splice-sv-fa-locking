@@ -5,9 +5,11 @@ package org.lfdecentralizedtrust.splice.wallet.admin.http
 
 import org.lfdecentralizedtrust.splice.http.v0.status.wallet.WalletResource as r0
 import org.lfdecentralizedtrust.splice.http.v0.{status, definitions as d0}
+import org.lfdecentralizedtrust.splice.scan.admin.api.client.BftScanConnection
 import org.lfdecentralizedtrust.splice.wallet.UserWalletManager
 import com.digitalasset.canton.logging.NamedLoggerFactory
 import io.opentelemetry.api.trace.Tracer
+import org.apache.pekko.stream.Materializer
 import org.lfdecentralizedtrust.splice.auth.AuthenticationOnlyAuthExtractor.AuthenticatedRequest
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -17,9 +19,11 @@ import scala.concurrent.{ExecutionContext, Future}
   */
 class HttpStatusWalletHandler(
     override protected val walletManager: UserWalletManager,
+    scanConnection: BftScanConnection,
     protected val loggerFactory: NamedLoggerFactory,
 )(implicit
     ec: ExecutionContext,
+    mat: Materializer,
     tracer: Tracer,
 ) extends status.wallet.WalletHandler[AuthenticatedRequest]
     with HttpWalletHandlerUtil {
@@ -34,8 +38,9 @@ class HttpStatusWalletHandler(
         optWallet <- walletManager.lookupUserWallet(user)
         hasFeaturedAppRight <- optWallet match {
           case None => Future(false)
+          // Look up the right in scan, as the user is not necessarily a stakeholder of it.
           case Some(wallet) =>
-            wallet.store.lookupFeaturedAppRight().map(_.isDefined)
+            scanConnection.lookupFeaturedAppRight(wallet.store.key.endUserParty).map(_.isDefined)
         }
         optInstall <- optWallet match {
           case None =>

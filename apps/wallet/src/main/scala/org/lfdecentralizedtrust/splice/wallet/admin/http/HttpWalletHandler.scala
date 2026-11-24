@@ -724,24 +724,34 @@ class HttpWalletHandler(
     implicit val WalletUserRequest(user, userWallet, traceContext) = tuser
     withSpan(s"$workflowId.cancelFeaturedAppRights") { implicit traceContext => _ =>
       for {
-        featuredAppRight <- userWallet.store.lookupFeaturedAppRight()
+        // Look up the right in scan, as the user is not necessarily a stakeholder of it.
+        featuredAppRight <- scanConnection.lookupFeaturedAppRight(userWallet.store.key.endUserParty)
         result <- featuredAppRight match {
           case None =>
             logger.info(s"No featured app right found for user ${user} - nothing to cancel")
             Future.successful(r0.CancelFeaturedAppRightsResponseOK)
-          case Some(cid) =>
-            retryProvider.retryForClientCalls(
-              "cancel_featured_app_rights",
-              "Cancel featured app rights",
-              exerciseWalletAction((installCid, _) => {
-                Future.successful(
-                  installCid
-                    .exerciseWalletAppInstall_FeaturedAppRights_Cancel(cid.contractId)
-                    .map(_ => r0.CancelFeaturedAppRightsResponseOK)
-                )
-              })(userWallet),
-              logger,
-            )
+          case Some(right) =>
+            for {
+              amuletRules <- scanConnection.getAmuletRulesWithState()
+              result <- retryProvider.retryForClientCalls(
+                "cancel_featured_app_rights",
+                "Cancel featured app rights",
+                exerciseWalletAction((installCid, _) => {
+                  Future.successful(
+                    installCid
+                      .exerciseWalletAppInstall_FeaturedAppRights_Cancel(right.contractId)
+                      .map(_ => r0.CancelFeaturedAppRightsResponseOK)
+                  )
+                })(
+                  userWallet,
+                  // Approximating the state of featured app right to be the same as the AmuletRules
+                  // as scan currently does not return a ContractWithState.
+                  disclosedContracts =
+                    _.disclosedContracts(ContractWithState(right, amuletRules.state)),
+                ),
+                logger,
+              )
+            } yield result
         }
       } yield result
     }
