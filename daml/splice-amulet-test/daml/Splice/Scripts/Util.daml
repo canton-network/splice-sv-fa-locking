@@ -581,8 +581,8 @@ getOpenRoundsSorted app = do
 
 getFeaturedAppRight : AmuletApp -> Party -> Script (Optional (ContractId FeaturedAppRight))
 getFeaturedAppRight app provider = do
-  rounds <- query @FeaturedAppRight provider
-  return $ DA.List.Total.head [ cid | (cid, round) <- rounds, round.dso == app.dso ]
+  rounds <- queryFilter @FeaturedAppRight app.dso (\r -> r.provider == provider && r.dso == app.dso)
+  return $ DA.List.Total.head $ fmap fst rounds
 
 getAppTransferContext : AmuletApp -> AmuletUser -> Script AppTransferContext
 getAppTransferContext app provider = do

@@ -564,7 +564,7 @@ testSelfGrantFeaturedAppRight = script do
       activityWeight = Some 2.5
       appKind = Some FAK_AssetMoving
       opsParties = Some [bob.primaryParty]
-  Some customRight <- queryContractId alice.primaryParty customCid.featuredAppRight
+  Some customRight <- queryContractId app.dso customCid.featuredAppRight
   customRight === FeaturedAppRight with
     dso = app.dso
     provider = alice.primaryParty
