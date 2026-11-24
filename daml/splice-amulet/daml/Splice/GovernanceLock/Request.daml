@@ -22,13 +22,11 @@ module Splice.GovernanceLock.Request (
 ) where
 
 import DA.Action (unless)
-import DA.Assert
 import DA.Optional
 import DA.Text qualified as Text
 import DA.Time
 import DA.Validation
 
-import Splice.Amulet.TokenApiUtils
 import Splice.AmuletConfig (GovernanceLockConfig)
 import Splice.AmuletRules
 import Splice.Api.Token.MetadataV1
@@ -42,7 +40,6 @@ import Splice.GovernanceLock.Transfer
 import Splice.GovernanceLock.Unlock
 import Splice.GovernanceLock.Withdraw
 import Splice.TokenStandard.Utils hiding (require, reasonMetaKey)
-import Splice.Util (assertInPast24Hours)
 import Splice.Util.Memo
 import Splice.Util.Parser
 
@@ -92,21 +89,19 @@ governanceLock_transferFactoryV1_transferImpl
   :  Party
   -> [Party]
   -> V1.TransferFactory_Transfer
+  -> ContractId ExternalPartyConfigState
+  -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_Transfer{expectedAdmin, transfer, extraArgs} = do
-  requireMatchExpected ("admin", expectedAdmin) dso
+governanceLock_transferFactoryV1_transferImpl dso actors arg@V1.TransferFactory_Transfer{transfer} stateCid state = do
   checkActor transfer.sender actors
-  requireMatchExpected ("instrumentId", transfer.instrumentId) (amuletInstrumentId dso)
-  assertInPast24Hours "transfer.requestedAt" transfer.requestedAt
-  assertWithinDeadline "transfer.executeBefore" transfer.executeBefore
 
-  (context, state) <- unfeaturedPaymentContextAndConfigFromChoiceContext dso extraArgs.context
+  let context = makeUnfeaturedPaymentContext stateCid
   request <- parseGovernanceLockRequestTSv1 dso transfer.sender transfer.receiver state.governanceLockConfig transfer.meta
 
   case request of
     GLR_CreateGovernanceLock fullSpecification -> do
       checkActors actors [[transfer.sender]]
-      governanceLock_transferFactoryV1_lockImpl dso arg fullSpecification
+      governanceLock_transferFactoryV1_lockImpl dso arg fullSpecification context state
     GLR_UnlockGovernanceLock target unlockAmount vestingStartTime ->
       governanceLock_transferFactoryV1_unlockImpl actors arg target unlockAmount vestingStartTime context state
     GLR_TransferLock source newOwner newControllers transferAmount ->
@@ -120,10 +115,12 @@ governanceLock_transferFactoryV1_lockImpl
   :  Party
   -> V1.TransferFactory_Transfer
   -> FullLockSpecification
+  -> ExternalPartyTransferContext
+  -> ExternalPartyConfigState
   -> Update V1.TransferInstructionResult
-governanceLock_transferFactoryV1_lockImpl dso V1.TransferFactory_Transfer{transfer, extraArgs} specification = do
+governanceLock_transferFactoryV1_lockImpl dso V1.TransferFactory_Transfer{transfer} specification context state = do
   (lock, lockCid, changeCid) <- governanceLock_lockForGovernance_impl
-    dso transfer.amount transfer.inputHoldingCids specification extraArgs transfer.sender transfer.requestedAt (reasonFromMeta transfer.meta)
+    dso transfer.amount transfer.inputHoldingCids specification transfer.sender transfer.requestedAt (reasonFromMeta transfer.meta) context state
 
   -- Sanity check that the output transfer matches the input (excluding some fields which we expect to differ)
   let lockTransfer = (view $ toInterface @V1.TransferInstruction lock).transfer
@@ -239,7 +236,6 @@ governanceLock_transferFactoryV1_substituteImpl actors V1.TransferFactory_Transf
     newControllers
     amount = transfer.amount
     inputHoldingCids = transfer.inputHoldingCids
-    extraArgs
     requestedAt = transfer.requestedAt
     reason = reasonFromMeta transfer.meta
     context

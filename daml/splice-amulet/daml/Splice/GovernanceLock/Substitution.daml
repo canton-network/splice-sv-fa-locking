@@ -140,7 +140,6 @@ data GovernanceLockProposeSubstitutionArgs = GovernanceLockProposeSubstitutionAr
   newControllers : Optional GovernanceLockControllers -- ^ New custom controllers of the substituted lock.
   amount : Decimal -- ^ Amount being substituted
   inputHoldingCids : [ContractId Holding] -- ^ Holdings providing the funds
-  extraArgs : ExtraArgs
   requestedAt : Time -- ^ Time of the request to create the proposal
   reason : Text -- ^ Memo of the request to create the proposal, which the transfer legs report as their reason
   context : ExternalPartyTransferContext
