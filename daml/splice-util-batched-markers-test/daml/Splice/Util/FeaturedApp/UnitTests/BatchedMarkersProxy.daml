@@ -10,6 +10,7 @@ import qualified Splice.Api.FeaturedAppRightV1 as FeaturedAppRightV1
 import qualified Splice.Api.FeaturedAppRightV2 as FeaturedAppRightV2
 import Splice.Util.FeaturedApp.BatchedMarkersProxy
 import Splice.Testing.Registries.AmuletRegistry qualified as AmuletRegistry
+import Splice.Testing.Utils
 
 test = script do
   registry <- AmuletRegistry.initialize AmuletRegistry.defaultAmuletRegistryConfig
@@ -17,12 +18,13 @@ test = script do
   provider <- allocateParty "provider"
   beneficiary <- allocateParty "beneficiary"
   featuredAppRightCid <- AmuletRegistry.featureApp registry provider
+  appRightD <- queryDisclosure' registry.dso featuredAppRightCid
 
   markerProxy <- submit provider $ createCmd BatchedMarkersProxy with
     provider
     dso = registry.dso
 
-  submit provider $ exerciseCmd markerProxy $ BatchedMarkersProxy_CreateMarkers with
+  submitWithDisclosures' provider appRightD $ exerciseCmd markerProxy $ BatchedMarkersProxy_CreateMarkers with
     featuredAppRightCid = toInterfaceContractId featuredAppRightCid
     batches = [
       RewardBatch
@@ -37,7 +39,7 @@ test = script do
         }
       ]
 
-  submit provider $ exerciseCmd markerProxy $ BatchedMarkersProxy_CreateMarkersV2 with
+  submitWithDisclosures' provider appRightD $ exerciseCmd markerProxy $ BatchedMarkersProxy_CreateMarkersV2 with
     featuredAppRightCid = toInterfaceContractId featuredAppRightCid
     batches = [
       RewardBatchV2

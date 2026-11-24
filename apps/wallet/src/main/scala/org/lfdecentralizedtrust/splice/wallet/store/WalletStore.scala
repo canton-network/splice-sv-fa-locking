@@ -3,7 +3,6 @@
 
 package org.lfdecentralizedtrust.splice.wallet.store
 
-import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet as amuletCodegen
 import org.lfdecentralizedtrust.splice.codegen.java.splice.wallet.install as installCodegen
 import org.lfdecentralizedtrust.splice.store.AppStore
 import org.lfdecentralizedtrust.splice.util.Contract
@@ -34,12 +33,6 @@ trait WalletStore extends AppStore {
   )(implicit tc: TraceContext): Future[Option[
     Contract[installCodegen.WalletAppInstall.ContractId, installCodegen.WalletAppInstall]
   ]]
-
-  def lookupValidatorFeaturedAppRight()(implicit
-      tc: TraceContext
-  ): Future[
-    Option[Contract[amuletCodegen.FeaturedAppRight.ContractId, amuletCodegen.FeaturedAppRight]]
-  ]
 }
 
 object WalletStore {

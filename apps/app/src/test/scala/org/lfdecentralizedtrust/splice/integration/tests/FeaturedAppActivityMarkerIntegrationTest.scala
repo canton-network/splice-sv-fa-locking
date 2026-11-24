@@ -75,6 +75,8 @@ class FeaturedAppActivityMarkerIntegrationTest
         .selfGrantFeaturedAppRight()
         .toInterface(featuredapprightv1.FeaturedAppRight.INTERFACE)
     }
+    val aliceFeaturedAppRightDisclosure = featuredAppRightDisclosure(aliceFeaturedAppRightCid)
+    val bobFeaturedAppRightDisclosure = featuredAppRightDisclosure(bobFeaturedAppRightCid)
 
     val markerMultiplier = 10
 
@@ -100,6 +102,7 @@ class FeaturedAppActivityMarkerIntegrationTest
                 .commands
                 .asScala
                 .toSeq,
+              disclosedContracts = Seq(aliceFeaturedAppRightDisclosure),
             )
           bobValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.commands
             .submitJava(
@@ -116,6 +119,7 @@ class FeaturedAppActivityMarkerIntegrationTest
                 .commands
                 .asScala
                 .toSeq,
+              disclosedContracts = Seq(bobFeaturedAppRightDisclosure),
             )
         }
         // unpause all activity marker triggers here, so they can start to get to work

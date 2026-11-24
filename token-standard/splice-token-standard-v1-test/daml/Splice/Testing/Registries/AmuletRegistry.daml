@@ -202,6 +202,7 @@ featureApp registry provider = do
     activityWeight = None
     appKind = None
     opsParties = None
+    providerIsObserver = Some False
   return result.featuredAppRightCid
 
 -- | Mark a particular registry provider part as featured.
@@ -213,6 +214,7 @@ featureApp' registry provider weight = do
     activityWeight = Some weight
     appKind = None
     opsParties = None
+    providerIsObserver = Some False
   return result.featuredAppRightCid
 
 -- | Encode a list of beneficiaries as metadata to pass in via token standard choices.

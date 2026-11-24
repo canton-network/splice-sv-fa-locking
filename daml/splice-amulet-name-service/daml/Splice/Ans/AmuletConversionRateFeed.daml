@@ -13,6 +13,7 @@ import DA.Action (when)
 import DA.Assert
 import DA.Foldable
 import DA.Time
+import Splice.Amulet (FeaturedAppRight, FeaturedAppRight_Fetch(..))
 import Splice.AmuletRules
 import Splice.AmuletConfig
 import Splice.Api.FeaturedAppRightV1 qualified as Api
@@ -62,7 +63,9 @@ template AmuletConversionRateFeed
          assertWithinDeadline "newNextUpdateAfter - 0.5 tickDuration" (newNextUpdateAfter `addRelTime` convertMicrosecondsToRelTime (- (convertRelTimeToMicroseconds currentConfig.tickDuration) / 2 + 1))
          when (useFeaturedAppMarkers $ fmap (.mintingVersion) currentConfig.rewardConfig) $
            forA_ markerContextO $ \markerContext -> do
-             _ <- fetchCheckedInterface ForOwner{dso, owner = publisher} markerContext.featuredAppRightCid
+             _ <- fetchPublicReferenceData ForOwner{dso, owner = publisher}
+               (fromInterfaceContractId @FeaturedAppRight markerContext.featuredAppRightCid)
+               FeaturedAppRight_Fetch
              exercise markerContext.featuredAppRightCid Api.FeaturedAppRight_CreateActivityMarker
                with
                  beneficiaries = markerContext.beneficiaries
@@ -70,9 +73,6 @@ template AmuletConversionRateFeed
            amuletConversionRate
            nextUpdateAfter = Some newNextUpdateAfter
          pure AmuletConversionRateFeed_UpdateResult { cid }
-
-instance HasCheckedFetch Api.FeaturedAppRightView ForOwner where
-  contractGroupId Api.FeaturedAppRightView{..} = ForOwner{dso,owner = provider}
 
 data AmuletConversionRateFeed_ArchiveAsDsoResult = AmuletConversionRateFeed_ArchiveAsDsoResult
   deriving (Serializable)

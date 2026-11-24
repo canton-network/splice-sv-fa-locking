@@ -15,6 +15,7 @@ import org.lfdecentralizedtrust.splice.store.UnavailablePartiesStore
 import org.lfdecentralizedtrust.splice.sv.config.SvAppBackendConfig
 import org.lfdecentralizedtrust.splice.sv.store.FeaturedAppUnderlockConfig
 import org.lfdecentralizedtrust.splice.sv.util.ContractStakeholders
+import org.lfdecentralizedtrust.splice.util.FeaturedAppRightUtil
 
 import scala.concurrent.{ExecutionContext, Future}
 import scala.jdk.CollectionConverters.*
@@ -110,7 +111,8 @@ object FeaturedAppPermanentUnderlockTrigger extends ContractStakeholders[Feature
       BatchedMultiDomainExpiredContractTrigger.Batch[FeaturedAppRight.ContractId, FeaturedAppRight]
     ]
 
-  override def informees(payload: FeaturedAppRight): Seq[String] = Seq(payload.provider)
+  override def informees(payload: FeaturedAppRight): Seq[String] =
+    if (FeaturedAppRightUtil.providerIsObserver(payload)) Seq(payload.provider) else Seq.empty
 
   override def dso(payload: FeaturedAppRight): String = payload.dso
 }

@@ -40,6 +40,10 @@ data TransferCall = TransferCall with
 data FeaturedAppRightCall = FeaturedAppRightCall with
     appRightCid : ContractId FeaturedAppRight
     beneficiaries : [AppRewardBeneficiary]
+    optBatchMergeUtilityCid : Optional (ContractId BatchMergeUtility)
+      -- ^ The `BatchMergeUtility` of the operator, used to create the markers with only the
+      -- authority of the operator. This is required if the operator is not a stakeholder of
+      -- the featured app right. If not set, the featured app right is fetched instead.
   deriving (Eq, Show, Serializable)
 
 -- | The right for a operator like the wallet app operator to merge token
@@ -186,6 +190,19 @@ template BatchMergeUtility with
       controller operator
       do runBatch operator mergeCalls M.empty []
 
+    -- Create activity markers with only the authority of the operator.
+    -- Used by `MergeDelegation_Merge`, which also has the authority of the owner.
+    nonconsuming choice BatchMergeUtility_CreateActivityMarker : BatchMergeUtility_CreateActivityMarkerResult
+      with
+        expectedOperator : Party
+        call : FeaturedAppRightCall
+      controller operator
+      do
+        checkExpected "operator of batch merge utility" expectedOperator operator
+        result <- exercise call.appRightCid FeaturedAppRight_CreateActivityMarker with
+          beneficiaries = call.beneficiaries
+        pure $ BatchMergeUtility_CreateActivityMarkerResult result
+
 data BatchMergeUtility_BatchMergeResult = BatchMergeUtility_BatchMergeResult with
     results : [MergeDelegation_MergeResult]
       -- ^ Results of each individual merge delegation call.
@@ -193,6 +210,9 @@ data BatchMergeUtility_BatchMergeResult = BatchMergeUtility_BatchMergeResult wit
       -- ^ Change holdings for the operator after executing extra transfers.
   deriving (Eq, Show, Serializable)
 
+data BatchMergeUtility_CreateActivityMarkerResult = BatchMergeUtility_CreateActivityMarkerResult with
+    result : FeaturedAppRight_CreateActivityMarkerResult
+  deriving (Serializable)
 
 type InstrumentHoldingMap = M.Map InstrumentId [ContractId Holding]
 
@@ -277,12 +297,22 @@ data MergeDelegationProposal_WithdrawResult = MergeDelegationProposal_WithdrawRe
 -- utility functions
 --------------------
 
+-- | Create the activity markers for the provider. This makes sure that
+-- the provider cannot create markers on a featured app right of the owner.
 createActivityMarkerForProvider : Party -> FeaturedAppRightCall -> Update ()
-createActivityMarkerForProvider provider call = do
-  appRight <- fetch call.appRightCid
-  require "App right matches expected provider" ((view appRight).provider == provider)
-  void $ exercise call.appRightCid FeaturedAppRight_CreateActivityMarker with
-    beneficiaries = call.beneficiaries
+createActivityMarkerForProvider provider call = case call.optBatchMergeUtilityCid of
+  -- The utility only has the authority of the provider, so creating the marker
+  -- fails if the provider of the featured app right is not the provider.
+  Some utilityCid ->
+    void $ exercise utilityCid BatchMergeUtility_CreateActivityMarker with
+      expectedOperator = provider
+      call
+  -- Fetching the featured app right only works if the provider is a stakeholder of it.
+  None -> do
+    appRight <- fetch call.appRightCid
+    require "App right matches expected provider" ((view appRight).provider == provider)
+    void $ exercise call.appRightCid FeaturedAppRight_CreateActivityMarker with
+      beneficiaries = call.beneficiaries
 
 checkExpected : (Eq a, Show a) => Text -> a -> a -> Update ()
 checkExpected description expected actual

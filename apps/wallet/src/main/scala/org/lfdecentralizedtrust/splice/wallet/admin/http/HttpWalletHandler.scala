@@ -336,6 +336,14 @@ class HttpWalletHandler(
       val appKind = request.flatMap(_.appKind).map(FeaturedAppKindUtil.toDaml)
       val activityWeight =
         request.flatMap(_.activityWeight).map(Codec.tryDecode(Codec.JavaBigDecimal)(_))
+      // The provider is an observer when the field is not set on the right, so we leave it unset
+      // when requested. This keeps the right usable with older amulet versions.
+      //
+      // TODO: this defaults to Optional.of(false) at the moment to identify test failures and bad
+      // assumptions. We need to revert it to default to None so old versions continue to work.
+      val providerIsObserver: java.util.Optional[java.lang.Boolean] =
+        if (request.flatMap(_.providerIsObserver).contains(true)) java.util.Optional.empty()
+        else java.util.Optional.of(false)
       val opsParties = request.flatMap(_.opsPartyIds).map { partyIds =>
         // Same limit as enforced by WalletAppInstall_FeaturedAppRights_SelfGrant
         maxSizeOrFail("ops_party_ids", partyIds, 10)
@@ -353,6 +361,7 @@ class HttpWalletHandler(
                 activityWeight.toJava,
                 appKind.toJava,
                 opsParties.map(_.asJava).toJava,
+                providerIsObserver,
               )
               .map(_.exerciseResult.featuredAppRight)
           )
@@ -724,24 +733,34 @@ class HttpWalletHandler(
     implicit val WalletUserRequest(user, userWallet, traceContext) = tuser
     withSpan(s"$workflowId.cancelFeaturedAppRights") { implicit traceContext => _ =>
       for {
-        featuredAppRight <- userWallet.store.lookupFeaturedAppRight()
+        // Look up the right in scan, as the user is not necessarily a stakeholder of it.
+        featuredAppRight <- scanConnection.lookupFeaturedAppRight(userWallet.store.key.endUserParty)
         result <- featuredAppRight match {
           case None =>
             logger.info(s"No featured app right found for user ${user} - nothing to cancel")
             Future.successful(r0.CancelFeaturedAppRightsResponseOK)
-          case Some(cid) =>
-            retryProvider.retryForClientCalls(
-              "cancel_featured_app_rights",
-              "Cancel featured app rights",
-              exerciseWalletAction((installCid, _) => {
-                Future.successful(
-                  installCid
-                    .exerciseWalletAppInstall_FeaturedAppRights_Cancel(cid.contractId)
-                    .map(_ => r0.CancelFeaturedAppRightsResponseOK)
-                )
-              })(userWallet),
-              logger,
-            )
+          case Some(right) =>
+            for {
+              amuletRules <- scanConnection.getAmuletRulesWithState()
+              result <- retryProvider.retryForClientCalls(
+                "cancel_featured_app_rights",
+                "Cancel featured app rights",
+                exerciseWalletAction((installCid, _) => {
+                  Future.successful(
+                    installCid
+                      .exerciseWalletAppInstall_FeaturedAppRights_Cancel(right.contractId)
+                      .map(_ => r0.CancelFeaturedAppRightsResponseOK)
+                  )
+                })(
+                  userWallet,
+                  // Approximating the state of featured app right to be the same as the AmuletRules
+                  // as scan currently does not return a ContractWithState.
+                  disclosedContracts =
+                    _.disclosedContracts(ContractWithState(right, amuletRules.state)),
+                ),
+                logger,
+              )
+            } yield result
         }
       } yield result
     }

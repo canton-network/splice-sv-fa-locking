@@ -228,6 +228,7 @@ object HttpWalletAppClient {
       appKind: Option[amuletCodegen.FeaturedAppKind] = None,
       activityWeight: Option[BigDecimal] = None,
       opsParties: Option[Seq[PartyId]] = None,
+      providerIsObserver: Option[Boolean] = None,
   ) extends InternalBaseCommand[
         http.SelfGrantFeatureAppRightResponse,
         amuletCodegen.FeaturedAppRight.ContractId,
@@ -244,6 +245,7 @@ object HttpWalletAppClient {
             appKind = appKind.map(FeaturedAppKindUtil.fromDaml),
             activityWeight = activityWeight.map(Codec.encode(_)),
             opsPartyIds = opsParties.map(_.map(_.toProtoPrimitive).toVector),
+            providerIsObserver = providerIsObserver,
           )
         ),
         headers = headers,

@@ -63,7 +63,7 @@ setupTest = do
   featuredAppRightCid <- AmuletRegistry.featureApp registry exchangeParty
 
   -- retrieve the create-event blob for the featured app right that the treasuryParty needs to pass in
-  appRightD <- queryDisclosure' @Splice.Amulet.FeaturedAppRight exchangeParty featuredAppRightCid
+  appRightD <- queryDisclosure' @Splice.Amulet.FeaturedAppRight registry.dso featuredAppRightCid
 
   -- Setup treasury party for the exchange with some funds
   treasuryParty <- allocatePartyExact "treasuryParty"
@@ -389,4 +389,39 @@ test_featured_withdrawal = script do
   WalletClient.checkBalance alice registry.instrumentId 0.0
   WalletClient.checkBalanceApprox treasuryParty registry.instrumentId 1000.0
 
+  pure ()
+
+-- | The delegate cannot use the proxy to create markers on a featured app right
+-- where the delegate is the provider, as the markers are created with only the
+-- authority of the proxy's provider.
+test_delegate_cannot_use_own_app_right : Script ()
+test_delegate_cannot_use_own_app_right = script do
+  TestSetup {..} <- setupTest
+
+  treasuryAppRightCid <- AmuletRegistry.featureApp registry treasuryParty
+  treasuryAppRightD <- queryDisclosure' @Splice.Amulet.FeaturedAppRight registry.dso treasuryAppRightCid
+
+  enrichedChoice <- RegistryApi.getTransferFactory registry TransferFactory_Transfer with
+    expectedAdmin = registry.dso
+    transfer = Api.Token.TransferInstructionV1.Transfer with
+      sender = treasuryParty
+      receiver = alice
+      amount = 10.0
+      instrumentId = registry.instrumentId
+      requestedAt = now
+      executeBefore = now `addRelTime` days 1
+      inputHoldingCids = treasuryHoldingCids
+      meta = emptyMetadata
+    extraArgs = emptyExtraArgs
+
+  submitWithDisclosuresMustFail' treasuryParty (proxyDisclosures <> treasuryAppRightD <> enrichedChoice.disclosures) $
+    exerciseCmd proxyCid DelegateProxy_TransferFactory_Transfer with
+      cid = enrichedChoice.factoryCid
+      proxyArg = ProxyArg with
+        choiceArg = enrichedChoice.arg
+        featuredAppRightCid = toInterfaceContractId treasuryAppRightCid
+        beneficiaries = [AppRewardBeneficiary treasuryParty 1.0]
+
+  [] <- query @Splice.Amulet.FeaturedAppActivityMarker treasuryParty
+  WalletClient.checkBalance treasuryParty registry.instrumentId 1000.0
   pure ()

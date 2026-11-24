@@ -91,10 +91,16 @@ abstract class WalletAppReference(
       appKind: Option[amuletCodegen.FeaturedAppKind] = None,
       activityWeight: Option[BigDecimal] = None,
       opsParties: Option[Seq[PartyId]] = None,
+      providerIsObserver: Option[Boolean] = None,
   ): amuletCodegen.FeaturedAppRight.ContractId = {
     consoleEnvironment.run {
       httpCommand(
-        HttpWalletAppClient.SelfGrantFeaturedAppRight(appKind, activityWeight, opsParties)
+        HttpWalletAppClient.SelfGrantFeaturedAppRight(
+          appKind,
+          activityWeight,
+          opsParties,
+          providerIsObserver,
+        )
       )
     }
   }

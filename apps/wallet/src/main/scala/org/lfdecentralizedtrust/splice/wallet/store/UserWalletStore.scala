@@ -377,14 +377,6 @@ trait UserWalletStore extends TxLogAppStore[TxLogEntry] with TransferInputStore 
     )
   }
 
-  final def lookupFeaturedAppRight()(implicit ec: ExecutionContext, tc: TraceContext): Future[
-    Option[Contract[amuletCodegen.FeaturedAppRight.ContractId, amuletCodegen.FeaturedAppRight]]
-  ] =
-    // Note: there is nothing that prevents a party from having multiple FeaturedAppRight contracts
-    // here we just take the first one.
-    lookupArbitraryPreferAssigned(amuletCodegen.FeaturedAppRight.COMPANION)
-      .map(_ map (_.contract))
-
   def lookupTransferPreapprovalProposal(receiver: PartyId)(implicit
       ec: ExecutionContext,
       tc: TraceContext,
@@ -768,7 +760,8 @@ object UserWalletStore {
         )(UserWalletAcsStoreRowData(_)),
         // Featured app right
         mkFilter(amuletCodegen.FeaturedAppRight.COMPANION)(co =>
-          co.payload.dso == dso && co.payload.provider == endUser
+          co.payload.dso == dso && co.payload.provider == endUser &&
+            FeaturedAppRightUtil.providerIsObserver(co.payload)
         )(UserWalletAcsStoreRowData(_)),
         // ANS entry
         mkFilter(ansCodegen.AnsEntry.COMPANION)(co => co.payload.user == endUser)(

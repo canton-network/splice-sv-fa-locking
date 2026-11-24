@@ -30,6 +30,9 @@ defaultGovernanceLockManagementConfig = GovernanceLockManagementConfig with
 defaultGovernanceLockFeaturedAppUnderlockGracePeriod : RelTime
 defaultGovernanceLockFeaturedAppUnderlockGracePeriod = governanceLockFeaturedAppUnderlockGracePeriod None
 
+getFeaturedAppRights : forall i v. (Template i, HasInterfaceView i v, HasField "provider" v Party) => Party -> Party -> Script [(ContractId i, Optional v)]
+getFeaturedAppRights dso provider = filter (\(_, v) -> fmap (.provider) v == Some provider) <$> queryInterface @i dso
+
 setUnderlockStatus : AmuletApp -> Party -> Party -> Bool -> Script ()
 setUnderlockStatus app sv provider underlocked = do
   confirmAndExecutionAction app $ ARC_DsoRules with
@@ -45,7 +48,7 @@ setUnderlockStatus app sv provider underlocked = do
 underlockPermanentAtOf : AmuletApp -> Party -> Script (Optional Time)
 underlockPermanentAtOf app provider = do
   Some cid <- getFeaturedAppRight app provider
-  Some right <- queryContractId provider cid
+  Some right <- queryContractId app.dso cid
   pure right.underlockPermanentAt
 
 testUnderlockSuspend : Script ()
@@ -190,12 +193,12 @@ testUnderlockShorterGracePeriodTakesMinimum = do
 
 testUnderlockSuspendedCreatesNoMarkers : Script ()
 testUnderlockSuspendedCreatesNoMarkers = do
-  (app, _, (sv1, _, _, _)) <- initMainNet
+  (app, dso, (sv1, _, _, _)) <- initMainNet
   provider <- allocateParty "provider"
   _ <- grantFeaturedAppRight app provider
 
-  [(ifaceCid, _)] <- queryInterface @FAR1.FeaturedAppRight provider
-  FAR1.FeaturedAppRight_CreateActivityMarkerResult [_] <- submit provider $
+  [(ifaceCid, _)] <- getFeaturedAppRights @FAR1.FeaturedAppRight dso provider
+  FAR1.FeaturedAppRight_CreateActivityMarkerResult [_] <- submit (actAs dso <> actAs provider) $
     exerciseCmd ifaceCid FAR1.FeaturedAppRight_CreateActivityMarker with
       beneficiaries = [FAR1.AppRewardBeneficiary provider 1.0]
 
@@ -204,8 +207,8 @@ testUnderlockSuspendedCreatesNoMarkers = do
   setUnderlockStatus app sv1 provider True
 
   -- succeeds, but creates nothing
-  [(ifaceCid', _)] <- queryInterface @FAR1.FeaturedAppRight provider
-  FAR1.FeaturedAppRight_CreateActivityMarkerResult [] <- submit provider $
+  [(ifaceCid', _)] <- getFeaturedAppRights @FAR1.FeaturedAppRight dso provider
+  FAR1.FeaturedAppRight_CreateActivityMarkerResult [] <- submit (actAs dso <> actAs provider) $
     exerciseCmd ifaceCid' FAR1.FeaturedAppRight_CreateActivityMarker with
       beneficiaries = [FAR1.AppRewardBeneficiary provider 1.0]
 
@@ -238,12 +241,12 @@ testUnderlockWrongProviderFails = do
 
 testUnderlockSuspendedCreatesNoMarkersV2 : Script ()
 testUnderlockSuspendedCreatesNoMarkersV2 = do
-  (app, _, (sv1, _, _, _)) <- initMainNet
+  (app, dso, (sv1, _, _, _)) <- initMainNet
   provider <- allocateParty "provider"
   _ <- grantFeaturedAppRight app provider
 
-  [(ifaceCid, _)] <- queryInterface @FAR2.FeaturedAppRight provider
-  FAR2.FeaturedAppRight_CreateActivityMarkerResult [_] <- submit provider $
+  [(ifaceCid, _)] <- getFeaturedAppRights @FAR2.FeaturedAppRight dso provider
+  FAR2.FeaturedAppRight_CreateActivityMarkerResult [_] <- submit (actAs dso <> actAs provider) $
     exerciseCmd ifaceCid FAR2.FeaturedAppRight_CreateActivityMarker with
       beneficiaries = [FAR2.AppRewardBeneficiary provider 1.0]
       weight = Some 50.0
@@ -252,8 +255,8 @@ testUnderlockSuspendedCreatesNoMarkersV2 = do
 
   setUnderlockStatus app sv1 provider True
 
-  [(ifaceCid', _)] <- queryInterface @FAR2.FeaturedAppRight provider
-  FAR2.FeaturedAppRight_CreateActivityMarkerResult [] <- submit provider $
+  [(ifaceCid', _)] <- getFeaturedAppRights @FAR2.FeaturedAppRight dso provider
+  FAR2.FeaturedAppRight_CreateActivityMarkerResult [] <- submit (actAs dso <> actAs provider) $
     exerciseCmd ifaceCid' FAR2.FeaturedAppRight_CreateActivityMarker with
       beneficiaries = [FAR2.AppRewardBeneficiary provider 1.0]
       weight = Some 50.0

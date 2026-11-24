@@ -587,6 +587,7 @@ template WalletAppInstall
         activityWeight : Optional Decimal
         appKind : Optional FeaturedAppKind
         opsParties : Optional [Party]
+        providerIsObserver : Optional Bool
       controller validatorParty
       do require "opsParties has at most 10 entries" (optional 0 length opsParties <= 10)
          result <- exercise amuletRulesCid $ AmuletRules_DevNet_FeatureApp with
@@ -594,6 +595,7 @@ template WalletAppInstall
            activityWeight
            appKind
            opsParties
+           providerIsObserver
          return WalletAppInstall_FeaturedAppRights_SelfGrantResult with
            featuredAppRight = result.featuredAppRightCid
 

@@ -19,6 +19,8 @@ ignored_files=(
   'daml/splice-util-featured-app-proxies/'
   'daml/splice-util-token-standard-wallet/'
   'daml/splice-util-batched-markers/'
+  # tests the FeaturedAppRight_Fetch choice directly
+  'daml/splice-amulet-test/daml/Splice/Scripts/TestFeaturedAppRightProviderIsObserver.daml'
   'canton/')
 
 fetch_archive_pattern='(exercise.*_Fetch|fetch|archive)\b'

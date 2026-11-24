@@ -59,10 +59,11 @@ class BatchedFeaturedAppActivityMarkerIntegrationTest
       proxyCid: batchedmarkersproxy.BatchedMarkersProxy.ContractId,
       featuredAppRightCid: amulet.FeaturedAppRight.ContractId,
       batches: Seq[(Seq[(PartyId, Double)], Long)],
-  ) = {
+  )(implicit env: SpliceTestConsoleEnvironment) = {
     validator.participantClientWithAdminToken.ledger_api_extensions.commands
       .submitJava(
         actAs = Seq(provider),
+        disclosedContracts = Seq(featuredAppRightDisclosure(featuredAppRightCid)),
         commands = proxyCid
           .exerciseBatchedMarkersProxy_CreateMarkers(
             featuredAppRightCid.toInterface(featuredapprightv1.FeaturedAppRight.INTERFACE),
@@ -90,10 +91,11 @@ class BatchedFeaturedAppActivityMarkerIntegrationTest
       proxyCid: batchedmarkersproxy.BatchedMarkersProxy.ContractId,
       featuredAppRightCid: amulet.FeaturedAppRight.ContractId,
       batches: Seq[(Seq[(PartyId, Double)], BigDecimal)],
-  ) = {
+  )(implicit env: SpliceTestConsoleEnvironment) = {
     validator.participantClientWithAdminToken.ledger_api_extensions.commands
       .submitJava(
         actAs = Seq(provider),
+        disclosedContracts = Seq(featuredAppRightDisclosure(featuredAppRightCid)),
         commands = proxyCid
           .exerciseBatchedMarkersProxy_CreateMarkersV2(
             featuredAppRightCid.toInterface(featuredapprightv2.FeaturedAppRight.INTERFACE),
@@ -158,7 +160,10 @@ class BatchedFeaturedAppActivityMarkerIntegrationTest
     val alice = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
     val bob = onboardWalletUser(bobWalletClient, bobValidatorBackend)
     val splitwell = onboardWalletUser(splitwellWalletClient, splitwellValidatorBackend)
-    val aliceFeaturedAppRightCid = aliceWalletClient.selfGrantFeaturedAppRight()
+    // Bob is an informee of alice's markers and only vets amulet <= 0.1.19, which cannot represent
+    // a right where the provider is not an observer.
+    val aliceFeaturedAppRightCid =
+      aliceWalletClient.selfGrantFeaturedAppRight(providerIsObserver = Some(true))
     val splitwellFeaturedAppRightCid = splitwellWalletClient.selfGrantFeaturedAppRight()
     val aliceProxy = createBatchedMarkersProxy(aliceValidatorBackend, alice)
     val splitwellProxy = createBatchedMarkersProxy(splitwellValidatorBackend, splitwell)

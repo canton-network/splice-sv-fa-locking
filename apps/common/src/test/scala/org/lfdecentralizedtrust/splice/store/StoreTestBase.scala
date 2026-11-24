@@ -792,6 +792,7 @@ abstract class StoreTestBase
       appKind: Option[FeaturedAppKind] = None,
       opsParties: Option[Seq[PartyId]] = None,
       underlockPermanentAt: Option[Instant] = None,
+      providerIsObserver: Option[Boolean] = Some(false),
   ) = {
     val template = new FeaturedAppRight(
       dsoParty.toProtoPrimitive,
@@ -800,6 +801,7 @@ abstract class StoreTestBase
       appKind.toJava,
       opsParties.map(_.map(_.toProtoPrimitive).asJava).toJava,
       underlockPermanentAt.toJava,
+      providerIsObserver.map(b => b: java.lang.Boolean).toJava,
     )
     contract(
       FeaturedAppRight.TEMPLATE_ID_WITH_PACKAGE_ID,

@@ -45,8 +45,12 @@ template BatchedMarkersProxy with
       controller provider
       do require "numMarkers > 0" (all (\b -> b.numMarkers > 0) batches)
          require "sum numMarkers <= 10000" (sum (map (.numMarkers) batches) <= 10000)
+         {-
+         TODO: with `providerIsObserver = Some False` this `fetch` can never succeed
+
          featuredAppRightView <- view <$> fetch featuredAppRightCid
          require "DSO party on featured app right is correct" (featuredAppRightView.dso == dso)
+         -}
          results <- forA batches $ \batch -> forA [1..batch.numMarkers] $ \_ ->
            exercise featuredAppRightCid FeaturedAppRightV1.FeaturedAppRight_CreateActivityMarker with
              beneficiaries = batch.beneficiaries
@@ -60,8 +64,12 @@ template BatchedMarkersProxy with
       controller provider
       do require "markerWeight >= 1.0" (all (\b -> b.markerWeight >= 1.0) batches)
          require "sum numMarkers <= 10000.0" (sum (map (.markerWeight) batches) <= 10000.0)
+         {-
+         TODO: with `providerIsObserver = Some False` this `fetch` can never succeed
+
          featuredAppRightView <- view <$> fetch featuredAppRightCid
          require "DSO party on featured app right is correct" (featuredAppRightView.dso == dso)
+         -}
          results <- forA batches $ \batch ->
            exercise featuredAppRightCid FeaturedAppRightV2.FeaturedAppRight_CreateActivityMarker with
              beneficiaries = batch.beneficiaries

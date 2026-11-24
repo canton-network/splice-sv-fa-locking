@@ -373,10 +373,12 @@ template FeaturedAppRight with
       -- ^ If set, indicates that the featured app right is suspended and
       -- indicates the deadline of when the underlock will be made permanent
       -- by archiving the FeaturedAppRight.
+    providerIsObserver : Optional Bool
+      -- ^ Whether the provider should be an observer of the contract.
+      -- When set to `Some False`, the provider is not an observer. Otherwise they are an observer.
   where
     signatory dso
-    observer provider
-    ensure validFeaturedAppRight this
+    observer (if fromOptional True providerIsObserver then [provider] else [])
 
     -- TODO(tech-debt): Remove this choice once the UI is fully switched over to FeaturedAppRight_UpdateConfig
     choice FeaturedAppRight_Update : FeaturedAppRight_UpdateResult
@@ -401,6 +403,12 @@ template FeaturedAppRight with
     choice FeaturedAppRight_Cancel : FeaturedAppRight_CancelResult
       controller provider
       do return FeaturedAppRight_CancelResult
+
+    -- Lets the provider read the featured app right in case they are not an observer of it.
+    nonconsuming choice FeaturedAppRight_Fetch : FeaturedAppRight
+      controller provider
+      do
+        pure this
 
     -- NB: This choice is more general than, and a replacement for FeaturedAppRight_Update
     -- since activityWeight is a field of FeaturedAppConfig

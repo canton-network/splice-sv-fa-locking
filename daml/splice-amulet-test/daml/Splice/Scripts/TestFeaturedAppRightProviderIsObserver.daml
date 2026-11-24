@@ -1,0 +1,81 @@
+-- Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module Splice.Scripts.TestFeaturedAppRightProviderIsObserver where
+
+import DA.Assert
+import DA.Foldable (forA_)
+import Daml.Script
+
+import Splice.Amulet
+import Splice.Scripts.Util
+import Splice.Testing.Registries.AmuletRegistry (convertAllFeaturedAppActivityMarkers)
+
+-- | Recreate a featured app right with a different `providerIsObserver` value.
+setProviderIsObserver : AmuletApp -> ContractId FeaturedAppRight -> Optional Bool -> Script (ContractId FeaturedAppRight)
+setProviderIsObserver app rightCid providerIsObserver = do
+  Some right <- queryContractId app.dso rightCid
+  submit app.dso $ archiveCmd rightCid *> createCmd right with providerIsObserver
+
+testProviderIsObserverStakeholders : Script ()
+testProviderIsObserverStakeholders = do
+  DefaultAppWithUsers{..} <- setupDefaultAppWithUsers
+  _ <- featureApp app provider1
+  let provider = provider1.primaryParty
+
+  forA_ [(None, True), (Some True, True), (Some False, False)] $ \(providerIsObserver, expectVisible) -> do
+    [(rightCid, _)] <- queryFilter @FeaturedAppRight app.dso (\r -> r.provider == provider)
+    cid <- setProviderIsObserver app rightCid providerIsObserver
+    visibleRights <- map fst <$> query @FeaturedAppRight provider
+    visibleRights === [cid | expectVisible]
+
+testUpdatesPreserveProviderIsObserver : Script ()
+testUpdatesPreserveProviderIsObserver = do
+  DefaultAppWithUsers{..} <- setupDefaultAppWithUsers
+  rightCid0 <- featureApp app provider1
+  rightCid1 <- setProviderIsObserver app rightCid0 (Some False)
+
+  FeaturedAppRight_UpdateResult rightCid2 <- submit app.dso $ exerciseCmd rightCid1 FeaturedAppRight_Update with
+    reason = "test"
+    newActivityWeight = 2.0
+  Some right2 <- queryContractId app.dso rightCid2
+  right2.providerIsObserver === Some False
+
+  let baseConfig = getFeaturedAppConfig right2
+  FeaturedAppRight_UpdateConfigResult rightCid3 <- submit app.dso $ exerciseCmd rightCid2 FeaturedAppRight_UpdateConfig with
+    baseConfig
+    newConfig = baseConfig with activityWeight = Some 3.0
+  Some right3 <- queryContractId app.dso rightCid3
+  right3.providerIsObserver === Some False
+
+testFeaturedAppRightFetch : Script ()
+testFeaturedAppRightFetch = do
+  DefaultAppWithUsers{..} <- setupDefaultAppWithUsers
+  rightCid0 <- featureApp app provider1
+  rightCid <- setProviderIsObserver app rightCid0 (Some False)
+  Some right <- queryContractId app.dso rightCid
+  Some rightD <- queryDisclosure app.dso rightCid
+
+  -- the provider can fetch the right with disclosure, even though they are not an observer
+  fetched <- submit (actAs provider1.primaryParty <> disclose rightD) $ exerciseCmd rightCid FeaturedAppRight_Fetch
+  fetched === right
+
+  -- other parties cannot, even with disclosure
+  submitMustFail (actAs alice.primaryParty <> disclose rightD) $ exerciseCmd rightCid FeaturedAppRight_Fetch
+
+testFeaturedTransfersForAllProviderIsObserverValues : Script ()
+testFeaturedTransfersForAllProviderIsObserverValues = do
+  DefaultAppWithUsers{..} <- setupDefaultAppWithUsers
+  _ <- featureApp app provider1
+  _ <- tap app provider1 100.0
+
+  forA_ [None, Some True, Some False] $ \providerIsObserver -> do
+    [(rightCid, _)] <- queryFilter @FeaturedAppRight app.dso (\r -> r.provider == provider1.primaryParty)
+    _ <- setProviderIsObserver app rightCid providerIsObserver
+    before <- map fst <$> queryFilter @AppRewardCoupon app.dso (\r -> r.provider == provider1.primaryParty)
+
+    pay app provider1 alice.primaryParty 1.0
+    convertAllFeaturedAppActivityMarkers app.dso
+
+    after <- queryFilter @AppRewardCoupon app.dso (\r -> r.provider == provider1.primaryParty)
+    [ (c.provider, c.featured) | (cid, c) <- after, cid `notElem` before ] === [(provider1.primaryParty, True)]

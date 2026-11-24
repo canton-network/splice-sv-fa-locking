@@ -897,6 +897,7 @@ class ValidatorApp(
         (
           new HttpStatusWalletHandler(
             walletManager,
+            scanConnection,
             loggerFactory,
           ),
           walletManager,
@@ -927,6 +928,7 @@ class ValidatorApp(
 
       publicHandler = new HttpValidatorPublicHandler(
         automation.store,
+        scanConnection,
         config.ledgerApiUser,
         loggerFactory,
       )
