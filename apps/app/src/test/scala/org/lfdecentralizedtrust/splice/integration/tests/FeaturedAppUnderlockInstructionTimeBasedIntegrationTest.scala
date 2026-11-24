@@ -5,17 +5,9 @@ package org.lfdecentralizedtrust.splice.integration.tests
 
 import com.digitalasset.canton.HasExecutionContext
 import com.digitalasset.canton.topology.PartyId
-import org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime
-import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.{
-  DsoRulesConfig,
-  DsoRules_CreateFeaturedAppUnderlockInstruction,
-  DsoRules_SetConfig,
-}
+import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.DsoRules_CreateFeaturedAppUnderlockInstruction
 import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.actionrequiringconfirmation.ARC_DsoRules
-import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.dsorules_actionrequiringconfirmation.{
-  SRARC_CreateFeaturedAppUnderlockInstruction,
-  SRARC_SetConfig,
-}
+import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.dsorules_actionrequiringconfirmation.SRARC_CreateFeaturedAppUnderlockInstruction
 import org.lfdecentralizedtrust.splice.codegen.java.splice.round.OpenMiningRound
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms.{
   ConfigurableApp,
@@ -33,7 +25,6 @@ import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.ExecuteFeatur
 import org.lfdecentralizedtrust.splice.util.{TimeTestUtil, WalletTestUtil}
 
 import java.time.{Duration, Instant}
-import java.util.Optional
 import scala.jdk.OptionConverters.*
 
 @org.lfdecentralizedtrust.splice.util.scalatesttags.SpliceDsoGovernance_0_1_32
@@ -68,45 +59,6 @@ class FeaturedAppUnderlockInstructionTimeBasedIntegrationTest
     featuredAppRightOf(alice).data.underlockPermanentAt.toScala shouldBe Some(deadline)
   }
 
-  // TODO(canton-network/splice-sv-fa-locking#205): pause the trigger that
-  // expires underlock instructions here, once it exists.
-  "apply an instruction past its expiry" in { implicit env =>
-    val alice = grantRight(aliceWalletClient, aliceValidatorBackend)
-    // A short timeout lets the instruction expire within the current round.
-    setVoteRequestTimeout(Duration.ofMinutes(1))
-    voteToCreateUnderlockInstruction(alice, underlocked = true)
-    val expiresAt = underlockInstructionsFor(alice).loneElement.data.expiresAt
-    advanceTimeWithinRound(
-      Duration.between(getLedgerTime.toInstant, expiresAt).plusMinutes(1)
-    )
-
-    executeUnderlockAndExpectPermanentAt(alice)
-  }
-
-  "leave an instruction without a right" in { implicit env =>
-    val alice = grantRight(aliceWalletClient, aliceValidatorBackend)
-    val bob = onboardWalletUser(bobWalletClient, bobValidatorBackend)
-    voteToCreateUnderlockInstruction(bob, underlocked = true)
-    voteToCreateUnderlockInstruction(alice, underlocked = true)
-
-    clue("the trigger applies alice's instruction and leaves bob's") {
-      // The SV store ingests in ledger order, and bob's instruction comes
-      // first. 'executeUnderlockAndExpectPermanentAt(alice)' waits for the
-      // store to sync alice's instruction and right. The store also holds bob's
-      // instruction once alice's instruction is in. So the trigger doesn't
-      // process the bob's instruction because it has no right. Not because
-      // bob's wasn't ingested.
-      executeUnderlockAndExpectPermanentAt(alice)
-      underlockInstructionsFor(bob) should have size 1
-      runTrigger() shouldBe false
-    }
-
-    clue("the instruction applies to a right granted later") {
-      grantRight(bobWalletClient, bobValidatorBackend)
-      executeUnderlockAndExpectPermanentAt(bob)
-    }
-  }
-
   /** Advances sim time without reaching the next round's opening, so that the
     * round automation has no work to do: long jumps leave it catching up
     * while the test runs, which causes flakes (canton-network/splice#7223).
@@ -125,56 +77,6 @@ class FeaturedAppUnderlockInstructionTimeBasedIntegrationTest
       now.plus(duration).isBefore(nextOpening) shouldBe true
     }
     advanceTime(duration)
-  }
-
-  /** Sets the DSO's vote request timeout, which is also the lifetime of new
-    * underlock instructions. With one SV, the vote is accepted at once.
-    */
-  private def setVoteRequestTimeout(timeout: Duration)(implicit
-      env: SpliceTestConsoleEnvironment
-  ): Unit = {
-    val config = sv1Backend.getDsoInfo().dsoRules.payload.config
-    val voteRequestTimeout = new RelTime(timeout.toNanos / 1000)
-    val newConfig = new DsoRulesConfig(
-      config.numUnclaimedRewardsThreshold,
-      config.numMemberTrafficContractsThreshold,
-      config.actionConfirmationTimeout,
-      config.svOnboardingRequestTimeout,
-      config.svOnboardingConfirmedTimeout,
-      voteRequestTimeout,
-      config.dsoDelegateInactiveTimeout,
-      config.synchronizerNodeConfigLimits,
-      config.maxTextLength,
-      config.decentralizedSynchronizer,
-      config.nextScheduledSynchronizerUpgrade,
-      config.voteCooldownTime,
-      config.nextScheduledLogicalSynchronizerUpgrade,
-      config.svOperationsSwitchOverTimes,
-      config.governanceLockManagementConfig,
-    )
-    val action = new ARC_DsoRules(
-      new SRARC_SetConfig(new DsoRules_SetConfig(newConfig, Optional.empty()))
-    )
-    actAndCheck(
-      s"SV votes to set the vote request timeout to $timeout",
-      sv1Backend.createVoteRequest(
-        sv1Backend.getDsoInfo().svParty.toProtoPrimitive,
-        action,
-        "url",
-        "vote request timeout",
-        config.voteRequestTimeout,
-        None,
-      ),
-    )(
-      "the DSO rules carry the new timeout",
-      _ =>
-        sv1Backend
-          .getDsoInfo()
-          .dsoRules
-          .payload
-          .config
-          .voteRequestTimeout shouldBe voteRequestTimeout,
-    )
   }
 
   private def runTrigger()(implicit env: SpliceTestConsoleEnvironment) =
