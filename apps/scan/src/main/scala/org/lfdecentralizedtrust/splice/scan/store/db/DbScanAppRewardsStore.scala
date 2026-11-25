@@ -41,6 +41,10 @@ object DbScanAppRewardsStore {
       numAppActivityRecords: Long,
       numAssetActivityRecords: Long,
       totalAssetActivityWeight: Long,
+      totalExtraAppActivityWeight: Long,
+      totalExtraAssetActivityWeight: Long,
+      numExtraAppActivityRecords: Long,
+      numExtraAssetActivityRecords: Long,
   )
 
   final case class AppActivityRoundTotalT(
@@ -50,6 +54,8 @@ object DbScanAppRewardsStore {
       activeAppProviderPartiesCount: Long,
       activityRecordsCount: Long,
       totalRoundAssetActivityWeight: Long,
+      totalRoundExtraAppActivityWeight: Long,
+      totalRoundExtraAssetActivityWeight: Long,
   )
 
   final case class AppRewardPartyTotalT(
@@ -145,6 +151,7 @@ class DbScanAppRewardsStore(
     storage: DbStorage,
     updateHistory: UpdateHistory,
     appActivityRecordStore: DbAppActivityRecordStore,
+    extraActivityRecordStore: DbExtraActivityRecordStore,
     rewardMintingAllowanceTolerance: BigDecimal,
     override protected val loggerFactory: NamedLoggerFactory,
 )(implicit
@@ -184,6 +191,10 @@ class DbScanAppRewardsStore(
       numAppActivityRecords = prs.<<[Long],
       numAssetActivityRecords = prs.<<[Long],
       totalAssetActivityWeight = prs.<<[Long],
+      totalExtraAppActivityWeight = prs.<<[Long],
+      totalExtraAssetActivityWeight = prs.<<[Long],
+      numExtraAppActivityRecords = prs.<<[Long],
+      numExtraAssetActivityRecords = prs.<<[Long],
     )
   }
 
@@ -196,6 +207,8 @@ class DbScanAppRewardsStore(
       activeAppProviderPartiesCount = prs.<<[Long],
       activityRecordsCount = prs.<<[Long],
       totalRoundAssetActivityWeight = prs.<<[Long],
+      totalRoundExtraAppActivityWeight = prs.<<[Long],
+      totalRoundExtraAssetActivityWeight = prs.<<[Long],
     )
   }
 
@@ -269,14 +282,22 @@ class DbScanAppRewardsStore(
               ${row.appProviderParty},
               ${row.numAppActivityRecords},
               ${row.numAssetActivityRecords},
-              ${row.totalAssetActivityWeight})"""
+              ${row.totalAssetActivityWeight},
+              ${row.totalExtraAppActivityWeight},
+              ${row.totalExtraAssetActivityWeight},
+              ${row.numExtraAppActivityRecords},
+              ${row.numExtraAssetActivityRecords})"""
       })
       (sql"""insert into #${Tables.appActivityPartyTotals}(
               history_id, round_number, total_app_activity_weight,
               app_provider_party,
               num_app_activity_records,
               num_asset_activity_records,
-              total_asset_activity_weight
+              total_asset_activity_weight,
+              total_extra_app_activity_weight,
+              total_extra_asset_activity_weight,
+              num_extra_app_activity_records,
+              num_extra_asset_activity_records
             ) values """ ++ values).asUpdate
     }
   }
@@ -305,7 +326,11 @@ class DbScanAppRewardsStore(
                    app_provider_party,
                    num_app_activity_records,
                    num_asset_activity_records,
-                   total_asset_activity_weight
+                   total_asset_activity_weight,
+                   total_extra_app_activity_weight,
+                   total_extra_asset_activity_weight,
+                   num_extra_app_activity_records,
+                   num_extra_asset_activity_records
             from #${Tables.appActivityPartyTotals}
             where history_id = $historyId and round_number = $roundNumber
             order by app_provider_party
@@ -324,12 +349,16 @@ class DbScanAppRewardsStore(
       val values = sqlCommaSeparated(items.map { row =>
         sql"""(${row.historyId}, ${row.roundNumber}, ${row.totalRoundAppActivityWeight},
               ${row.activeAppProviderPartiesCount}, ${row.activityRecordsCount},
-              ${row.totalRoundAssetActivityWeight})"""
+              ${row.totalRoundAssetActivityWeight},
+              ${row.totalRoundExtraAppActivityWeight},
+              ${row.totalRoundExtraAssetActivityWeight})"""
       })
       (sql"""insert into #${Tables.appActivityRoundTotals}(
               history_id, round_number, total_round_app_activity_weight,
               active_app_provider_parties_count, activity_records_count,
-              total_round_asset_activity_weight
+              total_round_asset_activity_weight,
+              total_round_extra_app_activity_weight,
+              total_round_extra_asset_activity_weight
             ) values """ ++ values).asUpdate
     }
   }
@@ -356,7 +385,9 @@ class DbScanAppRewardsStore(
     runQuerySingle(
       sql"""select history_id, round_number, total_round_app_activity_weight,
                    active_app_provider_parties_count, activity_records_count,
-                   total_round_asset_activity_weight
+                   total_round_asset_activity_weight,
+                   total_round_extra_app_activity_weight,
+                   total_round_extra_asset_activity_weight
             from #${Tables.appActivityRoundTotals}
             where history_id = $historyId and round_number = $roundNumber
             limit 1
@@ -365,10 +396,14 @@ class DbScanAppRewardsStore(
     )
   }
 
-  /** DBIO action to read the per-round `(appWeight, assetWeight)` for a round. */
+  /** DBIO action to read the per-round `(appWeight, assetWeight)` for a round
+    * as the sum of app-side and extra-side activity, matching the split-column
+    * storage contract where downstream reward computation sees combined totals.
+    */
   // .head is safe: only called after aggregateActivityTotalsAction in the same transaction.
   private def getRoundActivityWeightsAction(roundNumber: Long) =
-    sql"""select total_round_app_activity_weight, total_round_asset_activity_weight
+    sql"""select total_round_app_activity_weight + total_round_extra_app_activity_weight,
+                 total_round_asset_activity_weight + total_round_extra_asset_activity_weight
           from #${Tables.appActivityRoundTotals}
           where history_id = $historyId and round_number = $roundNumber
     """.as[(Long, Long)].head
@@ -758,49 +793,54 @@ class DbScanAppRewardsStore(
       ++ insertPartyTotals(historyId, roundNumber) ++ sql" "
       ++ insertRoundTotals(historyId, roundNumber)).asUpdate
 
-  /** Unnest per-verdict activity arrays and aggregate weights by party.
-    * TBAR v1.1 attribution is pre-applied in `app_provider_parties`.
-    */
-  private def unnestAndAggregate(historyId: Long, roundNumber: Long) =
-    sql"""app_unnested as (
-            select party, weight
+  /** TBAR v1.1 attribution is pre-applied in `app_provider_parties`. */
+  private def unnestAndAggregate(historyId: Long, roundNumber: Long) = {
+    val extraStoreId = extraActivityRecordStore.storeId
+    sql"""activity as (
+            select pw.kind, pw.party, pw.weight
             from app_activity_record_store a
-            cross join lateral unnest(a.app_provider_parties, a.app_activity_weights)
-                 as pw(party, weight)
+            cross join lateral (
+              select 'app' as kind, party, weight
+              from unnest(a.app_provider_parties, a.app_activity_weights)
+                as t(party, weight)
+              union all
+              select 'asset', party, weight
+              from unnest(a.asset_activity_provider_parties, a.asset_activity_weights)
+                as t(party, weight)
+            ) pw
             where a.history_id = $historyId
               and a.round_number = $roundNumber
-          ),
-          app_aggregated as (
-            select party, sum(weight) as total_app_weight,
-                   count(*) as num_app_activity_records
-            from app_unnested
-            group by party
-          ),
-          asset_unnested as (
-            select party, weight
-            from app_activity_record_store a
-            cross join lateral unnest(
-                   coalesce(a.asset_activity_provider_parties, '{}'::text[]),
-                   coalesce(a.asset_activity_weights,          '{}'::bigint[]))
-                 as pw(party, weight)
-            where a.history_id = $historyId
-              and a.round_number = $roundNumber
-          ),
-          asset_aggregated as (
-            select party, sum(weight) as total_asset_weight,
-                   count(*) as num_asset_activity_records
-            from asset_unnested
-            group by party
+
+            union all
+
+            select pw.kind, pw.party, pw.weight
+            from extra_app_activity_record_store x
+            cross join lateral (
+              select 'extra_app' as kind, party, weight
+              from unnest(x.app_provider_parties, x.app_activity_weights)
+                as t(party, weight)
+              union all
+              select 'extra_asset', party, weight
+              from unnest(x.asset_activity_provider_parties, x.asset_activity_weights)
+                as t(party, weight)
+            ) pw
+            where x.store_id = $extraStoreId
+              and x.round_number = $roundNumber
           ),
           combined_parties as (
-            select coalesce(a.party, s.party)                as party,
-                   coalesce(a.total_app_weight, 0)           as total_app_weight,
-                   coalesce(a.num_app_activity_records, 0)   as num_app_activity_records,
-                   coalesce(s.total_asset_weight, 0)         as total_asset_weight,
-                   coalesce(s.num_asset_activity_records, 0) as num_asset_activity_records
-            from app_aggregated a
-            full outer join asset_aggregated s on a.party = s.party
+            select party,
+                   coalesce(sum(weight) filter (where kind = 'app'), 0)         as total_app_weight,
+                   count(*)             filter (where kind = 'app')             as num_app_activity_records,
+                   coalesce(sum(weight) filter (where kind = 'extra_app'), 0)   as total_extra_app_weight,
+                   count(*)             filter (where kind = 'extra_app')       as num_extra_app_activity_records,
+                   coalesce(sum(weight) filter (where kind = 'asset'), 0)       as total_asset_weight,
+                   count(*)             filter (where kind = 'asset')           as num_asset_activity_records,
+                   coalesce(sum(weight) filter (where kind = 'extra_asset'), 0) as total_extra_asset_weight,
+                   count(*)             filter (where kind = 'extra_asset')     as num_extra_asset_activity_records
+            from activity
+            group by party
           )"""
+  }
 
   /** Insert per-party totals and return the inserted weights via RETURNING. */
   private def insertPartyTotals(historyId: Long, roundNumber: Long) =
@@ -812,18 +852,28 @@ class DbScanAppRewardsStore(
                app_provider_party,
                num_app_activity_records,
                num_asset_activity_records,
-               total_asset_activity_weight)
+               total_asset_activity_weight,
+               total_extra_app_activity_weight,
+               total_extra_asset_activity_weight,
+               num_extra_app_activity_records,
+               num_extra_asset_activity_records)
             select $historyId,
                    $roundNumber,
                    total_app_weight,
                    party,
                    num_app_activity_records,
                    num_asset_activity_records,
-                   total_asset_weight
+                   total_asset_weight,
+                   total_extra_app_weight,
+                   total_extra_asset_weight,
+                   num_extra_app_activity_records,
+                   num_extra_asset_activity_records
             from combined_parties
             returning total_app_activity_weight,
                       num_app_activity_records,
-                      total_asset_activity_weight
+                      total_asset_activity_weight,
+                      total_extra_app_activity_weight,
+                      total_extra_asset_activity_weight
           )"""
 
   /** Insert the round-level totals from the RETURNING output of insertPartyTotals. */
@@ -834,13 +884,17 @@ class DbScanAppRewardsStore(
              total_round_app_activity_weight,
              active_app_provider_parties_count,
              activity_records_count,
-             total_round_asset_activity_weight)
+             total_round_asset_activity_weight,
+             total_round_extra_app_activity_weight,
+             total_round_extra_asset_activity_weight)
           select $historyId,
                  $roundNumber,
                  coalesce(sum(total_app_activity_weight), 0),
                  count(*) filter (where total_app_activity_weight > 0),
                  coalesce(sum(num_app_activity_records), 0),
-                 coalesce(sum(total_asset_activity_weight), 0)
+                 coalesce(sum(total_asset_activity_weight), 0),
+                 coalesce(sum(total_extra_app_activity_weight), 0),
+                 coalesce(sum(total_extra_asset_activity_weight), 0)
           from inserted_parties"""
 
   // -- Reward computation -----------------------------------------------------

@@ -7,8 +7,10 @@ import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
 import org.lfdecentralizedtrust.splice.scan.rewards.{RewardComputationInputs, RewardIssuanceParams}
 import org.lfdecentralizedtrust.splice.scan.store.db.{
   DbAppActivityRecordStore,
+  DbExtraActivityRecordStore,
   DbScanAppRewardsStore,
 }
+import org.lfdecentralizedtrust.splice.scan.store.ScanExtraActivityRecordStore
 import org.lfdecentralizedtrust.splice.scan.store.db.DbScanAppRewardsStore.*
 import org.lfdecentralizedtrust.splice.store.{HistoryMetrics, StoreTestBase, UpdateHistory}
 import org.lfdecentralizedtrust.splice.store.UpdateHistory.BackfillingRequirement
@@ -45,7 +47,7 @@ class DbScanAppRewardsStoreTest
   "insert and read back" should {
     "app_activity_party_totals" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         row = AppActivityPartyTotalT(
           historyId = historyId,
           roundNumber = roundNumber,
@@ -54,6 +56,10 @@ class DbScanAppRewardsStoreTest
           numAppActivityRecords = 3L,
           numAssetActivityRecords = 7L,
           totalAssetActivityWeight = 65432L,
+          totalExtraAppActivityWeight = 777L,
+          totalExtraAssetActivityWeight = 888L,
+          numExtraAppActivityRecords = 5L,
+          numExtraAssetActivityRecords = 4L,
         )
         _ <- store.insertAppActivityPartyTotals(Seq(row))
         loaded <- store.getAppActivityPartyTotalsByRound(roundNumber)
@@ -65,7 +71,7 @@ class DbScanAppRewardsStoreTest
 
     "app_activity_round_totals" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         row = AppActivityRoundTotalT(
           historyId = historyId,
           roundNumber = roundNumber,
@@ -73,6 +79,8 @@ class DbScanAppRewardsStoreTest
           activeAppProviderPartiesCount = 5L,
           activityRecordsCount = 42L,
           totalRoundAssetActivityWeight = 111111L,
+          totalRoundExtraAppActivityWeight = 55555L,
+          totalRoundExtraAssetActivityWeight = 66666L,
         )
         _ <- store.insertAppActivityRoundTotals(Seq(row))
         loaded <- store.getAppActivityRoundTotalByRound(roundNumber)
@@ -83,7 +91,7 @@ class DbScanAppRewardsStoreTest
 
     "app_reward_party_totals" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         activityRow = AppActivityPartyTotalT(
           historyId = historyId,
           roundNumber = roundNumber,
@@ -92,6 +100,10 @@ class DbScanAppRewardsStoreTest
           numAppActivityRecords = 1L,
           numAssetActivityRecords = 0L,
           totalAssetActivityWeight = 0L,
+          totalExtraAppActivityWeight = 0L,
+          totalExtraAssetActivityWeight = 0L,
+          numExtraAppActivityRecords = 0L,
+          numExtraAssetActivityRecords = 0L,
         )
         _ <- store.insertAppActivityPartyTotals(Seq(activityRow))
         rewardRow = AppRewardPartyTotalT(
@@ -127,7 +139,7 @@ class DbScanAppRewardsStoreTest
         MinDecimal,
       )
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         activityRows = testValues.zipWithIndex.map { case (_, i) =>
           AppActivityPartyTotalT(
             historyId = historyId,
@@ -137,6 +149,10 @@ class DbScanAppRewardsStoreTest
             numAppActivityRecords = 1L,
             numAssetActivityRecords = 0L,
             totalAssetActivityWeight = 0L,
+            totalExtraAppActivityWeight = 0L,
+            totalExtraAssetActivityWeight = 0L,
+            numExtraAppActivityRecords = 0L,
+            numExtraAssetActivityRecords = 0L,
           )
         }
         _ <- store.insertAppActivityPartyTotals(activityRows)
@@ -159,7 +175,7 @@ class DbScanAppRewardsStoreTest
 
     "app_reward_round_totals" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         row = AppRewardRoundTotalT(
           historyId = historyId,
           roundNumber = roundNumber,
@@ -181,7 +197,7 @@ class DbScanAppRewardsStoreTest
 
     "app_reward_batch_hashes" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         hash = RewardHash(
           Array[Byte](1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
         )
@@ -203,7 +219,7 @@ class DbScanAppRewardsStoreTest
 
     "app_reward_root_hashes" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         hash = RewardHash(Array[Byte](0xca.toByte, 0xfe.toByte, 0xba.toByte, 0xbe.toByte))
         row = AppRewardRootHashT(
           historyId = historyId,
@@ -221,7 +237,7 @@ class DbScanAppRewardsStoreTest
   "batch insert" should {
     "batch multiple app_activity_party_totals and spot-check" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         rows = (0 until 10).map { i =>
           AppActivityPartyTotalT(
             historyId = historyId,
@@ -231,6 +247,10 @@ class DbScanAppRewardsStoreTest
             numAppActivityRecords = 1L,
             numAssetActivityRecords = 0L,
             totalAssetActivityWeight = 0L,
+            totalExtraAppActivityWeight = (i + 1) * 10L,
+            totalExtraAssetActivityWeight = (i + 1) * 20L,
+            numExtraAppActivityRecords = i.toLong,
+            numExtraAssetActivityRecords = (i * 2).toLong,
           )
         }
         _ <- store.insertAppActivityPartyTotals(rows)
@@ -245,7 +265,7 @@ class DbScanAppRewardsStoreTest
 
     "batch multiple app_reward_batch_hashes and spot-check" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         rows = (0 until 5).map { i =>
           AppRewardBatchHashT(
             historyId = historyId,
@@ -270,7 +290,7 @@ class DbScanAppRewardsStoreTest
   "duplicate key handling" should {
     "duplicate app_activity_party_totals on PK conflict" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         row = AppActivityPartyTotalT(
           historyId = historyId,
           roundNumber = roundNumber,
@@ -279,6 +299,10 @@ class DbScanAppRewardsStoreTest
           numAppActivityRecords = 1L,
           numAssetActivityRecords = 0L,
           totalAssetActivityWeight = 0L,
+          totalExtraAppActivityWeight = 0L,
+          totalExtraAssetActivityWeight = 0L,
+          numExtraAppActivityRecords = 0L,
+          numExtraAssetActivityRecords = 0L,
         )
         _ <- store.insertAppActivityPartyTotals(Seq(row))
         duplicate = row.copy(totalAppActivityWeight = 200L)
@@ -290,7 +314,7 @@ class DbScanAppRewardsStoreTest
 
     "duplicate app_activity_round_totals on PK conflict" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         row = AppActivityRoundTotalT(
           historyId = historyId,
           roundNumber = roundNumber,
@@ -298,6 +322,8 @@ class DbScanAppRewardsStoreTest
           activeAppProviderPartiesCount = 2L,
           activityRecordsCount = 10L,
           totalRoundAssetActivityWeight = 0L,
+          totalRoundExtraAppActivityWeight = 0L,
+          totalRoundExtraAssetActivityWeight = 0L,
         )
         _ <- store.insertAppActivityRoundTotals(Seq(row))
         duplicate = row.copy(totalRoundAppActivityWeight = 2000L)
@@ -309,7 +335,7 @@ class DbScanAppRewardsStoreTest
 
     "duplicate app_reward_root_hashes on PK conflict" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         row = AppRewardRootHashT(
           historyId = historyId,
           roundNumber = roundNumber,
@@ -332,7 +358,7 @@ class DbScanAppRewardsStoreTest
 
     "single round, single party" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         _ <- insertActivityRecord(historyId, roundNumber, Seq("alice::provider"), Seq(500L))
         _ <- store.aggregateActivityTotals(roundNumber)
@@ -352,7 +378,7 @@ class DbScanAppRewardsStoreTest
 
     "multiple parties with correct GROUP BY and seq_nums" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         // Two records in the same round with overlapping parties
         _ <- insertActivityRecord(
@@ -393,7 +419,7 @@ class DbScanAppRewardsStoreTest
 
     "asset-only party aggregates on the asset side" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         _ <- insertActivityRecord(
           historyId,
@@ -424,7 +450,7 @@ class DbScanAppRewardsStoreTest
 
     "party with both app and asset weight aggregates both sides" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         _ <- insertActivityRecord(
           historyId,
@@ -454,7 +480,7 @@ class DbScanAppRewardsStoreTest
 
     "app-only and asset-only parties both appear in party totals" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         _ <- insertActivityRecord(
           historyId,
@@ -486,7 +512,7 @@ class DbScanAppRewardsStoreTest
 
     "empty round produces zero totals" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         // No activity records for this round itself, but the meta row proves completeness
         _ <- store.aggregateActivityTotals(roundNumber)
@@ -500,10 +526,101 @@ class DbScanAppRewardsStoreTest
       }
     }
 
+    "aggregates extra-side activity into split columns" in {
+      for {
+        (store, historyId, extraStore) <- newStore()
+        _ <- markRoundComplete(historyId, roundNumber)
+        _ <- insertActivityRecord(
+          historyId,
+          roundNumber,
+          appParties = Seq("alice::provider"),
+          appWeights = Seq(100L),
+          assetParties = Seq("alice::provider"),
+          assetWeights = Seq(500L),
+        )
+        _ <- insertActivityRecord(
+          historyId,
+          roundNumber,
+          appParties = Seq("alice::provider"),
+          appWeights = Seq(75L),
+        )
+        _ <- insertExtraActivityRecord(
+          extraStore.storeId,
+          roundNumber,
+          appParties = Seq("alice::provider"),
+          appWeights = Seq(50L),
+          assetParties = Seq("alice::provider"),
+          assetWeights = Seq(200L),
+        )
+        _ <- insertExtraActivityRecord(
+          extraStore.storeId,
+          roundNumber,
+          appParties = Seq("alice::provider"),
+          appWeights = Seq(40L),
+          assetParties = Seq("alice::provider"),
+          assetWeights = Seq(180L),
+        )
+        _ <- insertExtraActivityRecord(
+          extraStore.storeId,
+          roundNumber,
+          appParties = Seq("alice::provider"),
+          appWeights = Seq(30L),
+          assetParties = Seq("alice::provider"),
+          assetWeights = Seq(160L),
+        )
+        _ <- insertExtraActivityRecord(
+          extraStore.storeId,
+          roundNumber,
+          appParties = Seq.empty,
+          appWeights = Seq.empty,
+          assetParties = Seq("alice::provider"),
+          assetWeights = Seq(140L),
+        )
+        _ <- insertExtraActivityRecord(
+          extraStore.storeId,
+          roundNumber,
+          appParties = Seq("bob::provider"),
+          appWeights = Seq(300L),
+        )
+        _ <- store.aggregateActivityTotals(roundNumber)
+        partyTotals <- store.getAppActivityPartyTotalsByRound(roundNumber)
+        roundTotal <- store.getAppActivityRoundTotalByRound(roundNumber)
+      } yield {
+        partyTotals should have size 2
+
+        partyTotals(0).appProviderParty shouldBe "alice::provider"
+        partyTotals(0).totalAppActivityWeight shouldBe 175L
+        partyTotals(0).totalAssetActivityWeight shouldBe 500L
+        partyTotals(0).numAppActivityRecords shouldBe 2L
+        partyTotals(0).numAssetActivityRecords shouldBe 1L
+        partyTotals(0).totalExtraAppActivityWeight shouldBe 120L
+        partyTotals(0).totalExtraAssetActivityWeight shouldBe 680L
+        partyTotals(0).numExtraAppActivityRecords shouldBe 3L
+        partyTotals(0).numExtraAssetActivityRecords shouldBe 4L
+
+        partyTotals(1).appProviderParty shouldBe "bob::provider"
+        partyTotals(1).totalAppActivityWeight shouldBe 0L
+        partyTotals(1).totalAssetActivityWeight shouldBe 0L
+        partyTotals(1).numAppActivityRecords shouldBe 0L
+        partyTotals(1).numAssetActivityRecords shouldBe 0L
+        partyTotals(1).totalExtraAppActivityWeight shouldBe 300L
+        partyTotals(1).totalExtraAssetActivityWeight shouldBe 0L
+        partyTotals(1).numExtraAppActivityRecords shouldBe 1L
+        partyTotals(1).numExtraAssetActivityRecords shouldBe 0L
+
+        roundTotal.value.totalRoundAppActivityWeight shouldBe 175L
+        roundTotal.value.totalRoundAssetActivityWeight shouldBe 500L
+        roundTotal.value.totalRoundExtraAppActivityWeight shouldBe 420L
+        roundTotal.value.totalRoundExtraAssetActivityWeight shouldBe 680L
+        roundTotal.value.activeAppProviderPartiesCount shouldBe 1L
+        roundTotal.value.activityRecordsCount shouldBe 2L
+      }
+    }
+
     "only aggregates records from own history_id" in {
       for {
-        (store1, historyId1) <- newStore()
-        (_, historyId2) <- newStore()
+        (store1, historyId1, _) <- newStore()
+        (_, historyId2, _) <- newStore()
         _ <- markRoundComplete(historyId1, roundNumber)
         // Insert activity records for the same round under both historyIds
         _ <- insertActivityRecord(historyId1, roundNumber, Seq("alice::provider"), Seq(100L))
@@ -524,7 +641,7 @@ class DbScanAppRewardsStoreTest
 
     "re-run for same round raises error" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         _ <- insertActivityRecord(historyId, roundNumber, Seq("alice::provider"), Seq(500L))
         _ <- store.aggregateActivityTotals(roundNumber)
@@ -536,7 +653,7 @@ class DbScanAppRewardsStoreTest
 
     "rejects the first ingested round (possibly partial)" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         // roundNumber is the first ingested round, which may be partial
         _ <- insertActivityMeta(
           historyId,
@@ -553,7 +670,7 @@ class DbScanAppRewardsStoreTest
 
     "rejects round whose OpenMiningRound is not yet archived" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- insertActivityMeta(
           historyId,
           earliestIngestedRound = roundNumber - 1,
@@ -569,7 +686,7 @@ class DbScanAppRewardsStoreTest
 
     "succeeds for round 0 when marked complete" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, 0L)
         _ <- insertActivityRecord(historyId, 0L, Seq("alice::provider"), Seq(500L))
         _ <- insertActivityRecord(historyId, 1L, Seq("sentinel::provider"), Seq(1L))
@@ -583,7 +700,7 @@ class DbScanAppRewardsStoreTest
 
     "rejects round 0 when not marked complete" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- insertActivityRecord(historyId, 0L, Seq("alice::provider"), Seq(500L))
         _ <- insertActivityRecord(historyId, 1L, Seq("sentinel::provider"), Seq(1L))
         result <- store.aggregateActivityTotals(0L).failed
@@ -597,7 +714,7 @@ class DbScanAppRewardsStoreTest
 
     "returns empty set for empty input" in {
       for {
-        (store, _) <- newStore()
+        (store, _, _) <- newStore()
         result <- store.roundsWithComputedRewards(Seq.empty)
       } yield {
         result shouldBe Set.empty
@@ -606,7 +723,7 @@ class DbScanAppRewardsStoreTest
 
     "returns correct subset" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- store.insertAppRewardRootHashes(
           Seq(
             AppRewardRootHashT(historyId, 10L, RewardHash(Array[Byte](1, 2, 3, 4))),
@@ -622,7 +739,7 @@ class DbScanAppRewardsStoreTest
 
     "returns empty set when no matches" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- store.insertAppRewardRootHashes(
           Seq(
             AppRewardRootHashT(historyId, 10L, RewardHash(Array[Byte](1, 2, 3, 4)))
@@ -639,7 +756,7 @@ class DbScanAppRewardsStoreTest
 
     "returns correct summary counts" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         // 3 activity records, 2 parties (alice in 2 records, bob in 2)
         _ <- insertActivityRecord(
@@ -675,7 +792,7 @@ class DbScanAppRewardsStoreTest
 
     "non-zero threshold excludes low-activity parties from rewards" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         // alice has high activity, bob has low activity
         _ <- insertActivityRecord(
@@ -704,7 +821,7 @@ class DbScanAppRewardsStoreTest
 
     "empty round returns zero counts" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         summary <- store.computeAndStoreRewards(
           roundNumber,
@@ -721,7 +838,7 @@ class DbScanAppRewardsStoreTest
 
     "rejects incomplete activity" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         // Activity in roundNumber but no meta row marking the round complete
         _ <- insertActivityRecord(historyId, roundNumber, Seq("alice::provider"), Seq(500L))
         result <- store
@@ -734,7 +851,7 @@ class DbScanAppRewardsStoreTest
 
     "produces root hash for complete round" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         _ <- insertActivityRecord(historyId, roundNumber, Seq("alice::provider"), Seq(5000000L))
         _ <- store.computeAndStoreRewards(roundNumber, batchSize = 100, inputs = testInputs)
@@ -751,7 +868,7 @@ class DbScanAppRewardsStoreTest
 
     "re-run for same round raises error" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- markRoundComplete(historyId, roundNumber)
         _ <- insertActivityRecord(historyId, roundNumber, Seq("alice::provider"), Seq(5000000L))
         _ <- store.computeAndStoreRewards(roundNumber, batchSize = 100, inputs = testInputs)
@@ -766,7 +883,9 @@ class DbScanAppRewardsStoreTest
     "rolls back when reward exceeds issuance" in {
       for {
         // Use a negative tolerance so any positive reward triggers the assertion
-        (store, historyId) <- newStore(rewardMintingAllowanceTolerance = BigDecimal(-1.0))
+        (store, historyId, extraStore) <- newStore(rewardMintingAllowanceTolerance =
+          BigDecimal(-1.0)
+        )
         _ <- markRoundComplete(historyId, roundNumber)
         _ <- insertActivityRecord(historyId, roundNumber, Seq("alice::provider"), Seq(5000000L))
         result <- store
@@ -809,7 +928,7 @@ class DbScanAppRewardsStoreTest
 
     "pass when reward amount is within issuance" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- insertRoundTotal(historyId, roundNumber, BigDecimal(10.0))
         _ <- futureUnlessShutdownToFuture(
           storage.queryAndUpdate(
@@ -826,7 +945,7 @@ class DbScanAppRewardsStoreTest
 
     "fail when reward amount exceeds issuance by more than tolerance" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         // Reward exceeds issuance by 2x tolerance (0.002 > 0.001)
         _ <- insertRoundTotal(historyId, roundNumber, BigDecimal(10.002))
         result <- futureUnlessShutdownToFuture(
@@ -845,7 +964,7 @@ class DbScanAppRewardsStoreTest
 
     "pass when reward amount exceeds issuance within tolerance" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- insertRoundTotal(historyId, roundNumber, BigDecimal(10.0005))
         _ <- futureUnlessShutdownToFuture(
           storage.queryAndUpdate(
@@ -1219,7 +1338,7 @@ class DbScanAppRewardsStoreTest
 
     "returns None for non-existent hash" in {
       for {
-        (store, _) <- newStore()
+        (store, _, _) <- newStore()
         result <- store.lookupBatchByHash(
           roundNumber,
           RewardHash(Array.fill(32)(0.toByte)),
@@ -1231,11 +1350,35 @@ class DbScanAppRewardsStoreTest
 
     "leaf batch returns MintingAllowances" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- store.insertAppActivityPartyTotals(
           Seq(
-            AppActivityPartyTotalT(historyId, roundNumber, 5000000L, "alice::provider", 1L, 0L, 0L),
-            AppActivityPartyTotalT(historyId, roundNumber, 3000000L, "bob::provider", 1L, 0L, 0L),
+            AppActivityPartyTotalT(
+              historyId,
+              roundNumber,
+              5000000L,
+              "alice::provider",
+              1L,
+              0L,
+              0L,
+              0L,
+              0L,
+              0L,
+              0L,
+            ),
+            AppActivityPartyTotalT(
+              historyId,
+              roundNumber,
+              3000000L,
+              "bob::provider",
+              1L,
+              0L,
+              0L,
+              0L,
+              0L,
+              0L,
+              0L,
+            ),
           )
         )
         _ <- store.insertAppRewardPartyTotals(
@@ -1263,7 +1406,7 @@ class DbScanAppRewardsStoreTest
 
     "internal batch returns BatchOfBatches" in {
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         // 4 parties / batchSize=2 → 2 level-0 batches → 1 level-1 batch
         _ <- store.insertAppActivityPartyTotals(
           (0 to 3).map(i =>
@@ -1273,6 +1416,10 @@ class DbScanAppRewardsStoreTest
               1000000L * (i + 1),
               s"party$i::provider",
               1L,
+              0L,
+              0L,
+              0L,
+              0L,
               0L,
               0L,
             )
@@ -1342,10 +1489,24 @@ class DbScanAppRewardsStoreTest
       ): Future[Unit] =
         for {
           _ <- store.insertAppActivityPartyTotals(
-            Seq(AppActivityPartyTotalT(historyId, round, 100L, s"party-$round", 1L, 0L, 0L))
+            Seq(
+              AppActivityPartyTotalT(
+                historyId,
+                round,
+                100L,
+                s"party-$round",
+                1L,
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+                0L,
+              )
+            )
           )
           _ <- store.insertAppActivityRoundTotals(
-            Seq(AppActivityRoundTotalT(historyId, round, 100L, 1L, 1L, 0L))
+            Seq(AppActivityRoundTotalT(historyId, round, 100L, 1L, 1L, 0L, 0L, 0L))
           )
           _ <- store.insertAppRewardPartyTotals(
             Seq(AppRewardPartyTotalT(historyId, round, 0, s"party-$round", BigDecimal(1)))
@@ -1375,8 +1536,8 @@ class DbScanAppRewardsStoreTest
         } yield ()
 
       for {
-        (store, historyId) <- newStore()
-        (otherStore, otherHistoryId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
+        (otherStore, otherHistoryId, _) <- newStore()
         _ <- insertAllTables(store, historyId, 1L)
         _ <- insertAllTables(store, historyId, 2L)
         _ <- insertAllTables(store, historyId, 3L)
@@ -1466,6 +1627,35 @@ class DbScanAppRewardsStoreTest
     }.map(_ => ())
   }
 
+  private val extraRecordTimeCounter = new java.util.concurrent.atomic.AtomicLong(1000000L)
+
+  /** Insert directly into `extra_app_activity_record_store` (CIP-0104).
+    * PK is `(store_id, record_time)`, so each call bumps a shared
+    * record-time counter to stay unique.
+    */
+  private def insertExtraActivityRecord(
+      storeId: Int,
+      round: Long,
+      appParties: Seq[String],
+      appWeights: Seq[Long],
+      assetParties: Seq[String] = Nil,
+      assetWeights: Seq[Long] = Nil,
+  ): Future[Unit] = {
+    val recordTime = extraRecordTimeCounter.getAndIncrement()
+    futureUnlessShutdownToFuture(
+      storage.underlying.queryAndUpdate(
+        sqlu"""insert into extra_app_activity_record_store
+               (store_id, round_number, record_time,
+                app_provider_parties, app_activity_weights,
+                asset_activity_provider_parties, asset_activity_weights)
+               values ($storeId, $round, $recordTime,
+                       $appParties, $appWeights,
+                       $assetParties, $assetWeights)""",
+        "test.insertExtraActivityRecord",
+      )
+    ).map(_ => ())
+  }
+
   /** Insert a meta row marking `round` as complete
     * satisfying the completeness precondition in aggregateActivityTotals.
     */
@@ -1502,7 +1692,7 @@ class DbScanAppRewardsStoreTest
   ): Future[(DbScanAppRewardsStore, Seq[AppRewardBatchHashT], RewardHash)] = {
     val rewarded = if (rewardedCount < 0) partyCount else rewardedCount
     for {
-      (store, historyId) <- newStore()
+      (store, historyId, extraStore) <- newStore()
       _ <- store.insertAppActivityPartyTotals(
         (0 until partyCount).map(i =>
           AppActivityPartyTotalT(
@@ -1511,6 +1701,10 @@ class DbScanAppRewardsStoreTest
             1000000L * (i + 1),
             s"party$i::provider",
             1L,
+            0L,
+            0L,
+            0L,
+            0L,
             0L,
             0L,
           )
@@ -1558,7 +1752,7 @@ class DbScanAppRewardsStoreTest
   private def newStore(
       rewardMintingAllowanceTolerance: BigDecimal = BigDecimal(0.001),
       isFirstSv: Boolean = false,
-  ): Future[(DbScanAppRewardsStore, Long)] = {
+  ): Future[(DbScanAppRewardsStore, Long, DbExtraActivityRecordStore)] = {
     val n = storeCounter.getAndIncrement()
     val participantId = mkParticipantId(s"rewards-test-$n")
     for {
@@ -1576,6 +1770,12 @@ class DbScanAppRewardsStoreTest
         HistoryMetrics(NoOpMetricsFactory, migrationId),
       )
       _ <- updateHistory.ingestionSink.initialize()
+      extraActivityRecordStore <- ScanExtraActivityRecordStore(
+        dsoParty,
+        participantId,
+        storage.underlying,
+        loggerFactory,
+      )
     } yield {
       val appActivityRecordStore = new DbAppActivityRecordStore(
         storage.underlying,
@@ -1589,10 +1789,11 @@ class DbScanAppRewardsStoreTest
         storage.underlying,
         updateHistory,
         appActivityRecordStore,
+        extraActivityRecordStore,
         rewardMintingAllowanceTolerance,
         loggerFactory,
       )
-      (store, updateHistory.historyId)
+      (store, updateHistory.historyId, extraActivityRecordStore)
     }
   }
 
@@ -1634,7 +1835,7 @@ class DbScanAppRewardsStoreTest
         params: RewardIssuanceParams,
     ): Future[(Seq[AppRewardPartyTotalT], Option[AppRewardRoundTotalT])] =
       for {
-        (store, historyId) <- newStore()
+        (store, historyId, extraStore) <- newStore()
         _ <- store.insertAppActivityPartyTotals(activities.map(_.copy(historyId = historyId)))
         _ <- store.computeRewardTotals(roundNumber, params)
         partyTotals <- store.getAppRewardPartyTotalsByRound(roundNumber)
@@ -1686,20 +1887,106 @@ object DbScanAppRewardsStoreTest {
   private val roundNumber = 42L
 
   object Activity {
-    val alice5M = AppActivityPartyTotalT(0L, roundNumber, 5000000L, "alice::provider", 1L, 0L, 0L)
-    val bob150K = AppActivityPartyTotalT(0L, roundNumber, 150000L, "bob::provider", 1L, 0L, 0L)
-    val alice250K = AppActivityPartyTotalT(0L, roundNumber, 250000L, "alice::provider", 1L, 0L, 0L)
+    val alice5M = AppActivityPartyTotalT(
+      0L,
+      roundNumber,
+      5000000L,
+      "alice::provider",
+      1L,
+      0L,
+      0L,
+      0L,
+      0L,
+      0L,
+      0L,
+    )
+    val bob150K =
+      AppActivityPartyTotalT(0L, roundNumber, 150000L, "bob::provider", 1L, 0L, 0L, 0L, 0L, 0L, 0L)
+    val alice250K = AppActivityPartyTotalT(
+      0L,
+      roundNumber,
+      250000L,
+      "alice::provider",
+      1L,
+      0L,
+      0L,
+      0L,
+      0L,
+      0L,
+      0L,
+    )
     val aliceDecimal =
-      AppActivityPartyTotalT(0L, roundNumber, 3333333L, "alice::provider", 1L, 0L, 0L)
-    val alice1M = AppActivityPartyTotalT(0L, roundNumber, 1000000L, "alice::provider", 1L, 0L, 0L)
-    val alice100K = AppActivityPartyTotalT(0L, roundNumber, 100000L, "alice::provider", 1L, 0L, 0L)
-    val bob50K = AppActivityPartyTotalT(0L, roundNumber, 50000L, "bob::provider", 1L, 0L, 0L)
+      AppActivityPartyTotalT(
+        0L,
+        roundNumber,
+        3333333L,
+        "alice::provider",
+        1L,
+        0L,
+        0L,
+        0L,
+        0L,
+        0L,
+        0L,
+      )
+    val alice1M = AppActivityPartyTotalT(
+      0L,
+      roundNumber,
+      1000000L,
+      "alice::provider",
+      1L,
+      0L,
+      0L,
+      0L,
+      0L,
+      0L,
+      0L,
+    )
+    val alice100K = AppActivityPartyTotalT(
+      0L,
+      roundNumber,
+      100000L,
+      "alice::provider",
+      1L,
+      0L,
+      0L,
+      0L,
+      0L,
+      0L,
+      0L,
+    )
+    val bob50K =
+      AppActivityPartyTotalT(0L, roundNumber, 50000L, "bob::provider", 1L, 0L, 0L, 0L, 0L, 0L, 0L)
     // Asset-only: 5 MB of asset burn, no app traffic.
     val aliceAsset5M =
-      AppActivityPartyTotalT(0L, roundNumber, 0L, "alice::provider", 0L, 1L, 5000000L)
+      AppActivityPartyTotalT(
+        0L,
+        roundNumber,
+        0L,
+        "alice::provider",
+        0L,
+        1L,
+        5000000L,
+        0L,
+        0L,
+        0L,
+        0L,
+      )
     // Mixed: 1 MB app traffic + 2 MB asset burn.
     val aliceBoth =
-      AppActivityPartyTotalT(0L, roundNumber, 1000000L, "alice::provider", 1L, 1L, 2000000L)
+      AppActivityPartyTotalT(
+        0L,
+        roundNumber,
+        1000000L,
+        "alice::provider",
+        1L,
+        1L,
+        2000000L,
+        0L,
+        0L,
+        0L,
+        0L,
+      )
   }
 
   object IssuanceRate {
