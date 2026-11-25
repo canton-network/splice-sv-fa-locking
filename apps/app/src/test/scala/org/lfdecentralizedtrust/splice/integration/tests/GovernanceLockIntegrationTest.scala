@@ -4,9 +4,11 @@
 package org.lfdecentralizedtrust.splice.integration.tests
 
 import cats.data.NonEmptyList
+import cats.syntax.foldable.*
 import com.daml.ledger.javaapi.data.codegen.ContractId
 import com.digitalasset.canton.topology.PartyId
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock as gl
+import org.lfdecentralizedtrust.splice.config.ConfigTransforms
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.console.{
   ParticipantClientReference,
@@ -17,7 +19,8 @@ import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.{
   IntegrationTestWithIsolatedEnvironment,
   SpliceTestConsoleEnvironment,
 }
-import org.lfdecentralizedtrust.splice.util.{GovernanceLockUtil, WalletTestUtil}
+import org.lfdecentralizedtrust.splice.util.{GovernanceLockUtil, Tags, WalletTestUtil}
+import org.lfdecentralizedtrust.splice.wallet.automation.CollectRewardsAndMergeAmuletsTrigger
 import org.lfdecentralizedtrust.splice.wallet.store.{BalanceChangeTxLogEntry, TransferTxLogEntry}
 
 @org.lfdecentralizedtrust.splice.util.scalatesttags.SpliceAmulet_0_1_25
@@ -28,7 +31,14 @@ class GovernanceLockIntegrationTest
     with GovernanceLockTest {
 
   override def environmentDefinition: SpliceEnvironmentDefinition =
-    EnvironmentDefinition.simpleTopology1Sv(this.getClass.getSimpleName)
+    EnvironmentDefinition
+      .simpleTopology1Sv(this.getClass.getSimpleName)
+      // Disable automerging to avoid a race with custom controllers proposals
+      .addConfigTransforms((_, config) =>
+        ConfigTransforms.updateAutomationConfig(ConfigTransforms.ConfigurableApp.Validator)(
+          _.withPausedTrigger[CollectRewardsAndMergeAmuletsTrigger]
+        )(config)
+      )
 
   private val lockKind = SuperValidatorLock
   private val lockSubject = "sv1"
@@ -419,6 +429,114 @@ class GovernanceLockIntegrationTest
           )
           checkTransferHistory(bobWalletClient, bobBeforeAccept, expectedSender, expectedReceivers)
         }
+    }
+
+    s"TSv${ops.version} substitution with custom controllers" taggedAs Tags.SpliceAmulet_0_1_26 in {
+      implicit env =>
+        customControllers.testProposal(ops, gl.substitution.GovernanceLockSubstitution.COMPANION)(
+          makeControllers = parties =>
+            List(
+              List(parties.alice, parties.bob, parties.charlie),
+              List(parties.bob, parties.charlie, parties.sv1),
+            ),
+          makeLockControllers =
+            controllers => LockControllers(substitutionControllers = controllers),
+          setupLock = (parties, controllers) => {
+            val cid =
+              setup0(parties.alice.richPartyId, partialSubstitutionAmount, controllers)._2.id
+            (parties.alice, cid)
+          },
+          makeAcceptProposers = parties => NonEmptyList.one(parties.bob),
+          makeAcceptors = parties => NonEmptyList.of(parties.alice, parties.charlie),
+          makeRejectProposers = parties => NonEmptyList.one(parties.bob),
+          makeRejectors = parties => NonEmptyList.of(parties.alice, parties.charlie),
+          makeWithdrawProposers = parties => NonEmptyList.of(parties.bob),
+          propose = (parties, participant, proposers, controllers) =>
+            ops.substituteGovernanceLock(parties.alice.partyId)(
+              participant,
+              proposers.head,
+              lockKind,
+              lockSubject,
+              partialSubstitutionAmount,
+              controllers,
+              controllers,
+            ),
+          expectedAmount = partialSubstitutionAmount,
+          expectedReceiver = _.alice.partyId,
+          makeUpdatedLockOwners = parties => List(parties.alice, parties.bob),
+          checkUpdatedLocks = (parties, locks) => {
+            val (aliceLocks, bobLocks, otherLocks) = locks.foldMap {
+              case t @ (_, _, lock) if lock.data.owner == parties.alice.partyId.toProtoPrimitive =>
+                (List(t), Nil, Nil)
+              case t @ (_, _, lock) if lock.data.owner == parties.bob.partyId.toProtoPrimitive =>
+                (Nil, List(t), Nil)
+              case t => (Nil, Nil, List(t))
+            }
+            // alice and bob each have one lock, no other locks exist
+            val (_, aliceLockView, aliceLock) = aliceLocks.loneElement
+            val (_, bobLockView, bobLock) = bobLocks.loneElement
+            otherLocks shouldBe empty
+
+            ops.transferValues.sender(aliceLockView) shouldBe parties.alice.partyId.toProtoPrimitive
+            ops.transferValues.sender(bobLockView) shouldBe parties.bob.partyId.toProtoPrimitive
+            ops.transferValues.amount(aliceLockView) shouldBe remainingLockAmount
+            ops.transferValues.amount(bobLockView) shouldBe partialSubstitutionAmount
+          },
+        )
+    }
+
+    s"TSv${ops.version} transfer with custom controllers" taggedAs Tags.SpliceAmulet_0_1_26 in {
+      implicit env =>
+        customControllers.testProposal(ops, gl.transfer.GovernanceLockTransfer.COMPANION)(
+          makeControllers = parties =>
+            // alice and bob are automatically added to each controller set in Daml
+            List(List(parties.charlie), List(parties.sv1)),
+          makeLockControllers =
+            controllers => LockControllers(substitutionControllers = controllers),
+          setupLock = (parties, controllers) => {
+            val cid =
+              setup0(parties.alice.richPartyId, partialSubstitutionAmount, controllers)._2.id
+            (parties.alice, cid)
+          },
+          makeAcceptProposers = parties => NonEmptyList.one(parties.alice),
+          makeAcceptors = parties => NonEmptyList.of(parties.bob, parties.charlie),
+          makeRejectProposers = parties => NonEmptyList.one(parties.alice),
+          makeRejectors = parties => NonEmptyList.of(parties.charlie, parties.sv1),
+          makeWithdrawProposers = parties => NonEmptyList.one(parties.alice),
+          propose = (parties, participant, proposers, controllers) =>
+            ops.transferGovernanceLock(
+              participant,
+              proposers.head, // safe since we always pass one proposer
+              lockKind,
+              lockSubject,
+              newLockOwner = parties.bob.partyId,
+              targetLockOwner = Some(parties.alice.partyId),
+              partialSubstitutionAmount,
+              controllers,
+              controllers,
+            ),
+          expectedAmount = partialSubstitutionAmount,
+          expectedReceiver = _.bob.partyId,
+          makeUpdatedLockOwners = parties => List(parties.alice, parties.bob),
+          checkUpdatedLocks = (parties, locks) => {
+            val (aliceLocks, bobLocks, otherLocks) = locks.foldMap {
+              case t @ (_, _, lock) if lock.data.owner == parties.alice.partyId.toProtoPrimitive =>
+                (List(t), Nil, Nil)
+              case t @ (_, _, lock) if lock.data.owner == parties.bob.partyId.toProtoPrimitive =>
+                (Nil, List(t), Nil)
+              case t => (Nil, Nil, List(t))
+            }
+            // alice and bob each have one lock, no other locks exist
+            val (_, aliceLockView, aliceLock) = aliceLocks.loneElement
+            val (_, bobLockView, bobLock) = bobLocks.loneElement
+            otherLocks shouldBe empty
+
+            ops.transferValues.sender(aliceLockView) shouldBe parties.alice.partyId.toProtoPrimitive
+            ops.transferValues.sender(bobLockView) shouldBe parties.bob.partyId.toProtoPrimitive
+            ops.transferValues.amount(aliceLockView) shouldBe remainingLockAmount
+            ops.transferValues.amount(bobLockView) shouldBe partialSubstitutionAmount
+          },
+        )
     }
   }
 
