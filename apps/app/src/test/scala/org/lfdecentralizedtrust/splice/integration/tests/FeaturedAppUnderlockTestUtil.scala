@@ -51,12 +51,6 @@ trait FeaturedAppUnderlockTestUtil extends TestCommon {
         _.data.provider == provider.toProtoPrimitive,
       )
 
-  /** The provider's only featured app right. */
-  protected def featuredAppRightOf(provider: PartyId)(implicit
-      env: SpliceTestConsoleEnvironment
-  ): FeaturedAppRight.Contract =
-    featuredAppRightsFor(provider).loneElement
-
   protected def isSuspended(provider: PartyId)(implicit
       env: SpliceTestConsoleEnvironment
   ): Boolean =

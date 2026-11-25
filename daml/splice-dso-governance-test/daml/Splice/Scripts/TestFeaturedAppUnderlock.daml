@@ -32,9 +32,18 @@ defaultGovernanceLockFeaturedAppUnderlockGracePeriod = governanceLockFeaturedApp
 
 setUnderlockStatus : AmuletApp -> Party -> Party -> Bool -> Script ()
 setUnderlockStatus app sv provider underlocked = do
+  createUnderlockInstruction app provider underlocked
+  executeUnderlockInstruction app sv provider
+
+createUnderlockInstruction : AmuletApp -> Party -> Bool -> Script ()
+createUnderlockInstruction app provider underlocked =
   confirmAndExecutionAction app $ ARC_DsoRules with
     dsoAction = SRARC_CreateFeaturedAppUnderlockInstruction DsoRules_CreateFeaturedAppUnderlockInstruction with
       provider; underlocked
+
+-- | Executes the provider's only underlock instruction on its right.
+executeUnderlockInstruction : AmuletApp -> Party -> Party -> Script ()
+executeUnderlockInstruction app sv provider = do
   [(instructionCid, _)] <- queryFilter @FeaturedAppUnderlockInstruction app.dso (\i -> i.provider == provider)
   Some rightCid <- getFeaturedAppRight app provider
   svSubmits app sv $ \dsoRulesCid ->
@@ -58,8 +67,12 @@ testUnderlockSuspend = do
   initialUnderlockState <- underlockPermanentAtOf app provider
   initialUnderlockState === None
 
+  createUnderlockInstruction app provider True
+  -- The deadline counts from the execution, not from the instruction's
+  -- creation a minute earlier.
+  passTime (minutes 1)
   now <- getTime
-  setUnderlockStatus app sv1 provider True
+  executeUnderlockInstruction app sv1 provider
 
   suspendedAt <- underlockPermanentAtOf app provider
   suspendedAt === Some (now `addRelTime` defaultGovernanceLockFeaturedAppUnderlockGracePeriod)
