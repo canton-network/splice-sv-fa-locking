@@ -5,7 +5,7 @@ package org.lfdecentralizedtrust.splice.integration.tests
 
 import com.daml.ledger.javaapi.data.codegen.ContractId
 import com.digitalasset.canton.topology.PartyId
-import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock
+import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock as gl
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.console.{
   ParticipantClientReference,
@@ -43,7 +43,7 @@ class GovernanceLockIntegrationTest
 
   private def governanceLocksFor(participant: ParticipantClientReference, owner: PartyId) =
     participant.ledger_api_extensions.acs
-      .filterJava(governancelock.GovernanceLock.COMPANION)(
+      .filterJava(gl.GovernanceLock.COMPANION)(
         owner,
         predicate = c => c.data.owner == owner.toProtoPrimitive && !isVestingLock(c.data),
       )
@@ -51,7 +51,7 @@ class GovernanceLockIntegrationTest
 
   private def vestingLocksFor(participant: ParticipantClientReference, owner: PartyId) =
     participant.ledger_api_extensions.acs
-      .filterJava(governancelock.GovernanceLock.COMPANION)(
+      .filterJava(gl.GovernanceLock.COMPANION)(
         owner,
         predicate = c => c.data.owner == owner.toProtoPrimitive && isVestingLock(c.data),
       )
