@@ -21,7 +21,7 @@ import scala.concurrent.{ExecutionContext, Future}
 object DbExtraActivityRecordStore {
 
   /** Extra activity record contributed by an
-    * `ActivityRecorder_DsoRecordActivity` exercise (CIP-0104 extension hook).
+    * `ActivityRecorder_DsoRecordActivity` exercise (CIP-0104).
     * `store_id` is injected from the store descriptor on insert; the DB
     * PK is `(store_id, record_time)`.
     */
@@ -49,7 +49,7 @@ object DbExtraActivityRecordStore {
 }
 
 /** Row store for extra-activity records contributed by
-  * `ActivityRecorder_DsoRecordActivity` exercises (CIP-0104 extension hook),
+  * `ActivityRecorder_DsoRecordActivity` exercises (CIP-0104),
   * backed by `extra_app_activity_record_store`.
   */
 class DbExtraActivityRecordStore private (
