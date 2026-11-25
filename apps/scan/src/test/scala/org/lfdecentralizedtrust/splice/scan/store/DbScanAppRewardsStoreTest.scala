@@ -58,7 +58,7 @@ class DbScanAppRewardsStoreTest
           totalAssetActivityWeight = 65432L,
           totalExtraAppActivityWeight = 777L,
           totalExtraAssetActivityWeight = 888L,
-          numExtraAppActivityRecords = 3L,
+          numExtraAppActivityRecords = 5L,
           numExtraAssetActivityRecords = 4L,
         )
         _ <- store.insertAppActivityPartyTotals(Seq(row))
@@ -538,6 +538,12 @@ class DbScanAppRewardsStoreTest
           assetParties = Seq("alice::provider"),
           assetWeights = Seq(500L),
         )
+        _ <- insertActivityRecord(
+          historyId,
+          roundNumber,
+          appParties = Seq("alice::provider"),
+          appWeights = Seq(75L),
+        )
         _ <- insertExtraActivityRecord(
           extraStore.storeId,
           roundNumber,
@@ -545,6 +551,30 @@ class DbScanAppRewardsStoreTest
           appWeights = Seq(50L),
           assetParties = Seq("alice::provider"),
           assetWeights = Seq(200L),
+        )
+        _ <- insertExtraActivityRecord(
+          extraStore.storeId,
+          roundNumber,
+          appParties = Seq("alice::provider"),
+          appWeights = Seq(40L),
+          assetParties = Seq("alice::provider"),
+          assetWeights = Seq(180L),
+        )
+        _ <- insertExtraActivityRecord(
+          extraStore.storeId,
+          roundNumber,
+          appParties = Seq("alice::provider"),
+          appWeights = Seq(30L),
+          assetParties = Seq("alice::provider"),
+          assetWeights = Seq(160L),
+        )
+        _ <- insertExtraActivityRecord(
+          extraStore.storeId,
+          roundNumber,
+          appParties = Seq.empty,
+          appWeights = Seq.empty,
+          assetParties = Seq("alice::provider"),
+          assetWeights = Seq(140L),
         )
         _ <- insertExtraActivityRecord(
           extraStore.storeId,
@@ -559,14 +589,14 @@ class DbScanAppRewardsStoreTest
         partyTotals should have size 2
 
         partyTotals(0).appProviderParty shouldBe "alice::provider"
-        partyTotals(0).totalAppActivityWeight shouldBe 100L
+        partyTotals(0).totalAppActivityWeight shouldBe 175L
         partyTotals(0).totalAssetActivityWeight shouldBe 500L
-        partyTotals(0).numAppActivityRecords shouldBe 1L
+        partyTotals(0).numAppActivityRecords shouldBe 2L
         partyTotals(0).numAssetActivityRecords shouldBe 1L
-        partyTotals(0).totalExtraAppActivityWeight shouldBe 50L
-        partyTotals(0).totalExtraAssetActivityWeight shouldBe 200L
-        partyTotals(0).numExtraAppActivityRecords shouldBe 1L
-        partyTotals(0).numExtraAssetActivityRecords shouldBe 1L
+        partyTotals(0).totalExtraAppActivityWeight shouldBe 120L
+        partyTotals(0).totalExtraAssetActivityWeight shouldBe 680L
+        partyTotals(0).numExtraAppActivityRecords shouldBe 3L
+        partyTotals(0).numExtraAssetActivityRecords shouldBe 4L
 
         partyTotals(1).appProviderParty shouldBe "bob::provider"
         partyTotals(1).totalAppActivityWeight shouldBe 0L
@@ -578,12 +608,12 @@ class DbScanAppRewardsStoreTest
         partyTotals(1).numExtraAppActivityRecords shouldBe 1L
         partyTotals(1).numExtraAssetActivityRecords shouldBe 0L
 
-        roundTotal.value.totalRoundAppActivityWeight shouldBe 100L
+        roundTotal.value.totalRoundAppActivityWeight shouldBe 175L
         roundTotal.value.totalRoundAssetActivityWeight shouldBe 500L
-        roundTotal.value.totalRoundExtraAppActivityWeight shouldBe 350L
-        roundTotal.value.totalRoundExtraAssetActivityWeight shouldBe 200L
+        roundTotal.value.totalRoundExtraAppActivityWeight shouldBe 420L
+        roundTotal.value.totalRoundExtraAssetActivityWeight shouldBe 680L
         roundTotal.value.activeAppProviderPartiesCount shouldBe 1L
-        roundTotal.value.activityRecordsCount shouldBe 1L
+        roundTotal.value.activityRecordsCount shouldBe 2L
       }
     }
 
