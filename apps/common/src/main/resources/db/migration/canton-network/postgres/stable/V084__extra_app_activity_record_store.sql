@@ -1,5 +1,6 @@
 create table extra_app_activity_record_store
 (
+    -- The id of the scan store for which the extra activity is recorded.
     store_id                        int      not null,
     -- Record time (microseconds since epoch) of the ActivityRecorder exercise.
     record_time                     bigint   not null,
@@ -30,6 +31,7 @@ create index extra_app_activity_record_store_sid_rn_idx on
 -- The store_id should never be modified as that could result in loss of activity data.
 create table extra_app_activity_record_meta
 (
+    -- The id of the scan store for which the extra activity is recorded.
     store_id                          int    not null,
     -- Record time (microseconds since epoch) at which ingestion started.
     -- Rounds before this time may be partial.
@@ -39,6 +41,7 @@ create table extra_app_activity_record_meta
     -- The highest OpenMiningRound round number which has been archived
     -- as of the max record_time of the ingested data.
     last_archived_round               bigint,
+    -- Refreshed when last_archived_round is updated.
     last_updated_at                   timestamptz default now(),
 
     constraint extra_app_activity_record_meta_pkey primary key (store_id)
