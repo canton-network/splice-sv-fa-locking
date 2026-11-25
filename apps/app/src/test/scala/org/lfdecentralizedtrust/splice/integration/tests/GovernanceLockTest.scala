@@ -4,10 +4,10 @@ import com.digitalasset.canton.topology.PartyId
 import org.lfdecentralizedtrust.splice.codegen.java.da.time.types.RelTime
 import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.{
   metadatav1,
-  transferinstructionv1,
-  transferinstructionv2,
+  transferinstructionv1 as tiv1,
+  transferinstructionv2 as tiv2,
 }
-import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock
+import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock as gl
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
 import org.lfdecentralizedtrust.splice.console.ParticipantClientReference
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.SpliceTestConsoleEnvironment
@@ -153,12 +153,12 @@ trait GovernanceLockTest extends TokenStandardTest {
       })
       .toMap
 
-  def isVestingLock(lock: governancelock.GovernanceLock): Boolean =
+  def isVestingLock(lock: gl.GovernanceLock): Boolean =
     GovernanceLockUtil.getVestingLockSpecification(lock).isDefined
 
   def vestingLockSpecification(
-      lock: governancelock.GovernanceLock
-  ): governancelock.VestingLockSpecification =
+      lock: gl.GovernanceLock
+  ): gl.VestingLockSpecification =
     GovernanceLockUtil.getVestingLockSpecification(lock).value
 
   def compareLockMemo(actual: String, expected: String) = {
@@ -176,27 +176,27 @@ trait GovernanceLockTest extends TokenStandardTest {
   }
 
   object TransferValues {
-    implicit val transferValuesV1: TransferValues[transferinstructionv1.TransferInstructionView] =
-      new TransferValues[transferinstructionv1.TransferInstructionView] {
-        def sender(transfer: transferinstructionv1.TransferInstructionView): String =
+    implicit val transferValuesV1: TransferValues[tiv1.TransferInstructionView] =
+      new TransferValues[tiv1.TransferInstructionView] {
+        def sender(transfer: tiv1.TransferInstructionView): String =
           transfer.transfer.sender
-        def receiver(transfer: transferinstructionv1.TransferInstructionView): String =
+        def receiver(transfer: tiv1.TransferInstructionView): String =
           transfer.transfer.receiver
-        def amount(transfer: transferinstructionv1.TransferInstructionView): BigDecimal =
+        def amount(transfer: tiv1.TransferInstructionView): BigDecimal =
           BigDecimal(transfer.transfer.amount)
-        def meta(transfer: transferinstructionv1.TransferInstructionView): metadatav1.Metadata =
+        def meta(transfer: tiv1.TransferInstructionView): metadatav1.Metadata =
           transfer.transfer.meta
       }
 
-    implicit val transferValuesV2: TransferValues[transferinstructionv2.TransferInstructionView] =
-      new TransferValues[transferinstructionv2.TransferInstructionView] {
-        def sender(transfer: transferinstructionv2.TransferInstructionView): String =
+    implicit val transferValuesV2: TransferValues[tiv2.TransferInstructionView] =
+      new TransferValues[tiv2.TransferInstructionView] {
+        def sender(transfer: tiv2.TransferInstructionView): String =
           transfer.transfer.sender.owner.toScala.value
-        def receiver(transfer: transferinstructionv2.TransferInstructionView): String =
+        def receiver(transfer: tiv2.TransferInstructionView): String =
           transfer.transfer.receiver.owner.toScala.value
-        def amount(transfer: transferinstructionv2.TransferInstructionView): BigDecimal =
+        def amount(transfer: tiv2.TransferInstructionView): BigDecimal =
           BigDecimal(transfer.transfer.amount)
-        def meta(transfer: transferinstructionv2.TransferInstructionView): metadatav1.Metadata =
+        def meta(transfer: tiv2.TransferInstructionView): metadatav1.Metadata =
           transfer.transfer.meta
       }
   }
@@ -341,7 +341,7 @@ trait GovernanceLockTest extends TokenStandardTest {
         owner: RichPartyId,
         lockKind: LockKind,
         lockSubject: String,
-        vestingLock: governancelock.GovernanceLock,
+        vestingLock: gl.GovernanceLock,
         vestedUntilTime: Instant,
     )(implicit env: SpliceTestConsoleEnvironment): Option[(CId, View)] =
       atMostOneVestingLock(
@@ -391,7 +391,7 @@ trait GovernanceLockTest extends TokenStandardTest {
     }
 
     /** Propose a substitution of a GovernanceLock */
-    def substituteGovernanceLock(lock: governancelock.GovernanceLock) =
+    def substituteGovernanceLock(lock: gl.GovernanceLock) =
       new SubstituteLock((Locked, PartyId.tryFromProtoPrimitive(lock.owner), None, None))
 
     /** Propose a substitution of a vesting GovernanceLock with the given attributes */
@@ -401,7 +401,7 @@ trait GovernanceLockTest extends TokenStandardTest {
       )
 
     /** Propose a substitution of a vesting GovernanceLock */
-    def substituteVestingLock(lock: governancelock.GovernanceLock) =
+    def substituteVestingLock(lock: gl.GovernanceLock) =
       new SubstituteLock(
         (
           Vesting,
@@ -460,7 +460,7 @@ trait GovernanceLockTest extends TokenStandardTest {
     /** Propose a transfer of part of a vesting GovernanceLock, keeping its
       * vesting schedule
       */
-    final def transferVestingLock(lock: governancelock.GovernanceLock) =
+    final def transferVestingLock(lock: gl.GovernanceLock) =
       new TransferLock((newLockOwner, transferAmount) =>
         (
           Vesting,
@@ -474,8 +474,8 @@ trait GovernanceLockTest extends TokenStandardTest {
 
   object tsv1Operations
       extends TokenStandardOps[
-        transferinstructionv1.TransferInstruction.ContractId,
-        transferinstructionv1.TransferInstructionView,
+        tiv1.TransferInstruction.ContractId,
+        tiv1.TransferInstructionView,
       ](1) {
     def executeTransfer(
         participant: ParticipantClientReference,
@@ -498,38 +498,38 @@ trait GovernanceLockTest extends TokenStandardTest {
     def acceptTransfer(
         participant: ParticipantClientReference,
         receiver: RichPartyId,
-        cid: transferinstructionv1.TransferInstruction.ContractId,
+        cid: tiv1.TransferInstruction.ContractId,
     )(implicit env: SpliceTestConsoleEnvironment): Unit =
       acceptTransferInstructionV1(participant, receiver, cid)
 
     def rejectTransfer(
         participant: ParticipantClientReference,
         receiver: RichPartyId,
-        cid: transferinstructionv1.TransferInstruction.ContractId,
+        cid: tiv1.TransferInstruction.ContractId,
     )(implicit env: SpliceTestConsoleEnvironment): Unit =
       rejectTransferInstructionV1(participant, receiver, cid)
 
     def withdrawTransfer(
         participant: ParticipantClientReference,
         receiver: RichPartyId,
-        cid: transferinstructionv1.TransferInstruction.ContractId,
+        cid: tiv1.TransferInstruction.ContractId,
     )(implicit env: SpliceTestConsoleEnvironment): Unit =
       withdrawTransferInstructionV1(participant, receiver, cid)
 
     def listTransfers(participant: ParticipantClientReference, party: PartyId) =
       listTransferInstructions(participant, party)
 
-    def getAcceptContext(cid: transferinstructionv1.TransferInstruction.ContractId)(implicit
+    def getAcceptContext(cid: tiv1.TransferInstruction.ContractId)(implicit
         env: SpliceTestConsoleEnvironment
     ): ChoiceContextWithDisclosures =
       sv1ScanBackend.getTransferInstructionAcceptContext(cid)
 
-    def getRejectContext(cid: transferinstructionv1.TransferInstruction.ContractId)(implicit
+    def getRejectContext(cid: tiv1.TransferInstruction.ContractId)(implicit
         env: SpliceTestConsoleEnvironment
     ): ChoiceContextWithDisclosures =
       sv1ScanBackend.getTransferInstructionRejectContext(cid)
 
-    def getWithdrawContext(cid: transferinstructionv1.TransferInstruction.ContractId)(implicit
+    def getWithdrawContext(cid: tiv1.TransferInstruction.ContractId)(implicit
         env: SpliceTestConsoleEnvironment
     ): ChoiceContextWithDisclosures =
       sv1ScanBackend.getTransferInstructionWithdrawContext(cid)
@@ -537,8 +537,8 @@ trait GovernanceLockTest extends TokenStandardTest {
 
   object tsv2Operations
       extends TokenStandardOps[
-        transferinstructionv2.TransferInstruction.ContractId,
-        transferinstructionv2.TransferInstructionView,
+        tiv2.TransferInstruction.ContractId,
+        tiv2.TransferInstructionView,
       ](2) {
     def executeTransfer(
         participant: ParticipantClientReference,
@@ -561,38 +561,38 @@ trait GovernanceLockTest extends TokenStandardTest {
     def acceptTransfer(
         participant: ParticipantClientReference,
         receiver: RichPartyId,
-        cid: transferinstructionv2.TransferInstruction.ContractId,
+        cid: tiv2.TransferInstruction.ContractId,
     )(implicit env: SpliceTestConsoleEnvironment): Unit =
       acceptTransferInstructionV2(participant, receiver, cid)
 
     def rejectTransfer(
         participant: ParticipantClientReference,
         receiver: RichPartyId,
-        cid: transferinstructionv2.TransferInstruction.ContractId,
+        cid: tiv2.TransferInstruction.ContractId,
     )(implicit env: SpliceTestConsoleEnvironment): Unit =
       rejectTransferInstructionV2(participant, receiver, cid)
 
     def withdrawTransfer(
         participant: ParticipantClientReference,
         receiver: RichPartyId,
-        cid: transferinstructionv2.TransferInstruction.ContractId,
+        cid: tiv2.TransferInstruction.ContractId,
     )(implicit env: SpliceTestConsoleEnvironment): Unit =
       withdrawTransferInstructionV2(participant, receiver, cid)
 
     def listTransfers(participant: ParticipantClientReference, party: PartyId) =
       listTransferInstructionsV2(participant, party)
 
-    def getAcceptContext(cid: transferinstructionv2.TransferInstruction.ContractId)(implicit
+    def getAcceptContext(cid: tiv2.TransferInstruction.ContractId)(implicit
         env: SpliceTestConsoleEnvironment
     ): ChoiceContextWithDisclosures =
       sv1ScanBackend.getTransferInstructionAcceptContextV2(cid)
 
-    def getRejectContext(cid: transferinstructionv2.TransferInstruction.ContractId)(implicit
+    def getRejectContext(cid: tiv2.TransferInstruction.ContractId)(implicit
         env: SpliceTestConsoleEnvironment
     ): ChoiceContextWithDisclosures =
       sv1ScanBackend.getTransferInstructionRejectContextV2(cid)
 
-    def getWithdrawContext(cid: transferinstructionv2.TransferInstruction.ContractId)(implicit
+    def getWithdrawContext(cid: tiv2.TransferInstruction.ContractId)(implicit
         env: SpliceTestConsoleEnvironment
     ): ChoiceContextWithDisclosures =
       sv1ScanBackend.getTransferInstructionWithdrawContextV2(cid)

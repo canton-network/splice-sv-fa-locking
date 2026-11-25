@@ -6,8 +6,11 @@ package org.lfdecentralizedtrust.splice.integration.tests
 import com.daml.ledger.javaapi.data.codegen.ContractId
 import com.digitalasset.canton.config.NonNegativeFiniteDuration
 import com.digitalasset.canton.topology.PartyId
-import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.transferinstructionv1
-import org.lfdecentralizedtrust.splice.codegen.java.splice.{amulet as amuletCodegen, governancelock}
+import org.lfdecentralizedtrust.splice.codegen.java.splice.api.token.transferinstructionv1 as tiv1
+import org.lfdecentralizedtrust.splice.codegen.java.splice.{
+  amulet as amuletCodegen,
+  governancelock as gl,
+}
 import org.lfdecentralizedtrust.splice.codegen.java.splice.wallet.install
 import org.lfdecentralizedtrust.splice.config.ConfigTransforms
 import org.lfdecentralizedtrust.splice.console.LedgerApiExtensions.RichPartyId
@@ -93,8 +96,8 @@ class GovernanceLockTimeBasedIntegrationTest
   private val lockKind = SuperValidatorLock
   private val lockSubject = "sv1"
 
-  private def checkLockKind(kind: governancelock.GovernanceLockKind): Assertion =
-    kind shouldBe a[governancelock.governancelockkind.GLK_SuperValidatorRightsOwner]
+  private def checkLockKind(kind: gl.GovernanceLockKind): Assertion =
+    kind shouldBe a[gl.governancelockkind.GLK_SuperValidatorRightsOwner]
 
   // Wallet automation runs in the background, e.g. to merge the amulets that a withdrawal unlocks,
   // so its entries could appear after the cursor of the previous lock action
@@ -175,7 +178,7 @@ class GovernanceLockTimeBasedIntegrationTest
       clue("the GovernanceLock has the correct kind") {
         val governanceLock =
           aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-            .filterJava(governancelock.GovernanceLock.COMPANION)(
+            .filterJava(gl.GovernanceLock.COMPANION)(
               ownerParty,
               predicate = _.id.contractId == governanceLockCid.contractId,
             )
@@ -222,7 +225,7 @@ class GovernanceLockTimeBasedIntegrationTest
         .value
       val vestingLock =
         aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-          .filterJava(governancelock.GovernanceLock.COMPANION)(
+          .filterJava(gl.GovernanceLock.COMPANION)(
             ownerParty,
             predicate = _.id.contractId == vestingLockCid.contractId,
           )
@@ -269,7 +272,7 @@ class GovernanceLockTimeBasedIntegrationTest
         .value
       val remainingVestingLock =
         aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-          .filterJava(governancelock.GovernanceLock.COMPANION)(
+          .filterJava(gl.GovernanceLock.COMPANION)(
             ownerParty,
             predicate = _.id.contractId == remainingVestingLockCid.contractId,
           )
@@ -305,7 +308,7 @@ class GovernanceLockTimeBasedIntegrationTest
         vestedUntilTime = vestingStartTime.plusSeconds(120),
       )
       aliceValidatorBackend.participantClientWithAdminToken.ledger_api_extensions.acs
-        .filterJava(governancelock.GovernanceLock.COMPANION)(
+        .filterJava(gl.GovernanceLock.COMPANION)(
           ownerParty,
           c => isVestingLock(c.data),
         ) shouldBe empty
@@ -799,7 +802,7 @@ class GovernanceLockTimeBasedIntegrationTest
       )
 
       def checkClosedAndLockUnchanged(
-          proposalCid: transferinstructionv1.TransferInstruction.ContractId
+          proposalCid: tiv1.TransferInstruction.ContractId
       ) = {
         listTransferInstructions(aliceParticipant, aliceParty).map(_._1) should not contain
           proposalCid
@@ -955,9 +958,9 @@ class GovernanceLockTimeBasedIntegrationTest
   private def governanceLocks(
       participant: ParticipantClientReference,
       owner: PartyId,
-  ): Seq[(governancelock.GovernanceLock.ContractId, governancelock.GovernanceLock)] =
+  ): Seq[(gl.GovernanceLock.ContractId, gl.GovernanceLock)] =
     participant.ledger_api_extensions.acs
-      .filterJava(governancelock.GovernanceLock.COMPANION)(
+      .filterJava(gl.GovernanceLock.COMPANION)(
         owner,
         _.data.owner == owner.toProtoPrimitive,
       )
@@ -965,7 +968,7 @@ class GovernanceLockTimeBasedIntegrationTest
 
   /** Ignores all wallet history entries that are not about the given transfer instruction */
   private def isUnrelatedTo(
-      instructionCid: transferinstructionv1.TransferInstruction.ContractId
+      instructionCid: tiv1.TransferInstruction.ContractId
   ): TxLogEntry => Boolean = {
     case entry: TransferTxLogEntry => entry.transferInstructionCid != instructionCid.contractId
     case _ => true
@@ -973,17 +976,17 @@ class GovernanceLockTimeBasedIntegrationTest
 
   private def listLockSubstitutions(implicit env: SpliceTestConsoleEnvironment) =
     sv1Backend.appState.dsoStore.multiDomainAcsStore
-      .listContracts(governancelock.substitution.GovernanceLockSubstitution.COMPANION)
+      .listContracts(gl.substitution.GovernanceLockSubstitution.COMPANION)
       .futureValue
 
   private def listLockTransfers(implicit env: SpliceTestConsoleEnvironment) =
     sv1Backend.appState.dsoStore.multiDomainAcsStore
-      .listContracts(governancelock.transfer.GovernanceLockTransfer.COMPANION)
+      .listContracts(gl.transfer.GovernanceLockTransfer.COMPANION)
       .futureValue
 
   private def listVestingLocks(implicit env: SpliceTestConsoleEnvironment) =
     sv1Backend.appState.dsoStore.multiDomainAcsStore
-      .listContracts(governancelock.GovernanceLock.COMPANION)
+      .listContracts(gl.GovernanceLock.COMPANION)
       .futureValue
       .filter(lock => GovernanceLockUtil.getVestingLockSpecification(lock.payload).isDefined)
 }
