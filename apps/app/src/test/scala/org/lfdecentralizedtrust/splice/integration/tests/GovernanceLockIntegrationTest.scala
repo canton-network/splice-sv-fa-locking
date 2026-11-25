@@ -3,6 +3,7 @@
 
 package org.lfdecentralizedtrust.splice.integration.tests
 
+import cats.data.NonEmptyList
 import com.daml.ledger.javaapi.data.codegen.ContractId
 import com.digitalasset.canton.topology.PartyId
 import org.lfdecentralizedtrust.splice.codegen.java.splice.governancelock as gl
@@ -34,6 +35,7 @@ class GovernanceLockIntegrationTest
 
   private val targetLockAmount = BigDecimal(20000)
   private val partialSubstitutionAmount = BigDecimal(10000)
+  private val remainingLockAmount = targetLockAmount - partialSubstitutionAmount
 
   private def aliceParticipant(implicit env: SpliceTestConsoleEnvironment) =
     aliceValidatorBackend.participantClientWithAdminToken
@@ -47,7 +49,6 @@ class GovernanceLockIntegrationTest
         owner,
         predicate = c => c.data.owner == owner.toProtoPrimitive && !isVestingLock(c.data),
       )
-      .map(_.data)
 
   private def vestingLocksFor(participant: ParticipantClientReference, owner: PartyId) =
     participant.ledger_api_extensions.acs
@@ -55,7 +56,6 @@ class GovernanceLockIntegrationTest
         owner,
         predicate = c => c.data.owner == owner.toProtoPrimitive && isVestingLock(c.data),
       )
-      .map(_.data)
 
   private def latestEventId(wallet: WalletAppClientReference): Option[String] =
     wallet.listTransactions(None, pageSize = 1).headOption.map(_.eventId)
@@ -97,6 +97,31 @@ class GovernanceLockIntegrationTest
   private def testTokenStandardCompat[CId <: ContractId[?], View](
       ops: TokenStandardOps[CId, View]
   ) = {
+    def setup0(
+        lockOwner: RichPartyId,
+        bobFunds: BigDecimal,
+        controllers: LockControllers,
+    )(implicit env: SpliceTestConsoleEnvironment) = {
+      aliceWalletClient.tap(targetLockAmount)
+      bobWalletClient.tap(bobFunds)
+
+      val targetLockCid = ops.createGovernanceLock(
+        aliceParticipant,
+        lockOwner,
+        lockKind,
+        lockSubject,
+        amount = targetLockAmount,
+        controllers,
+      )
+      val targetLock = governanceLocksFor(aliceParticipant, lockOwner.partyId).loneElement
+      eventually() {
+        aliceWalletClient.balance().lockedQty shouldBe targetLockAmount
+        bobWalletClient.balance().unlockedQty should be > BigDecimal(0)
+      }
+
+      (targetLockCid, targetLock)
+    }
+
     // alice locks `targetLockAmount`, and bob has `bobFunds` of unlocked funds
     def setup(bobFunds: BigDecimal)(implicit env: SpliceTestConsoleEnvironment) = {
       val aliceParty = onboardWalletUser(aliceWalletClient, aliceValidatorBackend)
@@ -104,23 +129,9 @@ class GovernanceLockIntegrationTest
       val alice = RichPartyId.local(aliceParty)
       val bob = RichPartyId.local(bobParty)
 
-      aliceWalletClient.tap(targetLockAmount)
-      bobWalletClient.tap(bobFunds)
+      val (_, targetLock) = setup0(alice, bobFunds, LockControllers())
 
-      ops.createGovernanceLock(
-        aliceParticipant,
-        alice,
-        lockKind,
-        lockSubject,
-        amount = targetLockAmount,
-      )
-      val targetLock = governanceLocksFor(aliceParticipant, aliceParty).loneElement
-      eventually() {
-        aliceWalletClient.balance().lockedQty shouldBe targetLockAmount
-        bobWalletClient.balance().unlockedQty should be > BigDecimal(0)
-      }
-
-      (alice, bob, targetLock)
+      (alice, bob, targetLock.data)
     }
 
     def checkSubstitutionView(
@@ -144,12 +155,14 @@ class GovernanceLockIntegrationTest
         val (alice, bob, targetLock) = setup(bobFunds = partialSubstitutionAmount)
         val bobBeforeCreate = latestEventId(bobWalletClient)
 
-        val substitutionCid = ops.substituteGovernanceLock(targetLock)(
+        val (substitutionCid, _) = ops.substituteGovernanceLock(targetLock)(
           bobParticipant,
           bob,
           lockKind,
           lockSubject,
           partialSubstitutionAmount,
+          LockControllers(),
+          LockControllers(),
         )
 
         clue("the substitution is a pending TransferInstruction from bob to alice") {
@@ -197,13 +210,13 @@ class GovernanceLockIntegrationTest
               GovernanceLockUtil.lockManagerParty.toProtoPrimitive
             )
 
-            val bobLock = governanceLocksFor(bobParticipant, bob.partyId).loneElement
+            val bobLock = governanceLocksFor(bobParticipant, bob.partyId).loneElement.data
             BigDecimal(bobLock.amount) shouldBe partialSubstitutionAmount
             GovernanceLockUtil.getGovernanceLockKind(bobLock) shouldBe
               GovernanceLockUtil.getGovernanceLockKind(targetLock)
 
-            val aliceLock = governanceLocksFor(aliceParticipant, alice.partyId).loneElement
-            BigDecimal(aliceLock.amount) shouldBe targetLockAmount - partialSubstitutionAmount
+            val aliceLock = governanceLocksFor(aliceParticipant, alice.partyId).loneElement.data
+            BigDecimal(aliceLock.amount) shouldBe remainingLockAmount
 
             aliceWalletClient
               .balance()
@@ -229,12 +242,14 @@ class GovernanceLockIntegrationTest
         val (alice, bob, targetLock) = setup(bobFunds = partialSubstitutionAmount)
         val bobUnlockedBefore = bobWalletClient.balance().unlockedQty
 
-        val substitutionCid = ops.substituteGovernanceLock(targetLock)(
+        val (substitutionCid, _) = ops.substituteGovernanceLock(targetLock)(
           bobParticipant,
           bob,
           lockKind,
           lockSubject,
           partialSubstitutionAmount,
+          LockControllers(),
+          LockControllers(),
         )
 
         clue("bob's funds are locked in the substitution") {
@@ -254,7 +269,7 @@ class GovernanceLockIntegrationTest
             bobWalletClient.balance().unlockedQty shouldBe bobUnlockedBefore
             governanceLocksFor(bobParticipant, bob.partyId) shouldBe empty
             BigDecimal(
-              governanceLocksFor(aliceParticipant, alice.partyId).loneElement.amount
+              governanceLocksFor(aliceParticipant, alice.partyId).loneElement.data.amount
             ) shouldBe targetLockAmount
           },
         )
@@ -270,12 +285,14 @@ class GovernanceLockIntegrationTest
         val (alice, bob, targetLock) = setup(bobFunds = partialSubstitutionAmount)
         val bobUnlockedBefore = bobWalletClient.balance().unlockedQty
 
-        val substitutionCid = ops.substituteGovernanceLock(targetLock)(
+        val (substitutionCid, _) = ops.substituteGovernanceLock(targetLock)(
           bobParticipant,
           bob,
           lockKind,
           lockSubject,
           partialSubstitutionAmount,
+          LockControllers(),
+          LockControllers(),
         )
 
         clue("Scan serves a reject choice context for the substitution") {
@@ -298,7 +315,7 @@ class GovernanceLockIntegrationTest
             bobWalletClient.balance().unlockedQty shouldBe bobUnlockedBefore
             governanceLocksFor(bobParticipant, bob.partyId) shouldBe empty
             BigDecimal(
-              governanceLocksFor(aliceParticipant, alice.partyId).loneElement.amount
+              governanceLocksFor(aliceParticipant, alice.partyId).loneElement.data.amount
             ) shouldBe targetLockAmount
           },
         )
@@ -318,21 +335,25 @@ class GovernanceLockIntegrationTest
         val (vestingLockCid, _) = ops
           .unlockGovernanceLock(
             aliceParticipant,
-            alice,
+            NonEmptyList.one(alice),
             lockKind,
             lockSubject,
             unlockAmount = targetLockAmount,
             vestingStartTime = env.environment.clock.now.plusSeconds(30).toInstant,
+            targetLockOwner = None,
+            LockControllers(),
           )
           .value
-        val vestingLock = vestingLocksFor(aliceParticipant, alice.partyId).loneElement
+        val vestingLock = vestingLocksFor(aliceParticipant, alice.partyId).loneElement.data
 
-        val substitutionCid = ops.substituteVestingLock(vestingLock)(
+        val (substitutionCid, _) = ops.substituteVestingLock(vestingLock)(
           bobParticipant,
           bob,
           lockKind,
           lockSubject,
           BigDecimal(vestingLock.amount),
+          LockControllers(),
+          LockControllers(),
         )
 
         clue("the substitution is a pending TransferInstruction from bob to alice") {
@@ -371,7 +392,7 @@ class GovernanceLockIntegrationTest
               GovernanceLockUtil.lockManagerParty.toProtoPrimitive
             )
 
-            val bobLock = vestingLocksFor(bobParticipant, bob.partyId).loneElement
+            val bobLock = vestingLocksFor(bobParticipant, bob.partyId).loneElement.data
             BigDecimal(bobLock.amount) shouldBe BigDecimal(vestingLock.amount)
             vestingLockSpecification(bobLock).vestingPeriod shouldBe
               vestingLockSpecification(vestingLock).vestingPeriod
