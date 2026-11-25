@@ -269,66 +269,61 @@ object ChoiceContextBuilder {
     }
   }
 
-  /** The accept of a `GovernanceLockTransfer` merges at most this many
-    * locks with the source key.
-    */
-  private val maxGovernanceLockTransferSourceLocks = 20
+  /** Acceptance of a governance lock proposal merges at most this many locks by key. */
+  private val maxGovernanceLocksByKey = 20
 
-  /** Discloses the locks that the accept of a `GovernanceLockTransfer` resolves
-    * by its source key as the receiver cannot see them. Also discloses the
-    * transfer's `LockedAmulet`s,
+  /** Discloses the `LockedAmulet`s of the governance locks that the accept of a governance lock
+    * proposal resolves by key, as the controller may not be able to see them.
+    *
+    * Also discloses the locks themselves when `discloseLocks` is `true`.
     */
-  def getGovernanceLockTransferAcceptContext[
+  def getGovernanceLockProposalContext[
       DisclosedContract,
       ChoiceContext,
       Builder <: ChoiceContextBuilder[DisclosedContract, ChoiceContext, Builder],
   ](
       description: String,
-      source: governancelock.GovernanceLockKey,
+      key: governancelock.GovernanceLockKey,
+      discloseLocks: Boolean,
+      requireLockedAmulet: Boolean,
+      proposalLockedAmulet: Option[amulet.LockedAmulet.ContractId],
       store: ScanStore,
       fetcher: ChoiceContextContractFetcher,
       clock: Clock,
       newBuilder: String => Builder,
-  )(implicit
-      ec: ExecutionContext,
-      tc: TraceContext,
-  ): Future[ChoiceContext] = {
+  )(implicit ec: ExecutionContext, tc: TraceContext): Future[ChoiceContext] = {
+    def notFound(error: String): Nothing =
+      throw io.grpc.Status.NOT_FOUND.withDescription(error).asRuntimeException()
+
     for {
-      locks <- store.listGovernanceLocksByKey(
-        source,
-        PageLimit.tryCreate(maxGovernanceLockTransferSourceLocks),
-      )
+      locks <- store.listGovernanceLocksByKey(key, PageLimit.tryCreate(maxGovernanceLocksByKey))
       _ = if (locks.isEmpty)
-        throw io.grpc.Status.NOT_FOUND
-          .withDescription(s"No GovernanceLock with key $source found for $description")
-          .asRuntimeException()
-      lockedAmulets <- fetcher
-        .lookupContractsById(amulet.LockedAmulet.COMPANION)(
-          locks.map(_.payload.lockedAmulet)
-        )
-      // The batch lookup omits the ids it can't find, so report the first lock
-      // whose `LockedAmulet` is missing.
+        notFound(s"No GovernanceLock with key $key found for $description")
+      lockedAmulets <- fetcher.lookupContractsById(amulet.LockedAmulet.COMPANION)(
+        locks.map(_.payload.lockedAmulet) ++ proposalLockedAmulet
+      )
       found = lockedAmulets.map(_.contractId.contractId).toSet
-      _ = locks
-        .find(lock => !found(lock.payload.lockedAmulet.contractId))
-        .foreach { lock =>
-          val lockedAmuletId = lock.payload.lockedAmulet
-          throw io.grpc.Status.NOT_FOUND
-            .withDescription(
+      _ = if (requireLockedAmulet)
+        locks
+          .find(lock => !found(lock.payload.lockedAmulet.contractId))
+          .foreach { lock =>
+            val lockedAmuletId = lock.payload.lockedAmulet
+            notFound(
               s"LockedAmulet '${lockedAmuletId.contractId}' of GovernanceLock " +
                 s"'${lock.contractId.contractId}' not found for $description"
             )
-            .asRuntimeException()
-        }
+          }
+      _ = proposalLockedAmulet.foreach { cid =>
+        if (!found(cid.contractId))
+          notFound(s"LockedAmulet '${cid.contractId}' not found for $description")
+      }
       (choiceContextBuilder, _) <- getAmuletRulesTransferContext[
         DisclosedContract,
         ChoiceContext,
         Builder,
       ](store, clock, newBuilder)
-    } yield choiceContextBuilder
-      .discloseAll(locks.map(_.contract))
-      .discloseAll(lockedAmulets)
-      .build()
+      _ = if (discloseLocks) choiceContextBuilder.discloseAll(locks.map(_.contract))
+      result = choiceContextBuilder.discloseAll(lockedAmulets).build()
+    } yield result
   }
-
 }

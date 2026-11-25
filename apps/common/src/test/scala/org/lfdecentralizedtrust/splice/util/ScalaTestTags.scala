@@ -21,4 +21,7 @@ object Tags {
   // Don't run this test when testing against splice-amulet < 0.1.25
   object SpliceAmulet_0_1_25
       extends Tag("org.lfdecentralizedtrust.splice.util.scalatesttags.SpliceAmulet_0_1_25")
+  // Don't run this test when testing against splice-amulet < 0.1.26
+  object SpliceAmulet_0_1_26
+      extends Tag("org.lfdecentralizedtrust.splice.util.scalatesttags.SpliceAmulet_0_1_26")
 }

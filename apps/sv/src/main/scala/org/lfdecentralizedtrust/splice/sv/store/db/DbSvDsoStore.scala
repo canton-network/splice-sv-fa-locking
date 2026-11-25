@@ -1424,6 +1424,36 @@ class DbSvDsoStore private (
       }
     }
 
+  /** Excludes lock transfer and substitution proposals with an ignored custom controller.
+    *
+    * `lockKeyField` is the field that holds the key of the lock that the proposal acts on.
+    * The custom controllers of such a proposal are the substitution controllers of a full lock,
+    * or the vesting controllers of a vesting lock.
+    */
+  private def ignoreLockProposalControllersCondition(
+      lockKeyField: String,
+      ignoredParties: Set[PartyId],
+  ) = {
+    val ignoredPartiesArr: Array[String2066] =
+      ignoredParties.map(p => lengthLimited(p.toProtoPrimitive)).toArray
+    // The `?` inside the jsonpath literals is a filter, not a bind parameter
+    multiDomainAcsStore.ignoredPartyJsonPathQueryArrayCondition(
+      ignoredPartiesArr,
+      sql"""
+        (
+          jsonb_path_query_array(
+            acs.create_arguments,
+            '$$.#$lockKeyField.specification ? (@.tag == "GLS_FullLock").value.controllers.substitutionControllers.controllers[*][*]'
+          ) ||
+          jsonb_path_query_array(
+            acs.create_arguments,
+            '$$.#$lockKeyField.specification ? (@.tag == "GLS_VestingLock").value.vestingControllers.controllers[*][*]'
+          )
+        )
+      """,
+    )
+  }
+
   override def listExpiredGovernanceLockTransfers(
       unavailablePartiesStore: Option[UnavailablePartiesStore] = None
   ): ListExpiredContracts[
@@ -1442,7 +1472,7 @@ class DbSvDsoStore private (
               ) ++ sql" and " ++ notInClause(
                 "create_arguments->>'receiver'",
                 ignoredParties,
-              )).toActionBuilder
+              ) ++ ignoreLockProposalControllersCondition("source", ignoredParties)).toActionBuilder
             } else {
               sql""
             }
@@ -1491,7 +1521,7 @@ class DbSvDsoStore private (
                 // featured app provider is unavailable. Never null, so it cannot drop rows.
                 "governance_lock_subject",
                 ignoredParties,
-              )).toActionBuilder
+              ) ++ ignoreLockProposalControllersCondition("target", ignoredParties)).toActionBuilder
             } else {
               sql""
             }
@@ -2196,16 +2226,18 @@ class DbSvDsoStore private (
       waitUntilAcsIngested {
         for {
           ignoredParties <- UnavailablePartiesStore.listParties(unavailablePartiesStore)
-          filterClause =
-            if (ignoredParties.nonEmpty)
-              (sql" and " ++ notInClause(
-                "acs.create_arguments->>'owner'",
+          filterClause = NonEmpty.from(ignoredParties) match {
+            case None => sql""
+            case Some(ignoredParties) =>
+              multiDomainAcsStore.ignoredPartyJsonPathsCondition(
+                (
+                  sql" and " ++ notInClause("acs.create_arguments->>'owner'", ignoredParties) ++
+                    sql" and " ++ notInClause("acs.governance_lock_subject", ignoredParties)
+                ).toActionBuilder,
                 ignoredParties,
-              ) ++ sql" and " ++ notInClause(
-                "acs.governance_lock_subject",
-                ignoredParties,
-              )).toActionBuilder
-            else sql""
+                allGovernanceLockControllersJsonPaths,
+              )
+          }
           synchronizerId <- getDsoRules().map(_.domain)
           result <- storage.query(
             (sql"""
