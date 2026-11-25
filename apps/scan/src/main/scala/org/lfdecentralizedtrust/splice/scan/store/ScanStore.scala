@@ -533,6 +533,30 @@ object ScanStore {
             contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.expiresAt)),
           )
         ),
+        mkFilter(splice.governancelock.unlock.UnlockProposal.COMPANION)(
+          co => co.payload.specification.dso == dso,
+          versionGuard = { case (pkgVersionSupport, now) =>
+            (tc) =>
+              pkgVersionSupport.supportsGovernanceLockCustomControllers(Seq(key.dsoParty), now)(tc)
+          },
+        )(contract =>
+          ScanAcsStoreRowData(
+            contract = contract,
+            contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.expiresAt)),
+          )
+        ),
+        mkFilter(splice.governancelock.withdraw.WithdrawVestedFundsProposal.COMPANION)(
+          co => co.payload.specification.dso == dso,
+          versionGuard = { case (pkgVersionSupport, now) =>
+            (tc) =>
+              pkgVersionSupport.supportsGovernanceLockCustomControllers(Seq(key.dsoParty), now)(tc)
+          },
+        )(contract =>
+          ScanAcsStoreRowData(
+            contract = contract,
+            contractExpiresAt = Some(Timestamp.assertFromInstant(contract.payload.expiresAt)),
+          )
+        ),
         mkFilter(splice.externalpartyconfigstate.ExternalPartyConfigState.COMPANION)(co =>
           co.payload.dso == dso
         ) { contract =>

@@ -29,6 +29,7 @@ import org.lfdecentralizedtrust.splice.sv.automation.delegatebased.{
 import org.lfdecentralizedtrust.splice.sv.config.InitialGovernanceLockConfig
 import org.lfdecentralizedtrust.splice.util.{
   GovernanceLockUtil,
+  Tags,
   TimeTestUtil,
   TokenStandardMetadata,
 }
@@ -347,6 +348,106 @@ class GovernanceLockTimeBasedIntegrationTest
       }
     }
 
+    // Unlock and withdraw tests are grouped together because testing withdrawal requires a vesting
+    // lock, which is created by unlocking a full lock
+    s"TSv${ops.version} unlock and withdraw with custom controllers" taggedAs Tags.SpliceAmulet_0_1_26 in {
+      implicit env =>
+        val makeControllers = (parties: customControllers.Parties) =>
+          List(
+            List(parties.alice, parties.bob, parties.charlie),
+            List(parties.bob, parties.charlie, parties.sv1),
+          )
+        val makeLockControllers = (controllers: List[List[PartyId]]) =>
+          LockControllers(unlockControllers = controllers, vestingControllers = controllers)
+
+        val vestingStartTime = getLedgerTime.plusSeconds(1).toInstant
+
+        val vestingLock = customControllers
+          .testProposal(ops, gl.unlock.UnlockProposal.COMPANION)(
+            makeControllers,
+            makeLockControllers,
+            setupLock = (parties, controllers) => {
+              val cid = new gl.GovernanceLock.ContractId(
+                createLock(parties.alice.richPartyId, controllers)._3.contractId
+              )
+              (parties.alice, cid)
+            },
+            makeAcceptProposers = parties => NonEmptyList.one(parties.bob),
+            makeAcceptors = parties => NonEmptyList.of(parties.alice, parties.charlie),
+            makeRejectProposers = parties => NonEmptyList.one(parties.bob),
+            makeRejectors = parties => NonEmptyList.of(parties.alice, parties.charlie),
+            makeWithdrawProposers = parties => NonEmptyList.of(parties.alice, parties.charlie),
+            propose = (parties, participant, proposers, controllers) =>
+              ops
+                .unlockGovernanceLock(
+                  participant,
+                  proposers,
+                  lockKind,
+                  lockSubject,
+                  lockAmount,
+                  vestingStartTime,
+                  Some(parties.alice.partyId),
+                  controllers,
+                )
+                .value,
+            expectedAmount = lockAmount,
+            expectedReceiver = _ => GovernanceLockUtil.lockManagerParty,
+            makeUpdatedLockOwners = parties => List(parties.alice),
+            checkUpdatedLocks = (parties, vestingLocks) => {
+              val (_, vestingLockView, vestingLock) = vestingLocks.loneElement
+              ops.transferValues
+                .sender(vestingLockView) shouldBe parties.alice.partyId.toProtoPrimitive
+              ops.transferValues.amount(vestingLockView) shouldBe lockAmount
+              val vestingSpec = vestingLockSpecification(vestingLock.data)
+              vestingSpec.endTime
+                .minus(vestingSpec.vestingPeriod.microseconds, ChronoUnit.MICROS) shouldBe
+                vestingStartTime
+            },
+          )
+          .loneElement
+
+        advanceTime(Duration.ofSeconds(31))
+        val vestedUntilTime = vestingStartTime.plusSeconds(30)
+
+        customControllers.testProposal(ops, gl.withdraw.WithdrawVestedFundsProposal.COMPANION)(
+          makeControllers,
+          makeLockControllers,
+          // lock is already setup by unlock above
+          setupLock = (parties, _) => (parties.alice, vestingLock.id),
+          makeAcceptProposers = parties => NonEmptyList.one(parties.bob),
+          makeAcceptors = parties => NonEmptyList.of(parties.alice, parties.charlie),
+          makeRejectProposers = parties => NonEmptyList.one(parties.bob),
+          makeRejectors = parties => NonEmptyList.of(parties.alice, parties.charlie),
+          makeWithdrawProposers = parties => NonEmptyList.of(parties.alice, parties.charlie),
+          propose = (parties, participant, proposers, controllers) =>
+            ops
+              .withdrawVestingLock(
+                participant,
+                proposers,
+                lockKind,
+                lockSubject,
+                vestingLock.data,
+                vestedUntilTime,
+                Some(parties.alice.partyId),
+                controllers,
+              )
+              .value,
+          expectedAmount = 0,
+          expectedReceiver = _ => GovernanceLockUtil.lockManagerParty,
+          makeUpdatedLockOwners = parties => List(parties.alice),
+          checkUpdatedLocks = (parties, vestingLocks) => {
+            val (_, vestingLockView, vestingLock) = vestingLocks.loneElement
+            ops.transferValues.sender(
+              vestingLockView
+            ) shouldBe parties.alice.partyId.toProtoPrimitive
+            ops.transferValues.amount(vestingLockView) shouldBe expectedRemainingLockAmount
+            val vestingSpec = vestingLockSpecification(vestingLock.data)
+            vestingSpec.endTime
+              .minus(vestingSpec.vestingPeriod.microseconds, ChronoUnit.MICROS) shouldBe
+              vestedUntilTime
+          },
+        )
+    }
   }
 
   testTokenStandardCompat(tsv1Operations)

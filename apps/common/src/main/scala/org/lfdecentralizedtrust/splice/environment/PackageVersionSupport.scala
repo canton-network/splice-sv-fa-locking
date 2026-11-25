@@ -88,6 +88,21 @@ trait PackageVersionSupport extends NamedLogging {
       ignoreRedundantCheck = false,
     )
 
+  def supportsGovernanceLockCustomControllers(
+      parties: Seq[PartyId],
+      now: CantonTimestamp,
+  )(implicit
+      tc: TraceContext
+  ): Future[FeatureSupport] =
+    isDarSupported(
+      parties,
+      PackageIdResolver.Package.SpliceAmulet,
+      now,
+      DarResources.amulet,
+      DarResources.amulet_0_1_26,
+      ignoreRedundantCheck = false,
+    )
+
   def supportsTbarV1_1(parties: Seq[PartyId], now: CantonTimestamp)(implicit
       tc: TraceContext
   ): Future[FeatureSupport] =

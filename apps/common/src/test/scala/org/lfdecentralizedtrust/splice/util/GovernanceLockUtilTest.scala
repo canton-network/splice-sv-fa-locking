@@ -133,6 +133,43 @@ class GovernanceLockUtilTest extends AnyWordSpec with BaseTest {
       Optional.empty(),
     )
 
+  private def unlock(
+      kind: gl.GovernanceLockKind,
+      proposers: List[String],
+  ): gl.unlock.UnlockProposal =
+    new gl.unlock.UnlockProposal(
+      new gl.unlock.UnlockProposalSpecification(
+        dso,
+        owner,
+        fullSpec(kind),
+        new java.math.BigDecimal(10),
+        Instant.EPOCH,
+      ),
+      proposers.asJava,
+      Map.empty.asJava,
+      Instant.EPOCH,
+      Instant.EPOCH,
+      Optional.empty(),
+    )
+
+  private def withdraw(
+      kind: gl.GovernanceLockKind,
+      proposers: List[String],
+  ): gl.withdraw.WithdrawVestedFundsProposal =
+    new gl.withdraw.WithdrawVestedFundsProposal(
+      new gl.withdraw.WithdrawVestedFundsSpecification(
+        dso,
+        owner,
+        vestingSpec(kind),
+        Instant.EPOCH,
+      ),
+      proposers.asJava,
+      Map.empty.asJava,
+      Instant.EPOCH,
+      Instant.EPOCH,
+      Optional.empty(),
+    )
+
   "governanceLockInformees lists and deduplicates the correct parties" in {
     def expectedCustomControllers(vesting: Boolean): Seq[String] =
       if (vesting) Seq(alice, charlie) else Seq(alice, bob, charlie)
@@ -197,6 +234,42 @@ class GovernanceLockUtilTest extends AnyWordSpec with BaseTest {
                 (Seq(owner, receiver) ++ proposers ++ expectedCustomControllers(vesting)).distinct
             }
           }
+        }
+      }
+    }
+  }
+
+  "unlockInformees lists and deduplicates the correct parties" in {
+    val expectedCustomControllers = Seq(alice, bob)
+
+    Seq(owner, charlie).foreach { proposer =>
+      Seq(true, false).foreach { sv =>
+        val (kind, expectedProvider) =
+          if (sv) (superValidator, None) else (featuredApp, Some(provider))
+
+        withClue(s"proposer: $proposer, sv: $sv") {
+          glu.unlockInformees(unlock(kind, List(proposer))) shouldBe
+            (Seq(owner, proposer) ++
+              expectedProvider ++
+              expectedCustomControllers).distinct
+        }
+      }
+    }
+  }
+
+  "withdrawInformees lists and deduplicates the correct parties" in {
+    val expectedCustomControllers = Seq(alice, charlie)
+
+    Seq(owner, bob).foreach { proposer =>
+      Seq(true, false).foreach { sv =>
+        val (kind, expectedProvider) =
+          if (sv) (superValidator, None) else (featuredApp, Some(provider))
+
+        withClue(s"proposer: $proposer, sv: $sv") {
+          glu.withdrawInformees(withdraw(kind, List(proposer))) shouldBe
+            (Seq(owner, proposer) ++
+              expectedProvider ++
+              expectedCustomControllers).distinct
         }
       }
     }
