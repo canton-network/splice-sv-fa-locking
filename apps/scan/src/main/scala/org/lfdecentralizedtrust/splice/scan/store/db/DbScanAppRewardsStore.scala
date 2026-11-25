@@ -793,100 +793,52 @@ class DbScanAppRewardsStore(
       ++ insertPartyTotals(historyId, roundNumber) ++ sql" "
       ++ insertRoundTotals(historyId, roundNumber)).asUpdate
 
-  /** Unnest activity arrays from both record stores and aggregate weights
-    * by party. TBAR v1.1 attribution is pre-applied in `app_provider_parties`.
-    *
-    * Reads both `app_activity_record_store` (verdict-derived activity) and
-    * `extra_app_activity_record_store` (CIP-0104 extension hook activity),
-    * aggregating each side separately so they land in distinct columns in
-    * the totals tables.
-    */
+  /** TBAR v1.1 attribution is pre-applied in `app_provider_parties`. */
   private def unnestAndAggregate(historyId: Long, roundNumber: Long) = {
     val extraStoreId = extraActivityRecordStore.storeId
-    sql"""app_app_unnested as (
-            select party, weight
+    sql"""activity as (
+            select pw.kind, pw.party, pw.weight
             from app_activity_record_store a
-            cross join lateral unnest(a.app_provider_parties, a.app_activity_weights)
-                 as pw(party, weight)
+            cross join lateral (
+              select 'app' as kind, party, weight
+              from unnest(a.app_provider_parties, a.app_activity_weights)
+                as t(party, weight)
+              union all
+              select 'asset', party, weight
+              from unnest(a.asset_activity_provider_parties, a.asset_activity_weights)
+                as t(party, weight)
+            ) pw
             where a.history_id = $historyId
               and a.round_number = $roundNumber
-          ),
-          extra_app_unnested as (
-            select party, weight
+
+            union all
+
+            select pw.kind, pw.party, pw.weight
             from extra_app_activity_record_store x
-            cross join lateral unnest(x.app_provider_parties, x.app_activity_weights)
-                 as pw(party, weight)
+            cross join lateral (
+              select 'extra_app' as kind, party, weight
+              from unnest(x.app_provider_parties, x.app_activity_weights)
+                as t(party, weight)
+              union all
+              select 'extra_asset', party, weight
+              from unnest(x.asset_activity_provider_parties, x.asset_activity_weights)
+                as t(party, weight)
+            ) pw
             where x.store_id = $extraStoreId
               and x.round_number = $roundNumber
-          ),
-          app_app_aggregated as (
-            select party, sum(weight) as total_app_weight,
-                   count(*) as num_app_activity_records
-            from app_app_unnested
-            group by party
-          ),
-          extra_app_aggregated as (
-            select party, sum(weight) as total_extra_app_weight,
-                   count(*) as num_extra_app_activity_records
-            from extra_app_unnested
-            group by party
-          ),
-          app_asset_unnested as (
-            select party, weight
-            from app_activity_record_store a
-            cross join lateral unnest(
-                   coalesce(a.asset_activity_provider_parties, '{}'::text[]),
-                   coalesce(a.asset_activity_weights,          '{}'::bigint[]))
-                 as pw(party, weight)
-            where a.history_id = $historyId
-              and a.round_number = $roundNumber
-          ),
-          extra_asset_unnested as (
-            select party, weight
-            from extra_app_activity_record_store x
-            cross join lateral unnest(
-                   coalesce(x.asset_activity_provider_parties, '{}'::text[]),
-                   coalesce(x.asset_activity_weights,          '{}'::bigint[]))
-                 as pw(party, weight)
-            where x.store_id = $extraStoreId
-              and x.round_number = $roundNumber
-          ),
-          app_asset_aggregated as (
-            select party, sum(weight) as total_asset_weight,
-                   count(*) as num_asset_activity_records
-            from app_asset_unnested
-            group by party
-          ),
-          extra_asset_aggregated as (
-            select party, sum(weight) as total_extra_asset_weight,
-                   count(*) as num_extra_asset_activity_records
-            from extra_asset_unnested
-            group by party
-          ),
-          all_parties as (
-            select party from app_app_aggregated
-            union
-            select party from extra_app_aggregated
-            union
-            select party from app_asset_aggregated
-            union
-            select party from extra_asset_aggregated
           ),
           combined_parties as (
-            select p.party                                            as party,
-                   coalesce(aa.total_app_weight, 0)                   as total_app_weight,
-                   coalesce(aa.num_app_activity_records, 0)           as num_app_activity_records,
-                   coalesce(ea.total_extra_app_weight, 0)             as total_extra_app_weight,
-                   coalesce(ea.num_extra_app_activity_records, 0)     as num_extra_app_activity_records,
-                   coalesce(asa.total_asset_weight, 0)                as total_asset_weight,
-                   coalesce(asa.num_asset_activity_records, 0)        as num_asset_activity_records,
-                   coalesce(esa.total_extra_asset_weight, 0)          as total_extra_asset_weight,
-                   coalesce(esa.num_extra_asset_activity_records, 0)  as num_extra_asset_activity_records
-            from all_parties p
-            left join app_app_aggregated aa on p.party = aa.party
-            left join extra_app_aggregated ea on p.party = ea.party
-            left join app_asset_aggregated asa on p.party = asa.party
-            left join extra_asset_aggregated esa on p.party = esa.party
+            select party,
+                   coalesce(sum(weight) filter (where kind = 'app'), 0)         as total_app_weight,
+                   count(*)             filter (where kind = 'app')             as num_app_activity_records,
+                   coalesce(sum(weight) filter (where kind = 'extra_app'), 0)   as total_extra_app_weight,
+                   count(*)             filter (where kind = 'extra_app')       as num_extra_app_activity_records,
+                   coalesce(sum(weight) filter (where kind = 'asset'), 0)       as total_asset_weight,
+                   count(*)             filter (where kind = 'asset')           as num_asset_activity_records,
+                   coalesce(sum(weight) filter (where kind = 'extra_asset'), 0) as total_extra_asset_weight,
+                   count(*)             filter (where kind = 'extra_asset')     as num_extra_asset_activity_records
+            from activity
+            group by party
           )"""
   }
 
