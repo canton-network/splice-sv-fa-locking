@@ -495,6 +495,30 @@ class HttpTokenStandardTransferInstructionHandler(
               )
             case lockTransfer: splice.governancelock.transfer.GovernanceLockTransfer =>
               getGovernanceLockProposalContext("GovernanceLockTransfer", lockTransfer.source, true)
+            case unlock: splice.governancelock.unlock.UnlockProposal =>
+              getGovernanceLockProposalContext(
+                "UnlockProposal",
+                new splice.governancelock.GovernanceLockKey(
+                  unlock.specification.dso,
+                  unlock.specification.owner,
+                  new splice.governancelock.governancelockspecification.GLS_FullLock(
+                    unlock.specification.fullSpec
+                  ),
+                ),
+                false,
+              )
+            case withdraw: splice.governancelock.withdraw.WithdrawVestedFundsProposal =>
+              getGovernanceLockProposalContext(
+                "WithdrawVestedFundsProposal",
+                new splice.governancelock.GovernanceLockKey(
+                  withdraw.specification.dso,
+                  withdraw.specification.owner,
+                  new splice.governancelock.governancelockspecification.GLS_VestingLock(
+                    withdraw.specification.vestingSpec
+                  ),
+                ),
+                false,
+              )
             case _ => transferInstructionNotFound(transferInstructionId, Some(contract.identifier))
           }
         case None => transferInstructionNotFound(transferInstructionId, None)

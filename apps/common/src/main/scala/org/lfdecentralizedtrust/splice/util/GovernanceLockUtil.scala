@@ -101,6 +101,27 @@ object GovernanceLockUtil {
       transfer.proposers.toScala.fold(Seq.empty[String])(_.asScala.toSeq) ++:
       substitutionControllers(transfer.source)).distinct
 
+  def unlockInformees(unlock: gl.unlock.UnlockProposal): Seq[String] =
+    (unlock.specification.owner +:
+      unlock.proposers.asScala.toSeq ++:
+      governanceLockKindObservers(
+        new gl.governancelockspecification.GLS_FullLock(unlock.specification.fullSpec)
+      ) ++:
+      governanceLockControllersObservers(
+        unlock.specification.fullSpec.controllers,
+        _.unlockControllers,
+      )).distinct
+
+  def withdrawInformees(withdraw: gl.withdraw.WithdrawVestedFundsProposal): Seq[String] =
+    (withdraw.specification.owner +:
+      withdraw.proposers.asScala.toSeq ++:
+      governanceLockKindObservers(
+        new gl.governancelockspecification.GLS_VestingLock(withdraw.specification.vestingSpec)
+      ) ++:
+      controllersSpecificationObservers(
+        withdraw.specification.vestingSpec.vestingControllers
+      )).distinct
+
   sealed abstract class StoreType(val type_ : String)
   object StoreType {
     case object Full extends StoreType("f")
