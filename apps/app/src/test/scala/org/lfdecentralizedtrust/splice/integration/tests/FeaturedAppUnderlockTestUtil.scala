@@ -8,15 +8,12 @@ import com.digitalasset.canton.config.RequireTypes.NonNegativeNumeric
 import com.digitalasset.canton.topology.PartyId
 import org.lfdecentralizedtrust.splice.codegen.java.splice.amulet.FeaturedAppRight
 import org.lfdecentralizedtrust.splice.codegen.java.splice.dso.instruction.FeaturedAppUnderlockInstruction
-import org.lfdecentralizedtrust.splice.codegen.java.splice.dsorules.DsoRules
 import org.lfdecentralizedtrust.splice.config.{ConfigTransform, ConfigTransforms}
 import org.lfdecentralizedtrust.splice.integration.tests.SpliceTests.{
   SpliceTestConsoleEnvironment,
   TestCommon,
 }
 import org.lfdecentralizedtrust.splice.sv.config.InitialGovernanceLockManagementConfig
-
-import scala.jdk.CollectionConverters.*
 
 trait FeaturedAppUnderlockTestUtil extends TestCommon {
 
@@ -58,33 +55,4 @@ trait FeaturedAppUnderlockTestUtil extends TestCommon {
       env: SpliceTestConsoleEnvironment
   ): Boolean =
     featuredAppRightsFor(provider).loneElement.data.underlockPermanentAt.isPresent
-
-  // TODO(canton-network/splice-sv-fa-locking#204): Remove once ExecuteFeaturedAppUnderlockInstructionTrigger
-  // executes instructions, as this would race with it.
-  protected def executeInstructionsFor(
-      provider: PartyId
-  )(implicit env: SpliceTestConsoleEnvironment): Unit = {
-    val participant = sv1Backend.participantClientWithAdminToken
-    val sv1Party = sv1Backend.getDsoInfo().svParty
-    underlockInstructionsFor(provider).foreach { instruction =>
-      val dsoRulesCid =
-        participant.ledger_api_extensions.acs
-          .filterJava(DsoRules.COMPANION)(dsoParty)
-          .loneElement
-          .id
-      participant.ledger_api_extensions.commands.submitJava(
-        actAs = Seq(sv1Party),
-        readAs = Seq(dsoParty),
-        commands = dsoRulesCid
-          .exerciseDsoRules_ExecuteFeaturedAppUnderlockInstruction(
-            instruction.id,
-            featuredAppRightsFor(provider).loneElement.id,
-            sv1Party.toProtoPrimitive,
-          )
-          .commands
-          .asScala
-          .toSeq,
-      )
-    }
-  }
 }
