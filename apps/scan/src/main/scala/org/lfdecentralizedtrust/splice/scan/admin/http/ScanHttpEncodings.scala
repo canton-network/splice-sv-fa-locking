@@ -25,6 +25,7 @@ import org.lfdecentralizedtrust.splice.http.v0.definitions.{
 import org.lfdecentralizedtrust.splice.http.v0.{definitions, definitions as httpApi}
 import org.lfdecentralizedtrust.splice.scan.config.ScanAppBackendConfig
 import org.lfdecentralizedtrust.splice.scan.store.db.DbAppActivityRecordStore.AppAndAssetActivityRecordT
+import org.lfdecentralizedtrust.splice.scan.store.db.DbExtraActivityRecordStore.ExtraActivityRecordT
 import org.lfdecentralizedtrust.splice.scan.store.db.DbScanVerdictStore.{
   TrafficSummaryT,
   TransactionViewT,
@@ -643,20 +644,43 @@ object ScanHttpEncodings {
   def encodeAssetActivityRecord(
       recordO: Option[AppAndAssetActivityRecordT]
   ): Option[OmitNullArray[definitions.ActivityRecord]] =
-    recordO.flatMap { r =>
-      val records = r.assetActivityProviderParties
-        .zip(r.assetActivityWeights)
-        .map { case (party, weight) =>
-          definitions.ActivityRecord(party = party, weight = weight)
-        }
-        .toVector
-      if (records.isEmpty) None else Some(OmitNullArray(records))
-    }
+    recordO.flatMap(r =>
+      encodeActivityRecordsArray(r.assetActivityProviderParties, r.assetActivityWeights)
+    )
 
   def encodeSubmittingAppProvider(
       recordO: Option[AppAndAssetActivityRecordT]
   ): Option[OmitNullString] =
     recordO.flatMap(_.submittingAppProvider).map(OmitNullString(_))
+
+  /** Returns `None` when the app-side arrays are empty, so JSON omits
+    * `extra_app_activity_records`.
+    */
+  def encodeExtraAppActivityRecord(
+      recordO: Option[ExtraActivityRecordT]
+  ): Option[OmitNullArray[definitions.ActivityRecord]] =
+    recordO.flatMap(r => encodeActivityRecordsArray(r.appProviderParties, r.appActivityWeights))
+
+  /** Returns `None` when the asset-side arrays are empty, so JSON omits
+    * `extra_asset_activity_records`.
+    */
+  def encodeExtraAssetActivityRecord(
+      recordO: Option[ExtraActivityRecordT]
+  ): Option[OmitNullArray[definitions.ActivityRecord]] =
+    recordO.flatMap(r =>
+      encodeActivityRecordsArray(r.assetActivityProviderParties, r.assetActivityWeights)
+    )
+
+  private def encodeActivityRecordsArray(
+      parties: Seq[String],
+      weights: Seq[Long],
+  ): Option[OmitNullArray[definitions.ActivityRecord]] = {
+    val records = parties
+      .zip(weights)
+      .map { case (party, weight) => definitions.ActivityRecord(party = party, weight = weight) }
+      .toVector
+    if (records.isEmpty) None else Some(OmitNullArray(records))
+  }
 
   def fromDamlValueEncoding(encoding: definitions.DamlValueEncoding): ScanHttpEncodings =
     encoding match {

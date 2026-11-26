@@ -139,6 +139,7 @@ import org.lfdecentralizedtrust.splice.store.S3BucketConnection.ObjectKeyAndChec
 import org.lfdecentralizedtrust.splice.store.TreeUpdateWithMigrationId
 import org.lfdecentralizedtrust.splice.store.UpdateHistory.BackfillingState
 import org.lfdecentralizedtrust.splice.scan.store.db.DbAppActivityRecordStore.AppAndAssetActivityRecordT
+import org.lfdecentralizedtrust.splice.scan.store.db.DbExtraActivityRecordStore.ExtraActivityRecordT
 
 import scala.collection.immutable.SortedMap
 import org.lfdecentralizedtrust.splice.scan.store.db.DbScanAppRewardsStore
@@ -850,10 +851,19 @@ class HttpScanHandler(
     }
   }
 
+  private def eventRecordTime(
+      verdictWithViewsO: Option[eventStore.Verdict],
+      updateO: Option[TreeUpdateWithMigrationId],
+  ): Option[CantonTimestamp] =
+    verdictWithViewsO
+      .map { case (v, _) => v.recordTime }
+      .orElse(updateO.map(_.update.update.recordTime))
+
   private def buildEventHistoryItem(
       verdictWithViewsO: Option[eventStore.Verdict],
       updateO: Option[TreeUpdateWithMigrationId],
       appAndAssetActivityRecordO: Option[AppAndAssetActivityRecordT],
+      extraActivityRecordO: Option[ExtraActivityRecordT],
       encoding: definitions.DamlValueEncoding,
   )(implicit tc: TraceContext): definitions.EventHistoryItem = {
     val encodedUpdateV2 = updateO.map(
@@ -880,6 +890,10 @@ class HttpScanHandler(
       appActivityRecords = appActivityRecordEncoded,
       assetActivityRecords =
         ScanHttpEncodings.encodeAssetActivityRecord(appAndAssetActivityRecordO),
+      extraAppActivityRecords =
+        ScanHttpEncodings.encodeExtraAppActivityRecord(extraActivityRecordO),
+      extraAssetActivityRecords =
+        ScanHttpEncodings.encodeExtraAssetActivityRecord(extraActivityRecordO),
       submittingAppProvider =
         ScanHttpEncodings.encodeSubmittingAppProvider(appAndAssetActivityRecordO),
     )
@@ -903,17 +917,26 @@ class HttpScanHandler(
           )
         case Some((verdictWithViewsO, updateO)) =>
           val verdictRowIdO = verdictWithViewsO.map { case (v, _) => v.rowId }
+          val recordTimeO = eventRecordTime(verdictWithViewsO, updateO)
+          val appAndAssetF = verdictRowIdO match {
+            case Some(rowId) =>
+              eventStore.getAppAndAssetActivityRecords(Seq(rowId)).map(_.get(rowId))
+            case None => Future.successful(None)
+          }
+          val extraF = recordTimeO match {
+            case Some(rt) =>
+              eventStore.getExtraActivityRecords(Seq(rt)).map(_.get(rt).flatMap(_.headOption))
+            case None => Future.successful(None)
+          }
           for {
-            appAndAssetActivityRecordO <- verdictRowIdO match {
-              case Some(rowId) =>
-                eventStore.getAppAndAssetActivityRecords(Seq(rowId)).map(_.get(rowId))
-              case None => Future.successful(None)
-            }
+            appAndAssetActivityRecordO <- appAndAssetF
+            extraActivityRecordO <- extraF
           } yield Right(
             buildEventHistoryItem(
               verdictWithViewsO,
               updateO,
               appAndAssetActivityRecordO,
+              extraActivityRecordO,
               encoding,
             )
           )
@@ -961,15 +984,25 @@ class HttpScanHandler(
         verdictRowIds = events.flatMap { case (verdictWithViewsO, _) =>
           verdictWithViewsO.map { case (v, _) => v.rowId }
         }
-        appAndAssetActivityRecordMap <- eventStore.getAppAndAssetActivityRecords(verdictRowIds)
+        recordTimes = events.flatMap { case (verdictWithViewsO, updateO) =>
+          eventRecordTime(verdictWithViewsO, updateO)
+        }
+        (appAndAssetActivityRecordMap, extraActivityRecordMap) <-
+          eventStore
+            .getAppAndAssetActivityRecords(verdictRowIds)
+            .zip(eventStore.getExtraActivityRecords(recordTimes))
       } yield events.map { case (verdictWithViewsO, updateO) =>
         val appAndAssetActivityRecordForEvent = verdictWithViewsO.flatMap { case (v, _) =>
           appAndAssetActivityRecordMap.get(v.rowId)
         }
+        val recordTimeForEvent = eventRecordTime(verdictWithViewsO, updateO)
+        val extraActivityRecordForEvent =
+          recordTimeForEvent.flatMap(extraActivityRecordMap.get).flatMap(_.headOption)
         buildEventHistoryItem(
           verdictWithViewsO,
           updateO,
           appAndAssetActivityRecordForEvent,
+          extraActivityRecordForEvent,
           encoding,
         )
       }.toVector

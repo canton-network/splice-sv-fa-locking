@@ -18,6 +18,7 @@ import org.lfdecentralizedtrust.splice.environment.ledger.api.{
   TransactionTreeUpdate,
 }
 import org.lfdecentralizedtrust.splice.http.OmitNullString
+import org.lfdecentralizedtrust.splice.scan.store.db.DbExtraActivityRecordStore.ExtraActivityRecordT
 import org.lfdecentralizedtrust.splice.http.v0.definitions as httpApi
 import org.lfdecentralizedtrust.splice.http.v0.definitions.TreeEvent.members.CreatedEvent as HttpCreatedEvent
 import org.lfdecentralizedtrust.splice.http.v0.definitions.UpdateHistoryItem.members.{
@@ -923,5 +924,75 @@ class ScanHttpEncodingsTest extends StoreTestBase with TestEssentials with Match
         value.externalTransactionHash shouldBe None
       }
     }
+  }
+
+  "ScanHttpEncodings extra activity records" should {
+
+    "encodeExtraAppActivityRecord returns None for a None input" in {
+      ScanHttpEncodings.encodeExtraAppActivityRecord(None) shouldBe None
+    }
+
+    "encodeExtraAssetActivityRecord returns None for a None input" in {
+      ScanHttpEncodings.encodeExtraAssetActivityRecord(None) shouldBe None
+    }
+
+    "encodeExtraAppActivityRecord preserves party/weight order" in {
+      val record = ExtraActivityRecordT(
+        roundNumber = 42L,
+        recordTime = 1000L,
+        appProviderParties = Seq("alice::p", "bob::p"),
+        appActivityWeights = Seq(100L, 200L),
+      )
+      ScanHttpEncodings
+        .encodeExtraAppActivityRecord(Some(record))
+        .map(_.value.toSeq) shouldBe Some(
+        Seq(
+          httpApi.ActivityRecord(party = "alice::p", weight = 100L),
+          httpApi.ActivityRecord(party = "bob::p", weight = 200L),
+        )
+      )
+    }
+
+    "encodeExtraAssetActivityRecord preserves party/weight order on asset-side arrays" in {
+      val record = ExtraActivityRecordT(
+        roundNumber = 42L,
+        recordTime = 1000L,
+        appProviderParties = Seq.empty,
+        appActivityWeights = Seq.empty,
+        assetActivityProviderParties = Seq("carol::p", "dave::p"),
+        assetActivityWeights = Seq(300L, 400L),
+      )
+      ScanHttpEncodings
+        .encodeExtraAssetActivityRecord(Some(record))
+        .map(_.value.toSeq) shouldBe Some(
+        Seq(
+          httpApi.ActivityRecord(party = "carol::p", weight = 300L),
+          httpApi.ActivityRecord(party = "dave::p", weight = 400L),
+        )
+      )
+    }
+
+    "encodeExtraAppActivityRecord omits when app-side arrays are empty" in {
+      val record = ExtraActivityRecordT(
+        roundNumber = 42L,
+        recordTime = 1000L,
+        appProviderParties = Seq.empty,
+        appActivityWeights = Seq.empty,
+        assetActivityProviderParties = Seq("alice::p"),
+        assetActivityWeights = Seq(100L),
+      )
+      ScanHttpEncodings.encodeExtraAppActivityRecord(Some(record)) shouldBe None
+    }
+
+    "encodeExtraAssetActivityRecord omits when asset-side arrays are empty" in {
+      val record = ExtraActivityRecordT(
+        roundNumber = 42L,
+        recordTime = 1000L,
+        appProviderParties = Seq("alice::p"),
+        appActivityWeights = Seq(100L),
+      )
+      ScanHttpEncodings.encodeExtraAssetActivityRecord(Some(record)) shouldBe None
+    }
+
   }
 }
