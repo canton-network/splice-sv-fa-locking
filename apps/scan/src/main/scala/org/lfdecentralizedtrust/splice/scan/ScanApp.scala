@@ -373,6 +373,7 @@ class ScanApp(
       scanEventStore = new ScanEventStore(
         scanVerdictStore,
         updateHistory,
+        extraActivityRecordStore,
         loggerFactory,
       )(ec)
       _ <- appInitStep("Wait until there is an OpenMiningRound contract") {

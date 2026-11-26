@@ -3,6 +3,7 @@
 
 package org.lfdecentralizedtrust.splice.scan.store.db
 
+import com.digitalasset.nonempty.NonEmpty
 import org.lfdecentralizedtrust.splice.util.FutureUnlessShutdownUtil.futureUnlessShutdownToFuture
 import com.digitalasset.canton.lifecycle.CloseContext
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
@@ -65,6 +66,7 @@ class DbExtraActivityRecordStore private (
     with HasCloseContext {
 
   val profile: slick.jdbc.JdbcProfile = PostgresProfile
+  private implicit val dbProfile: DbStorage.Profile = storage.profile
 
   override protected def timeouts = new ProcessingTimeout
 
@@ -117,6 +119,30 @@ class DbExtraActivityRecordStore private (
           "extraActivity.insertExtraActivityRecords.batch",
         )
       )
+
+  /** Today's PK allows at most one row per `record_time`; returning
+    * `Seq` keeps us safe if a future schema admits several.
+    */
+  def getRecordsByRecordTimes(
+      recordTimes: Seq[Long]
+  )(implicit tc: TraceContext): Future[Map[Long, Seq[ExtraActivityRecordT]]] =
+    NonEmpty.from(recordTimes) match {
+      case None => Future.successful(Map.empty)
+      case Some(nel) =>
+        futureUnlessShutdownToFuture(
+          storage.query(
+            (sql"""
+              select round_number, record_time,
+                     app_provider_parties, app_activity_weights,
+                     asset_activity_provider_parties, asset_activity_weights
+              from #${Tables.extraActivityRecords}
+              where store_id = $storeId and """ ++ DbStorage
+              .toInClause("record_time", nel))
+              .as[ExtraActivityRecordT],
+            "extraActivity.getRecordsByRecordTimes",
+          )
+        ).map(_.groupBy(_.recordTime).view.mapValues(_.toSeq).toMap)
+    }
 
   /** Read every row for this store's `store_id`, ordered by
     * `(round_number, record_time)`.

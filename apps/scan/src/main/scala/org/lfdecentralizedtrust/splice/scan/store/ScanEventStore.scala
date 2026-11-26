@@ -6,7 +6,11 @@ package org.lfdecentralizedtrust.splice.scan.store
 import com.digitalasset.canton.logging.NamedLoggerFactory
 import com.digitalasset.canton.logging.NamedLogging
 import com.digitalasset.canton.tracing.TraceContext
-import org.lfdecentralizedtrust.splice.scan.store.db.{DbAppActivityRecordStore, DbScanVerdictStore}
+import org.lfdecentralizedtrust.splice.scan.store.db.{
+  DbAppActivityRecordStore,
+  DbExtraActivityRecordStore,
+  DbScanVerdictStore,
+}
 import org.lfdecentralizedtrust.splice.store.TreeUpdateWithMigrationId
 import org.lfdecentralizedtrust.splice.store.UpdateHistory
 import com.digitalasset.canton.data.CantonTimestamp
@@ -19,6 +23,7 @@ import scala.concurrent.{ExecutionContext, Future}
 class ScanEventStore(
     val verdictStore: DbScanVerdictStore,
     val updateHistory: UpdateHistory,
+    val extraActivityRecordStore: DbExtraActivityRecordStore,
     protected val loggerFactory: NamedLoggerFactory,
 )(implicit ec: ExecutionContext)
     extends NamedLogging {
@@ -26,6 +31,7 @@ class ScanEventStore(
   type VerdictT = DbScanVerdictStore.VerdictT
   type TransactionViewT = DbScanVerdictStore.TransactionViewT
   type AppAndAssetActivityRecordT = DbAppActivityRecordStore.AppAndAssetActivityRecordT
+  type ExtraActivityRecordT = DbExtraActivityRecordStore.ExtraActivityRecordT
   type Verdict = (VerdictT, Seq[TransactionViewT])
   type Event = (Option[Verdict], Option[TreeUpdateWithMigrationId])
 
@@ -136,7 +142,18 @@ class ScanEventStore(
   ): Future[Map[Long, AppAndAssetActivityRecordT]] =
     verdictStore.appActivityRecordStore.getRecordsByVerdictRowIds(verdictRowIds)
 
-  // Get values from in-memory refs, fallsback to DB read
+  def getExtraActivityRecords(recordTimes: Seq[CantonTimestamp])(implicit
+      tc: TraceContext
+  ): Future[Map[CantonTimestamp, Seq[ExtraActivityRecordT]]] =
+    extraActivityRecordStore
+      .getRecordsByRecordTimes(recordTimes.map(_.toMicros))
+      .map(_.map { case (micros, records) =>
+        CantonTimestamp.ofEpochMicro(micros) -> records
+      })
+
+  // Get values from in-memory refs, fallsback to DB read.
+  // TODO(#249): extend with extras.last when ScanExtraActivityIngestionService
+  // lands, so getEvents also holds back until extras has caught up.
   private def resolveCurrentMigrationCap(
       memVerdictRt: Option[CantonTimestamp],
       memUpdateRt: Option[CantonTimestamp],

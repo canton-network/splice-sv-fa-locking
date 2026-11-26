@@ -13,7 +13,12 @@ import org.lfdecentralizedtrust.splice.store.{
   TimestampWithMigrationId,
   UpdateHistory,
 }
-import org.lfdecentralizedtrust.splice.scan.store.db.{DbAppActivityRecordStore, DbScanVerdictStore}
+import org.lfdecentralizedtrust.splice.scan.store.db.{
+  DbAppActivityRecordStore,
+  DbExtraActivityRecordStore,
+  DbScanVerdictStore,
+}
+import org.lfdecentralizedtrust.splice.scan.store.db.DbExtraActivityRecordStore.ExtraActivityRecordT
 import org.lfdecentralizedtrust.splice.scan.store.db.DbScanVerdictStore.{EnvelopeT, TrafficSummaryT}
 import org.lfdecentralizedtrust.splice.store.db.SplicePostgresTest
 import com.digitalasset.canton.resource.DbStorage
@@ -1024,6 +1029,83 @@ class ScanEventStoreTest extends StoreTestBase with HasExecutionContext with Spl
     }
   }
 
+  "ScanEventStore.getExtraActivityRecords" should {
+
+    "return an empty map for no record_times" in {
+      for {
+        ctx <- newEventStore()
+        result <- ctx.eventStore.getExtraActivityRecords(Seq.empty)
+      } yield result shouldBe Map.empty
+    }
+
+    "return rows keyed by record_time" in {
+      for {
+        ctx <- newEventStore()
+        t1 = CantonTimestamp.now()
+        t2 = t1.plusSeconds(1)
+        t3 = t1.plusSeconds(2)
+        _ <- ctx.extraActivityRecordStore.insertExtraActivityRecordsForTesting(
+          Seq(
+            mkExtraRecord(10L, t1, "alice::p", 100L),
+            mkExtraRecord(11L, t2, "bob::p", 200L),
+            mkExtraRecord(12L, t3, "carol::p", 300L),
+          )
+        )
+        result <- ctx.eventStore.getExtraActivityRecords(Seq(t1, t3))
+      } yield {
+        result.keySet shouldBe Set(t1, t3)
+        result(t1).map(_.appProviderParties) shouldBe Seq(Seq("alice::p"))
+        result(t3).map(_.appActivityWeights) shouldBe Seq(Seq(300L))
+      }
+    }
+
+    "silently omit record_times with no matching row" in {
+      for {
+        ctx <- newEventStore()
+        t1 = CantonTimestamp.now()
+        missing = t1.plusSeconds(5)
+        _ <- ctx.extraActivityRecordStore.insertExtraActivityRecordsForTesting(
+          Seq(mkExtraRecord(10L, t1, "alice::p", 100L))
+        )
+        result <- ctx.eventStore.getExtraActivityRecords(Seq(t1, missing))
+      } yield {
+        result.keySet shouldBe Set(t1)
+      }
+    }
+
+    "isolate rows by store_id across two event stores" in {
+      for {
+        ctx1 <- newEventStore()
+        ctx2 <- newEventStore()
+        t = CantonTimestamp.now()
+        _ <- ctx1.extraActivityRecordStore.insertExtraActivityRecordsForTesting(
+          Seq(mkExtraRecord(10L, t, "alice::p", 100L))
+        )
+        _ <- ctx2.extraActivityRecordStore.insertExtraActivityRecordsForTesting(
+          Seq(mkExtraRecord(10L, t, "bob::p", 999L))
+        )
+        fromCtx1 <- ctx1.eventStore.getExtraActivityRecords(Seq(t))
+        fromCtx2 <- ctx2.eventStore.getExtraActivityRecords(Seq(t))
+      } yield {
+        fromCtx1(t).map(_.appProviderParties) shouldBe Seq(Seq("alice::p"))
+        fromCtx2(t).map(_.appProviderParties) shouldBe Seq(Seq("bob::p"))
+      }
+    }
+  }
+
+  private def mkExtraRecord(
+      roundNumber: Long,
+      recordTime: CantonTimestamp,
+      appProvider: String,
+      appWeight: Long,
+  ): ExtraActivityRecordT =
+    ExtraActivityRecordT(
+      roundNumber = roundNumber,
+      recordTime = recordTime.toMicros,
+      appProviderParties = Seq(appProvider),
+      appActivityWeights = Seq(appWeight),
+    )
+
   /** @return the row ID of the inserted verdict */
   private def insertVerdictWithViews(
       verdictStore: DbScanVerdictStore,
@@ -1251,15 +1333,24 @@ class ScanEventStoreTest extends StoreTestBase with HasExecutionContext with Spl
   private case class EventStoreCtx(
       verdictStore: DbScanVerdictStore,
       updateHistory: UpdateHistory,
+      extraActivityRecordStore: DbExtraActivityRecordStore,
       eventStore: ScanEventStore,
   )
+
+  private val extraStoreCounter = new java.util.concurrent.atomic.AtomicLong(1)
 
   private def newEventStore(migrationId: Long = domainMigrationId): Future[EventStoreCtx] =
     for {
       uh <- newUpdateHistory(migrationId)
       vs = newVerdictStore(uh)
-      es = new ScanEventStore(vs, uh, loggerFactory)
-    } yield EventStoreCtx(vs, uh, es)
+      extra <- ScanExtraActivityRecordStore(
+        dsoParty,
+        mkParticipantId(s"extra-event-store-${extraStoreCounter.getAndIncrement()}"),
+        storage.underlying,
+        loggerFactory,
+      )
+      es = new ScanEventStore(vs, uh, extra, loggerFactory)
+    } yield EventStoreCtx(vs, uh, extra, es)
 
   override protected def cleanDb(
       storage: DbStorage
