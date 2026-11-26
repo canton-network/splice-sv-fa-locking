@@ -200,9 +200,8 @@ class DbActivityRecordMetaStoreTest
   }
 
   // ============ Per-side meta semantics ============
-  // Each test runs twice — once against the app meta table, once against
-  // the extra meta table — to pin that each shared SQL is correct regardless
-  // of which side it reads.
+  // Each test runs twice (once per side) to pin that the pair-returning
+  // readers project each side correctly.
 
   private sealed trait SideFixture {
     def insertMeta(
@@ -212,7 +211,7 @@ class DbActivityRecordMetaStoreTest
         earliestIngestedRound: Long,
         lastArchivedRound: Option[Long],
     ): Future[Unit]
-    def table: String
+    def pickResult[A](pair: (Option[A], Option[A])): Option[A]
   }
 
   private val sides: Seq[(String, DbActivityRecordMetaStore => SideFixture)] = Seq(
@@ -232,7 +231,7 @@ class DbActivityRecordMetaStoreTest
             earliestIngestedRound,
             lastArchivedRound,
           )
-        def table = metaStore.Tables.appActivityRecordMeta
+        def pickResult[A](pair: (Option[A], Option[A])): Option[A] = pair._1
       }
     },
     "extra" -> { (metaStore: DbActivityRecordMetaStore) =>
@@ -252,7 +251,7 @@ class DbActivityRecordMetaStoreTest
             lastArchivedRound,
           )
         }
-        def table = metaStore.Tables.extraActivityRecordMeta
+        def pickResult[A](pair: (Option[A], Option[A])): Option[A] = pair._2
       }
     },
   )
@@ -263,7 +262,7 @@ class DbActivityRecordMetaStoreTest
         for {
           metaStore <- newStores()
           side = pickSide(metaStore)
-          result <- metaStore.earliestCompleteRoundOf(side.table)
+          result <- metaStore.earliestCompleteRoundsPair().map(side.pickResult)
         } yield result shouldBe None
       }
 
@@ -272,7 +271,7 @@ class DbActivityRecordMetaStoreTest
           metaStore <- newStores()
           side = pickSide(metaStore)
           _ <- side.insertMeta(1, 0, 1000L, 0L, None)
-          result <- metaStore.earliestCompleteRoundOf(side.table)
+          result <- metaStore.earliestCompleteRoundsPair().map(side.pickResult)
         } yield result shouldBe None
       }
 
@@ -281,7 +280,7 @@ class DbActivityRecordMetaStoreTest
           metaStore <- newStores()
           side = pickSide(metaStore)
           _ <- side.insertMeta(1, 0, 1000L, 42L, Some(42L))
-          result <- metaStore.earliestCompleteRoundOf(side.table)
+          result <- metaStore.earliestCompleteRoundsPair().map(side.pickResult)
         } yield result shouldBe None
       }
 
@@ -290,7 +289,7 @@ class DbActivityRecordMetaStoreTest
           metaStore <- newStores()
           side = pickSide(metaStore)
           _ <- side.insertMeta(1, 0, 1000L, 42L, Some(43L))
-          result <- metaStore.earliestCompleteRoundOf(side.table)
+          result <- metaStore.earliestCompleteRoundsPair().map(side.pickResult)
         } yield result.value shouldBe 43L
       }
 
@@ -302,7 +301,7 @@ class DbActivityRecordMetaStoreTest
           side2 = pickSide(metaStore2)
           _ <- side2.insertMeta(1, 0, 1000L, 10L, Some(11L))
           _ <- side1.insertMeta(1, 0, 3000L, 50L, None)
-          result <- metaStore1.earliestCompleteRoundOf(side1.table)
+          result <- metaStore1.earliestCompleteRoundsPair().map(side1.pickResult)
         } yield result shouldBe None
       }
     }
@@ -314,18 +313,18 @@ class DbActivityRecordMetaStoreTest
         metaStore <- newStores()
         _ <- metaStore.insertAppActivityRecordMetaForTesting(0, 0, 1000L, 10L, Some(15L))
         _ <- metaStore.insertAppActivityRecordMetaForTesting(1, 0, 2000L, 20L, Some(25L))
-        result <- metaStore.earliestCompleteRoundOf(metaStore.Tables.appActivityRecordMeta)
+        result <- metaStore.earliestCompleteRoundsPair().map(_._1)
       } yield result.value shouldBe 21L
     }
   }
 
-  "earliestIngestedRound on either side" should {
+  "earliestIngestedRoundsPair on either side" should {
     sides.foreach { case (sideName, pickSide) =>
       s"[$sideName] return None when no meta record exists" in {
         for {
           metaStore <- newStores()
           side = pickSide(metaStore)
-          result <- metaStore.earliestIngestedRoundOf(side.table)
+          result <- metaStore.earliestIngestedRoundsPair().map(side.pickResult)
         } yield result shouldBe None
       }
 
@@ -334,7 +333,7 @@ class DbActivityRecordMetaStoreTest
           metaStore <- newStores()
           side = pickSide(metaStore)
           _ <- side.insertMeta(1, 0, 1000L, 42L, None)
-          result <- metaStore.earliestIngestedRoundOf(side.table)
+          result <- metaStore.earliestIngestedRoundsPair().map(side.pickResult)
         } yield result.value shouldBe 42L
       }
 
@@ -345,7 +344,7 @@ class DbActivityRecordMetaStoreTest
           side1 = pickSide(metaStore1)
           side2 = pickSide(metaStore2)
           _ <- side2.insertMeta(1, 0, 1000L, 10L, Some(11L))
-          result <- metaStore1.earliestIngestedRoundOf(side1.table)
+          result <- metaStore1.earliestIngestedRoundsPair().map(side1.pickResult)
         } yield result shouldBe None
       }
     }
@@ -356,7 +355,7 @@ class DbActivityRecordMetaStoreTest
         metaStore <- newStores()
         _ <- metaStore.insertAppActivityRecordMetaForTesting(0, 0, 1000L, 10L, Some(15L))
         _ <- metaStore.insertAppActivityRecordMetaForTesting(1, 0, 2000L, 20L, None)
-        result <- metaStore.earliestIngestedRoundOf(metaStore.Tables.appActivityRecordMeta)
+        result <- metaStore.earliestIngestedRoundsPair().map(_._1)
       } yield result.value shouldBe 20L
     }
   }
@@ -367,7 +366,7 @@ class DbActivityRecordMetaStoreTest
         for {
           metaStore <- newStores()
           side = pickSide(metaStore)
-          result <- metaStore.latestCompleteRoundOf(side.table)
+          result <- metaStore.latestCompleteRoundsPair().map(side.pickResult)
         } yield result shouldBe None
       }
 
@@ -376,7 +375,7 @@ class DbActivityRecordMetaStoreTest
           metaStore <- newStores()
           side = pickSide(metaStore)
           _ <- side.insertMeta(1, 0, 1000L, 42L, None)
-          result <- metaStore.latestCompleteRoundOf(side.table)
+          result <- metaStore.latestCompleteRoundsPair().map(side.pickResult)
         } yield result shouldBe None
       }
 
@@ -387,7 +386,7 @@ class DbActivityRecordMetaStoreTest
           side1 = pickSide(metaStore1)
           side2 = pickSide(metaStore2)
           _ <- side2.insertMeta(1, 0, 1000L, 10L, Some(11L))
-          result <- metaStore1.latestCompleteRoundOf(side1.table)
+          result <- metaStore1.latestCompleteRoundsPair().map(side1.pickResult)
         } yield result shouldBe None
       }
     }

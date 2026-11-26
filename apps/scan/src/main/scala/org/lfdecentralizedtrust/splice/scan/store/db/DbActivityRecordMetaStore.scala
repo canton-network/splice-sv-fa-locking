@@ -7,7 +7,6 @@ import com.digitalasset.canton.config.ProcessingTimeout
 import com.digitalasset.canton.lifecycle.*
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.resource.DbStorage
-import com.digitalasset.canton.resource.DbStorage.Implicits.BuilderChain.*
 import com.digitalasset.canton.tracing.TraceContext
 import com.google.common.annotations.VisibleForTesting
 import io.grpc.Status
@@ -17,7 +16,6 @@ import org.lfdecentralizedtrust.splice.store.UpdateHistory
 import org.lfdecentralizedtrust.splice.util.FutureUnlessShutdownUtil.futureUnlessShutdownToFuture
 import slick.dbio.{DBIO, DBIOAction, Effect, NoStream}
 import slick.jdbc.{GetResult, PostgresProfile}
-import slick.jdbc.canton.SQLActionBuilder
 import slick.jdbc.canton.ActionBasedSQLInterpolation.Implicits.actionBasedSQLInterpolationCanton
 
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
@@ -30,23 +28,6 @@ object DbActivityRecordMetaStore {
     * one row per `store_id` and does not version.
     */
   final case class IngestionVersions(code: Int, user: Int)
-
-  /** Scope descriptor used to parameterize shared meta-SQL helpers over
-    * each side's scope column. App side uses `history_id` and additional
-    * `(code_version, user_version)` key columns; extra side uses
-    * `store_id` only.
-    *
-    * `filter` = `scope-col = $value` only.
-    * `metaFilter` = full WHERE for a single meta row
-    * (app: `scope.filter AND code_version = ... AND user_version = ...`;
-    *  extra: `scope.filter`).
-    */
-  private final case class SideScope(
-      column: String,
-      filter: SQLActionBuilder,
-      valueSql: SQLActionBuilder,
-      metaFilter: SQLActionBuilder,
-  )
 
   /** Metadata row for app-side activity ingestion (TBAR), read from and
     * written to `app_activity_record_meta`. Per-table row types let the
@@ -162,29 +143,6 @@ class DbActivityRecordMetaStore(
   private def historyId = updateHistory.historyId
   private def extraStoreId = extraActivityRecordStore.storeId
 
-  private def appScope = {
-    val codeVersion = ingestionVersions.code
-    val userVersion = ingestionVersions.user
-    SideScope(
-      column = "history_id",
-      filter = sql"history_id = $historyId",
-      valueSql = sql"$historyId",
-      metaFilter = sql"history_id = $historyId" ++
-        sql" and activity_ingestion_code_version = $codeVersion" ++
-        sql" and activity_ingestion_user_version = $userVersion",
-    )
-  }
-  private def extraScope =
-    SideScope(
-      column = "store_id",
-      filter = sql"store_id = $extraStoreId",
-      valueSql = sql"$extraStoreId",
-      metaFilter = sql"store_id = $extraStoreId",
-    )
-
-  private def scopeFor(table: String): SideScope =
-    if (table == Tables.appActivityRecordMeta) appScope else extraScope
-
   private implicit val getResultAppActivityRecordMeta: GetResult[AppActivityRecordMetaT] =
     GetResult { prs =>
       AppActivityRecordMetaT(
@@ -226,82 +184,104 @@ class DbActivityRecordMetaStore(
   override def earliestRoundWithCompleteAppActivity()(implicit
       tc: TraceContext
   ): Future[Option[Long]] =
-    earliestCompleteRoundOf(Tables.appActivityRecordMeta)
-      .zip(earliestCompleteRoundOf(Tables.extraActivityRecordMeta))
-      .map {
-        case (Some(a), Some(e)) => Some(math.max(a, e))
-        case _ => None
-      }
+    earliestCompleteRoundsPair().map {
+      case (Some(a), Some(e)) => Some(math.max(a, e))
+      case _ => None
+    }
 
   override def latestRoundWithCompleteAppActivity()(implicit
       tc: TraceContext
   ): Future[Option[Long]] =
-    latestCompleteRoundOf(Tables.appActivityRecordMeta)
-      .zip(latestCompleteRoundOf(Tables.extraActivityRecordMeta))
-      .map {
-        case (Some(a), Some(e)) => Some(math.min(a, e))
-        case _ => None
-      }
+    latestCompleteRoundsPair().map {
+      case (Some(a), Some(e)) => Some(math.min(a, e))
+      case _ => None
+    }
 
   override def ingestionStatusForRound(roundNumber: Long)(implicit
       tc: TraceContext
   ): Future[RoundIngestionStatus] =
-    metaIngestionStatus(earliestIngestedRoundOf(Tables.appActivityRecordMeta), roundNumber)
-      .zip(
-        metaIngestionStatus(earliestIngestedRoundOf(Tables.extraActivityRecordMeta), roundNumber)
-      )
-      .map {
+    earliestIngestedRoundsPair().map { case (appE, extraE) =>
+      (
+        ingestionStatusFor(isFirstSv, appE, roundNumber),
+        ingestionStatusFor(isFirstSv, extraE, roundNumber),
+      ) match {
         case (RoundIngestionStatus.CannotProvide, _) => RoundIngestionStatus.CannotProvide
         case (_, RoundIngestionStatus.CannotProvide) => RoundIngestionStatus.CannotProvide
         case _ => RoundIngestionStatus.Undetermined
       }
+    }
 
-  // ============ Per-side meta readers ============
+  // ============ Pair-returning meta readers (app, extra) ============
 
-  private[store] def earliestIngestedRoundOf(
-      table: String
-  )(implicit tc: TraceContext): Future[Option[Long]] = {
-    val scope = scopeFor(table)
+  private[store] def earliestIngestedRoundsPair()(implicit
+      tc: TraceContext
+  ): Future[(Option[Long], Option[Long])] = {
+    val codeVersion = ingestionVersions.code
+    val userVersion = ingestionVersions.user
     runQuerySingle(
-      (sql"""select earliest_ingested_round from #$table where """ ++ scope.metaFilter)
-        .as[Option[Long]]
-        .headOption
-        .map(_.flatten),
-      s"$table.earliestIngestedRound",
-    )
+      sql"""select
+              (select earliest_ingested_round
+               from #${Tables.appActivityRecordMeta}
+               where history_id = $historyId
+                 and activity_ingestion_code_version = $codeVersion
+                 and activity_ingestion_user_version = $userVersion
+               limit 1),
+              (select earliest_ingested_round
+               from #${Tables.extraActivityRecordMeta}
+               where store_id = $extraStoreId
+               limit 1)
+         """.as[(Option[Long], Option[Long])].headOption,
+      "activityRecordMeta.earliestIngestedRoundsPair",
+    ).map(_.getOrElse((None, None)))
   }
 
-  /** The first ingested round may be partial, so the earliest complete
-    * round is `earliest_ingested_round + 1`. Returns only once that round
-    * has been archived.
+  /** First ingested round may be partial, so earliest complete = `earliest_ingested_round + 1`,
+    * conditioned on it having been archived.
     */
-  private[store] def earliestCompleteRoundOf(
-      table: String
-  )(implicit tc: TraceContext): Future[Option[Long]] = {
-    val scope = scopeFor(table)
+  private[store] def earliestCompleteRoundsPair()(implicit
+      tc: TraceContext
+  ): Future[(Option[Long], Option[Long])] = {
+    val codeVersion = ingestionVersions.code
+    val userVersion = ingestionVersions.user
     runQuerySingle(
-      (sql"""select earliest_ingested_round + 1
-             from #$table
-             where """ ++ scope.metaFilter ++
-        sql" and last_archived_round >= earliest_ingested_round + 1")
-        .as[Option[Long]]
-        .headOption
-        .map(_.flatten),
-      s"$table.earliestRoundWithCompleteAppActivity",
-    )
+      sql"""select
+              (select earliest_ingested_round + 1
+               from #${Tables.appActivityRecordMeta}
+               where history_id = $historyId
+                 and activity_ingestion_code_version = $codeVersion
+                 and activity_ingestion_user_version = $userVersion
+                 and last_archived_round >= earliest_ingested_round + 1
+               limit 1),
+              (select earliest_ingested_round + 1
+               from #${Tables.extraActivityRecordMeta}
+               where store_id = $extraStoreId
+                 and last_archived_round >= earliest_ingested_round + 1
+               limit 1)
+         """.as[(Option[Long], Option[Long])].headOption,
+      "activityRecordMeta.earliestCompleteRoundsPair",
+    ).map(_.getOrElse((None, None)))
   }
 
-  private[store] def latestCompleteRoundOf(
-      table: String
-  )(implicit tc: TraceContext): Future[Option[Long]] = {
-    val scope = scopeFor(table)
+  private[store] def latestCompleteRoundsPair()(implicit
+      tc: TraceContext
+  ): Future[(Option[Long], Option[Long])] = {
+    val codeVersion = ingestionVersions.code
+    val userVersion = ingestionVersions.user
     runQuerySingle(
-      (sql"""select last_archived_round from #$table where """ ++ scope.metaFilter)
-        .as[Option[Long]]
-        .headOption
-        .map(_.flatten),
-      s"$table.latestRoundWithCompleteAppActivity",
-    )
+      sql"""select
+              (select last_archived_round
+               from #${Tables.appActivityRecordMeta}
+               where history_id = $historyId
+                 and activity_ingestion_code_version = $codeVersion
+                 and activity_ingestion_user_version = $userVersion
+               limit 1),
+              (select last_archived_round
+               from #${Tables.extraActivityRecordMeta}
+               where store_id = $extraStoreId
+               limit 1)
+         """.as[(Option[Long], Option[Long])].headOption,
+      "activityRecordMeta.latestCompleteRoundsPair",
+    ).map(_.getOrElse((None, None)))
   }
 
   // ============ App-side meta ============
@@ -320,8 +300,17 @@ class DbActivityRecordMetaStore(
   )(implicit tc: TraceContext): DBIO[MetaCheckResult] =
     ensureAppMetaDBIOImpl(ingestionStart, lastArchivedRoundO, exitOnDowngrade)
 
-  def updateAppLastArchivedRoundDBIO(round: Long) =
-    updateLastArchivedRoundDBIO(Tables.appActivityRecordMeta)(round)
+  def updateAppLastArchivedRoundDBIO(round: Long) = {
+    val codeVersion = ingestionVersions.code
+    val userVersion = ingestionVersions.user
+    sql"""update #${Tables.appActivityRecordMeta}
+          set last_archived_round = $round,
+              last_updated_at = now()
+          where history_id = $historyId
+            and activity_ingestion_code_version = $codeVersion
+            and activity_ingestion_user_version = $userVersion
+       """.asUpdate
+  }
 
   @VisibleForTesting
   def insertAppActivityRecordMetaForTesting(
@@ -411,7 +400,11 @@ class DbActivityRecordMetaStore(
   }
 
   def updateExtraLastArchivedRoundDBIO(round: Long) =
-    updateLastArchivedRoundDBIO(Tables.extraActivityRecordMeta)(round)
+    sql"""update #${Tables.extraActivityRecordMeta}
+          set last_archived_round = $round,
+              last_updated_at = now()
+          where store_id = $extraStoreId
+       """.asUpdate
 
   @VisibleForTesting
   def insertExtraActivityRecordMetaForTesting(
@@ -471,12 +464,6 @@ class DbActivityRecordMetaStore(
         }
     }
 
-  private def metaIngestionStatus(
-      earliestF: Future[Option[Long]],
-      roundNumber: Long,
-  ): Future[RoundIngestionStatus] =
-    earliestF.map(ingestionStatusFor(isFirstSv, _, roundNumber))
-
   private def insertAppMetaDBIO(
       codeVersion: Int,
       userVersion: Int,
@@ -509,14 +496,6 @@ class DbActivityRecordMetaStore(
                   $earliestIngestedRound, $lastArchivedRound)
           ON CONFLICT DO NOTHING
     """.asUpdate
-
-  private def updateLastArchivedRoundDBIO(table: String)(round: Long) = {
-    val scope = scopeFor(table)
-    (sql"""update #$table
-          set last_archived_round = $round,
-              last_updated_at = now()
-          where """ ++ scope.metaFilter).asUpdate
-  }
 
   /** App-side ensure: version-check + insert; log
     * `Resume` / `InsertMeta` / `DowngradeDetected`; on downgrade,
