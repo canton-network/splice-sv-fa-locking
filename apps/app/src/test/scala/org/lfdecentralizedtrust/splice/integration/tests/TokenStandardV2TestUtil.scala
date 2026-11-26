@@ -95,6 +95,8 @@ trait TokenStandardV2TestUtil extends TestCommon {
                     _,
                     _,
                     _,
+                    _,
+                    _,
                   )
                 ) =>
               item

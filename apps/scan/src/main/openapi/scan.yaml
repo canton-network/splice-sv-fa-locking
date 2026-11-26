@@ -3805,6 +3805,22 @@ components:
           x-scala-array-type: org.lfdecentralizedtrust.splice.http.OmitNullArray
           items:
             $ref: "#/components/schemas/ActivityRecord"
+        extra_app_activity_records:
+          description: |
+            Extra app activity records (CIP-0104), one per provider.
+            Omitted from JSON when there is no extra app activity for the event.
+          type: array
+          x-scala-array-type: org.lfdecentralizedtrust.splice.http.OmitNullArray
+          items:
+            $ref: "#/components/schemas/ActivityRecord"
+        extra_asset_activity_records:
+          description: |
+            Extra asset activity records (CIP-0104), one per provider.
+            Omitted from JSON when there is no extra asset activity for the event.
+          type: array
+          x-scala-array-type: org.lfdecentralizedtrust.splice.http.OmitNullArray
+          items:
+            $ref: "#/components/schemas/ActivityRecord"
         submitting_app_provider:
           description: |
             The submitting app provider party identifier, present only when the submitter is a featured-app.
